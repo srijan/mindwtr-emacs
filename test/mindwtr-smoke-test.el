@@ -63,3 +63,17 @@
                       :projects nil :sections nil :areas nil)
                     prior)
                    '("t2")))))
+
+(ert-deftest mindwtr-smoke-canonical-field-diff-reports-changed-fields ()
+  "The canonical diff names a content field that differs and skips equal ones."
+  (let ((lines (mindwtr-smoke-canonical-field-diff
+                '(:title "old" :status "next")
+                '(:title "new" :status "next"))))
+    (should (seq-some (lambda (s) (string-match-p ":title" s)) lines))
+    (should-not (seq-some (lambda (s) (string-match-p ":status" s)) lines))))
+
+(ert-deftest mindwtr-smoke-key-diff-reports-differing-keys ()
+  (let ((lines (mindwtr-smoke-key-diff '(:a 1 :b 2) '(:a 1 :b 9 :c 3))))
+    (should (seq-some (lambda (s) (string-match-p ":b" s)) lines))
+    (should (seq-some (lambda (s) (string-match-p ":c" s)) lines))
+    (should-not (seq-some (lambda (s) (string-match-p ":a" s)) lines))))

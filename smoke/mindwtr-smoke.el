@@ -136,5 +136,32 @@ in the radius if it is newly live in WIRE (create), no longer live in WIRE
     (maphash (lambda (id _) (push id out)) ids)
     (sort out #'string<)))
 
+;;;; Diagnostics (returned as lists of printable lines)
+
+(defun mindwtr-smoke-canonical-field-diff (orig re)
+  "Return diagnostic lines for content fields that differ between ORIG and RE.
+Compares the signature's canonical plists, so it reports exactly the
+fields that move the content signature."
+  (let* ((co (mindwtr-signature--canonical-plist orig))
+         (cr (mindwtr-signature--canonical-plist re))
+         (allk (delete-dups (append (mindwtr-smoke-plist-keys co)
+                                    (mindwtr-smoke-plist-keys cr))))
+         lines)
+    (dolist (k allk)
+      (let ((vo (plist-get co k)) (vr (plist-get cr k)))
+        (unless (equal vo vr)
+          (push (format "%s: orig=%S  other=%S" k vo vr) lines))))
+    (nreverse lines)))
+
+(defun mindwtr-smoke-key-diff (a b)
+  "Return diagnostic lines for every key whose value differs between A and B."
+  (let ((allk (delete-dups (append (mindwtr-smoke-plist-keys a)
+                                   (mindwtr-smoke-plist-keys b))))
+        lines)
+    (dolist (k allk)
+      (unless (equal (plist-get a k) (plist-get b k))
+        (push (format "%s: a=%S  b=%S" k (plist-get a k) (plist-get b k)) lines)))
+    (nreverse lines)))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here
