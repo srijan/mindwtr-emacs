@@ -4,7 +4,7 @@ TESTS := $(wildcard test/*-test.el)
 
 .PHONY: test
 test:
-	$(EMACS) -Q --batch -L . -L test \
+	$(EMACS) -Q --batch -L . -L smoke -L test \
 	  $(foreach t,$(TESTS),-l $(t)) \
 	  -f ert-run-tests-batch-and-exit
 
