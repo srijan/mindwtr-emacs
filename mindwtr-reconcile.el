@@ -37,7 +37,9 @@ Preserves LOGBOOK and unknown properties."
     (org-edit-headline title)
     (when (memq kind '(task project)) (org-todo (or todo 'none)))
     (when (eq kind 'task)
-      (let ((c (mindwtr-model-priority->cookie (plist-get entity :priority))))
+      (let ((c (mindwtr-model-priority->cookie (plist-get entity :priority)))
+            (org-priority-highest ?A)
+            (org-priority-lowest ?D))
         ;; `org-priority' in this Org errors with "No priority cookie found
         ;; in line" when asked to `remove' from a line that has none, so only
         ;; remove when a cookie is actually present.

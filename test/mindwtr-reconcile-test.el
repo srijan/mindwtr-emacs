@@ -62,3 +62,19 @@
       (mindwtr-reconcile-buffer merged)
       (goto-char (point-min))
       (should (search-forward "fresh" nil t)))))
+
+(ert-deftest mindwtr-reconcile-low-priority-does-not-crash ()
+  "Updating a task to :priority \"low\" writes [#D] without erroring."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :priority "low"
+                             :areaId "a1" :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (search-forward "[#D]" nil t)))))
