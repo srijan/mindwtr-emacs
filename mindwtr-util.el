@@ -103,9 +103,17 @@ and any other nil-valued key is omitted (nil means absent)."
    (t obj)))
 
 (defun mindwtr-util-json-encode (obj)
-  "Encode plist/list OBJ to a JSON string.
-Plain lists nested inside the plist are treated as JSON arrays."
-  (json-serialize (mindwtr-util--json-prep obj) :null-object nil :false-object :false))
+  "Encode plist/list OBJ to a JSON string (multibyte text).
+Plain lists nested inside the plist are treated as JSON arrays.
+`json-serialize' returns UNIBYTE UTF-8 bytes; decode them to characters so
+the result is text.  Returning raw bytes leaks `eight-bit' characters into
+any multibyte buffer they are inserted in (e.g. the shadow temp file),
+which the saver then cannot encode -- the bug that turned a `•' into
+\\342\\200\\242 on disk."
+  (decode-coding-string
+   (json-serialize (mindwtr-util--json-prep obj)
+                   :null-object nil :false-object :false)
+   'utf-8))
 
 (defun mindwtr-util-json-ascii (obj)
   "Encode OBJ to JSON with all non-ASCII escaped as \\uXXXX (pure ASCII).
@@ -121,9 +129,8 @@ UTF-8.  Astral characters are emitted as UTF-16 surrogate pairs."
       (t (let ((c (- ch #x10000)))
            (format "\\u%04x\\u%04x"
                    (+ #xD800 (ash c -10)) (+ #xDC00 (logand c #x3FF)))))))
-   ;; `json-serialize' returns a unibyte UTF-8 string; decode to code points
-   ;; first so we escape characters, not raw bytes.
-   (decode-coding-string (mindwtr-util-json-encode obj) 'utf-8) ""))
+   ;; `mindwtr-util-json-encode' already returns decoded characters.
+   (mindwtr-util-json-encode obj) ""))
 
 (defun mindwtr-util-json-decode (s)
   "Decode JSON string S to a plist (arrays as lists)."
@@ -131,18 +138,20 @@ UTF-8.  Astral characters are emitted as UTF-16 surrogate pairs."
                      :null-object nil :false-object :false))
 
 (defun mindwtr-util-read-file (path)
-  "Return the contents of PATH as a string, or nil if missing."
+  "Return the UTF-8 contents of PATH as a multibyte string, or nil if missing."
   (when (file-exists-p path)
     (with-temp-buffer
-      (set-buffer-multibyte t)
-      (insert-file-contents path)
+      (let ((coding-system-for-read 'utf-8))
+        (insert-file-contents path))
       (buffer-string))))
 
 (defun mindwtr-util-atomic-write (path content)
-  "Write string CONTENT to PATH atomically (temp file + rename)."
-  (let ((tmp (make-temp-file (concat (file-name-directory path) ".mw-tmp"))))
+  "Write string CONTENT to PATH atomically (temp file + rename), as UTF-8.
+Pinning the coding system keeps shadow/etag writes deterministic and
+prevents a coding-system prompt when CONTENT carries non-ASCII text."
+  (let ((tmp (make-temp-file (concat (file-name-directory path) ".mw-tmp")))
+        (coding-system-for-write 'utf-8))
     (with-temp-file tmp
-      (set-buffer-multibyte t)
       (insert content))
     (rename-file tmp path t)))
 

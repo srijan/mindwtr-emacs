@@ -283,6 +283,43 @@ remote change into the buffer."
             (should (search-forward "from server" nil t))))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-once-handles-non-ascii-content ()
+  "A server task with non-ASCII content (bullet, curly quotes) syncs and
+shadow-saves without raw-byte corruption or a coding-system prompt."
+  (let* ((dir (make-temp-file "mw-uni" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         ;; raw (unibyte) UTF-8 body, exactly as it arrives off the wire
+         (remote (encode-coding-string
+                  (concat "{\"tasks\":[{\"id\":\"t1\",\"title\":\"Plan • review “x”\","
+                          "\"status\":\"next\",\"areaId\":\"a1\",\"rev\":1,"
+                          "\"createdAt\":\"2026-06-01T00:00:00Z\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}],"
+                          "\"projects\":[],\"sections\":[],"
+                          "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],\"settings\":{}}")
+                  'utf-8))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body remote))
+              ("HEAD" '(:status 200 :headers (("ETag" . "v0")) :body ""))))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          ;; no shadow etag => full cycle (not a no-op), exercising GET+reconcile+save
+          (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")
+          (let ((task (car (plist-get (mindwtr-shadow-load) :tasks))))
+            (should (string= (plist-get task :title) "Plan • review “x”"))
+            (should (multibyte-string-p (plist-get task :title))))
+          (goto-char (point-min))
+          (should (search-forward "Plan • review “x”" nil t)))
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-end-to-end ()
   "A local edit is PUT, merged result is reconciled, shadow updated."
   (let* ((dir (make-temp-file "mw-e2e" t))

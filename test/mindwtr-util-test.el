@@ -56,6 +56,29 @@ scalar timestamp, so nil scalars must be absent, not empty arrays."
     (should (equal (plist-get back :contexts) '("@x")))
     (should (string= (plist-get back :id) "t"))))
 
+(ert-deftest mindwtr-util-json-encode-returns-text-not-raw-bytes ()
+  "Encoding yields multibyte text, not the unibyte UTF-8 bytes `json-serialize'
+returns.  Regression: raw bytes inserted into the shadow buffer became
+eight-bit chars (\\342\\200\\242) the saver could not encode."
+  (let ((s (mindwtr-util-json-encode '(:title "a • b “q” —"))))
+    (should (multibyte-string-p s))
+    (should (string-match-p "•" s))
+    ;; round-trips back through the decoder
+    (should (string= (plist-get (mindwtr-util-json-decode s) :title)
+                     "a • b “q” —"))))
+
+(ert-deftest mindwtr-util-atomic-write-roundtrips-non-ascii ()
+  "Non-ASCII content writes and reads back intact as UTF-8 (no save prompt,
+no byte corruption)."
+  (let ((f (make-temp-file "mw-uni")))
+    (unwind-protect
+        (progn
+          (mindwtr-util-atomic-write
+           f (mindwtr-util-json-encode '(:title "café • “q” —")))
+          (let ((back (mindwtr-util-json-decode (mindwtr-util-read-file f))))
+            (should (string= (plist-get back :title) "café • “q” —"))))
+      (delete-file f))))
+
 (ert-deftest mindwtr-util-json-ascii-is-pure-ascii ()
   "Non-ASCII content is escaped to \\uXXXX yet decodes back unchanged."
   (let* ((obj '(:title "café • “quote”" :emoji "\U0001F600"))
