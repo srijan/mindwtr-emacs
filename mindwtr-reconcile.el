@@ -16,7 +16,12 @@
   (let ((h (make-hash-table :test 'equal)))
     (org-map-entries
      (lambda ()
-       (let ((id (org-entry-get (point) "MW_ID")))
+       ;; Use the parser's own drawer scan rather than `org-entry-get': the
+       ;; latter fails to associate a PROPERTIES drawer with its heading when
+       ;; another drawer (e.g. a LOGBOOK placed above PROPERTIES) precedes it,
+       ;; which would leave the entity unmatched and make reconcile append a
+       ;; spurious duplicate instead of updating it in place.
+       (let ((id (mindwtr-parse--prop "MW_ID")))
          (when id (puthash id (point-marker) h)))))
     h))
 
@@ -27,37 +32,91 @@
                     (plist-get entity :areaId))))
     (and parent (gethash parent markers))))
 
-(defun mindwtr-reconcile--update-heading (entity kind)
-  "Rewrite recognized parts of the heading at point from ENTITY (kind KIND).
-Preserves LOGBOOK and unknown properties."
-  (let* ((title (or (plist-get entity :title) (plist-get entity :name)))
-         (todo (when (memq kind '(task project))
-                 (and (plist-get entity :status)
-                      (mindwtr-model-status->keyword kind (plist-get entity :status))))))
-    (org-edit-headline title)
-    (when (memq kind '(task project)) (org-todo (or todo 'none)))
-    (when (eq kind 'task)
-      (let ((c (mindwtr-model-priority->cookie (plist-get entity :priority)))
-            (org-priority-highest ?A)
-            (org-priority-lowest ?D))
-        ;; `org-priority' in this Org errors with "No priority cookie found
-        ;; in line" when asked to `remove' from a line that has none, so only
-        ;; remove when a cookie is actually present.
-        (cond (c (org-priority c))
-              ((nth 3 (org-heading-components)) (org-priority 'remove))))
-      (org-set-tags (append (plist-get entity :contexts)
-                            (mapcar (lambda (s) (string-remove-prefix "#" s))
-                                    (plist-get entity :tags))))))
-  (dolist (p '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
-               (:assignedTo . "MW_ASSIGNED_TO") (:location . "MW_LOCATION")
-               (:taskMode . "MW_TASK_MODE")))
-    (let ((v (plist-get entity (car p))))
-      (if v (org-entry-put (point) (cdr p) (format "%s" v))
-        (org-entry-delete (point) (cdr p)))))
-  (when (plist-get entity :createdAt)
-    (org-entry-put (point) "MW_CREATED" (mindwtr-util-iso->org (plist-get entity :createdAt))))
-  (when (plist-get entity :updatedAt)
-    (org-entry-put (point) "MW_UPDATED" (mindwtr-util-iso->org (plist-get entity :updatedAt)))))
+(defun mindwtr-reconcile--body-start ()
+  "Return the position just after this entry's PROPERTIES drawer.
+Point must be at the heading.  Falls back to the line after the heading
+when there is no PROPERTIES drawer (so the body scan still has a start)."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((end (save-excursion (outline-next-heading) (point)))
+          (case-fold-search nil))
+      (if (and (re-search-forward "^[ \t]*:PROPERTIES:[ \t]*$" end t)
+               (re-search-forward "^[ \t]*:END:[ \t]*$" end t))
+          (min (1+ (point)) end)
+        (progn (org-back-to-heading t) (forward-line 1) (point))))))
+
+(defun mindwtr-reconcile--preserved-body (kind body-start end)
+  "Return org-only body text between BODY-START and END to carry across a rebuild.
+The renderer emits a body (description + checklist) only for tasks, so for
+a NON-task entity the entire body is org-only content and is preserved
+verbatim.  For a task, description and checklist are regenerated from the
+merged entity, so only org-only lines are preserved: drawer blocks
+\(LOGBOOK and CLOCK-in-drawer) and bare CLOCK lines.  Returns nil when
+there is nothing to preserve."
+  (if (not (eq kind 'task))
+      (let ((s (buffer-substring-no-properties body-start end)))
+        (unless (string-empty-p (string-trim s)) s))
+    (save-excursion
+      (goto-char body-start)
+      (let ((case-fold-search nil) parts)
+        (while (< (point) end)
+          (cond
+           ((looking-at "^[ \t]*:\\([A-Za-z0-9_]+\\):[ \t]*$")
+            (let ((name (match-string-no-properties 1)) (bbeg (point)))
+              (forward-line 1)
+              (unless (string= (upcase name) "END")
+                (while (and (< (point) end)
+                            (not (looking-at "^[ \t]*:END:[ \t]*$")))
+                  (forward-line 1))
+                (when (< (point) end) (forward-line 1)) ; consume the :END: line
+                (push (buffer-substring-no-properties bbeg (min (point) end))
+                      parts))))
+           ((looking-at "^[ \t]*CLOCK:")
+            (let ((cbeg (point)))
+              (forward-line 1)
+              (push (buffer-substring-no-properties cbeg (min (point) end)) parts)))
+           (t (forward-line 1))))
+        (when parts (mapconcat #'identity (nreverse parts) ""))))))
+
+(defun mindwtr-reconcile--rebuild-entry (entity kind)
+  "Replace the entry at point with a full render of ENTITY (kind KIND).
+Point must be at the heading.  Rewrites the heading line, planning,
+drawer, description and checklist from ENTITY by reusing the canonical
+renderer -- so a remote change to ANY mapped field (dates, description,
+checklist, drawer props, tags) reaches the buffer instead of silently
+reverting on the next sync.  Preserves the heading's outline level,
+unknown PROPERTIES, and org-only body content (LOGBOOK/CLOCK and, for
+non-task entities, all free prose).  Child headings are outside the entry
+region and are left untouched."
+  (org-back-to-heading t)
+  (let* ((level (org-current-level))
+         (extra (mindwtr-parse--extra-props))
+         (beg (point))
+         (end (save-excursion (outline-next-heading) (point)))
+         (preserved (mindwtr-reconcile--preserved-body
+                     kind (mindwtr-reconcile--body-start) end))
+         ;; ENTITY doubles as the display-mirror source: it carries the
+         ;; merged createdAt/updatedAt that render writes as MW_CREATED/UPDATED.
+         (e (plist-put (plist-put (copy-sequence entity) :mw-kind kind)
+                       :mw-extra-props extra))
+         (rendered (mindwtr-render-heading e level e)))
+    (when preserved
+      ;; Graft preserved body right after the PROPERTIES :END: line so
+      ;; LOGBOOK/CLOCK keep their conventional position above the body.  The
+      ;; first ":END:" in the render output closes the (sole) PROPERTIES drawer.
+      (let ((i (string-match "\n:END:\n" rendered)))
+        (when i
+          (let ((cut (+ i (length "\n:END:\n"))))
+            (setq rendered (concat (substring rendered 0 cut)
+                                   preserved
+                                   (substring rendered cut)))))))
+    ;; Insert the rebuilt entry BEFORE deleting the old one.  Deleting first
+    ;; would collapse the next heading's marker onto the rebuild point; by
+    ;; inserting ahead of the old region the following heading's marker simply
+    ;; shifts and stays valid, so no O(n) marker rescan per update is needed.
+    (goto-char beg)
+    (insert rendered)
+    (delete-region (point) (+ (point) (- end beg)))))
 
 (defun mindwtr-reconcile--insert-entity (entity kind markers)
   "Insert ENTITY (kind KIND) as a new heading under its container."
@@ -93,8 +152,12 @@ Preserves LOGBOOK and unknown properties."
             (unless (plist-get e :deletedAt)
               (let ((m (gethash (plist-get e :id) markers)))
                 (if m
-                    (progn (goto-char m) (org-back-to-heading t)
-                           (mindwtr-reconcile--update-heading e kind))
+                    ;; Update in place: `--rebuild-entry' inserts-before-deletes,
+                    ;; so existing markers stay valid -- no rescan needed.
+                    (progn (goto-char m)
+                           (mindwtr-reconcile--rebuild-entry e kind))
+                  ;; A new heading's id is not yet in the map and a later entity
+                  ;; may need it as a container; rescan so it is resolvable.
                   (mindwtr-reconcile--insert-entity e kind markers)
                   (setq markers (mindwtr-reconcile--id-markers)))))))))))
 
