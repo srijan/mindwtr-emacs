@@ -12,3 +12,11 @@ test:
 compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
 	  -f batch-byte-compile mindwtr*.el
+
+.PHONY: smoke
+smoke:
+	$(EMACS) -Q --batch -L . -L smoke -l smoke/run.el
+
+.PHONY: smoke-write
+smoke-write:
+	MINDWTR_SMOKE_WRITE=1 $(EMACS) -Q --batch -L . -L smoke -l smoke/run.el
