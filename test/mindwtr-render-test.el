@@ -38,3 +38,20 @@
                '(:id "a1" :mw-kind area :name "Work" :mw-extra-props nil) 1 nil)))
     (should (string-match-p "^\\* Work" text))
     (should (string-match-p ":MW_TYPE: area" text))))
+
+(ert-deftest mindwtr-render-recurrence-is-readable ()
+  "Recurrence renders as the rrule/rule string, not a Lisp sexp."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :recurrence (:rule "monthly" :strategy "strict" :rrule "FREQ=MONTHLY"))
+               1 nil)))
+    (should (string-match-p ":MW_RECURRENCE: FREQ=MONTHLY" text))
+    (should-not (string-match-p ":rule" text))
+    (should-not (string-match-p ":strategy" text))))
+
+(ert-deftest mindwtr-render-recurrence-rule-fallback ()
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :recurrence (:rule "weekly"))
+               1 nil)))
+    (should (string-match-p ":MW_RECURRENCE: weekly" text))))

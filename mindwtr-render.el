@@ -65,6 +65,16 @@ to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
    "\\`\\[\\|\\]\\'" (lambda (m) (if (string= m "[") "<" ">"))
    (mindwtr-util-iso->org iso)))
 
+(defun mindwtr-render--recurrence (rec)
+  "Render a recurrence value REC as a readable drawer string.
+REC is a plist (e.g. (:rule \"monthly\" :rrule \"FREQ=MONTHLY\")); prefer
+the rrule, then the human rule, falling back to a printed form."
+  (cond
+   ((stringp rec) rec)
+   ((and (consp rec) (keywordp (car rec)))
+    (or (plist-get rec :rrule) (plist-get rec :rule) (format "%s" rec)))
+   (t (format "%s" rec))))
+
 (defun mindwtr-render-heading (entity level shadow)
   "Render ENTITY at outline LEVEL (1-based), using SHADOW for mirror fields.
 Returns a string ending with a newline."
@@ -110,7 +120,9 @@ Returns a string ending with a newline."
       (let ((v (plist-get entity k)))
         (when v
           (push (format ":%s: %s" (cdr (assq k mindwtr-render--prop-names))
-                        (if (eq v t) "t" v))
+                        (cond ((eq k :recurrence) (mindwtr-render--recurrence v))
+                              ((eq v t) "t")
+                              (t v)))
                 lines))))
     ;; contexts/tags fallback: when any value can't be a native org tag,
     ;; move the whole list into a drawer property (JSON-encoded for
