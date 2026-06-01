@@ -16,9 +16,9 @@
   (let ((ad (mindwtr-smoke-phase-snapshot)))
     (when ad
       (mindwtr-smoke-phase-schema-coverage ad)
-      (mindwtr-smoke-phase-roundtrip ad))
-    (when (getenv "MINDWTR_SMOKE_WRITE")
-      (mindwtr-smoke-phase-write-lifecycle))))
+      (mindwtr-smoke-phase-roundtrip ad)
+      (when (getenv "MINDWTR_SMOKE_WRITE")
+        (mindwtr-smoke-phase-write-lifecycle)))))
 
 (kill-emacs (mindwtr-smoke-summary))
 ;;; run.el ends here
