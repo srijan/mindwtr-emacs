@@ -50,7 +50,7 @@ adopts LE's value (clearing the field when LE emptied it).  LE's identity
 and internal keys are carried through (internal keys are stripped before
 the wire)."
   (let ((out (copy-sequence (or se '()))))
-    (dolist (k '(:id :mw-kind :mw-extra-props :mw-area-override))
+    (dolist (k '(:id :mw-kind :mw-extra-props))
       (when (plist-member le k)
         (setq out (plist-put out k (plist-get le k)))))
     (dolist (k mindwtr-model-content-fields)
@@ -158,7 +158,7 @@ the report's restore action rebuild the entity in the buffer."
                               (let (clean (i 0))
                                 (while (< i (length e))
                                   (unless (memq (nth i e)
-                                                '(:mw-kind :mw-extra-props :mw-area-override))
+                                                '(:mw-kind :mw-extra-props))
                                     (setq clean (plist-put clean (nth i e) (nth (1+ i) e))))
                                   (setq i (+ i 2)))
                                 clean))

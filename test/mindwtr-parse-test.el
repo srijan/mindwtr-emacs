@@ -80,6 +80,34 @@ Some notes.
                                   "CUSTOM_KEY" #'equal)
                        "keepme")))))
 
+(ert-deftest mindwtr-parse-area-from-property ()
+  "areaId comes from :MW_AREA: resolved against Areas-of-Focus headings,
+not from an ancestor area heading; project/section come from ancestry."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:MW_AREA: Personal\n:END:\n"
+              "*** NEXT child\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:MW_AREA: Personal\n:END:\n"
+              "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Personal\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects)))
+           (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get ad :tasks)))
+           (t2 (seq-find (lambda (e) (equal (plist-get e :id) "t2")) (plist-get ad :tasks))))
+      ;; project's area from its MW_AREA property
+      (should (string= (plist-get proj :areaId) "a1"))
+      ;; nested task: projectId from ancestry, NO areaId (no MW_AREA)
+      (should (string= (plist-get t1 :projectId) "p1"))
+      (should-not (plist-get t1 :areaId))
+      ;; loose task: areaId from MW_AREA, no project
+      (should (string= (plist-get t2 :areaId) "a1"))
+      (should-not (plist-get t2 :projectId))
+      ;; containers are not entities
+      (should (= (length (plist-get ad :areas)) 1)))))
+
 (ert-deftest mindwtr-parse-buffer-containment ()
   (with-temp-buffer
     (let ((org-inhibit-startup t))
@@ -92,6 +120,7 @@ Some notes.
 :PROPERTIES:
 :MW_TYPE: project
 :MW_ID: p1
+:MW_AREA: Work
 :END:
 *** Planning
 :PROPERTIES:
@@ -151,7 +180,7 @@ would corrupt containment on write (the server stores projectId alone)."
         (should (null (plist-get task :sectionId)))))))
 
 (ert-deftest mindwtr-parse-task-directly-in-area-keeps-area ()
-  "A task directly under an Area (no project/section) keeps :areaId."
+  "A loose task keeps :areaId from its :MW_AREA: property."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Personal
@@ -163,38 +192,13 @@ would corrupt containment on write (the server stores projectId alone)."
 :PROPERTIES:
 :MW_TYPE: task
 :MW_ID: t1
+:MW_AREA: Personal
 :END:
 ")
       (org-mode)
       (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
         (should (string= (plist-get task :areaId) "a1"))
         (should (null (plist-get task :projectId)))))))
-
-(ert-deftest mindwtr-parse-task-explicit-area-override ()
-  "MW_AREA_ID sets :areaId even alongside a project (independent-area override)."
-  (with-temp-buffer
-    (let ((org-inhibit-startup t))
-      (insert "* Personal
-:PROPERTIES:
-:MW_TYPE: area
-:MW_ID: a1
-:END:
-** ACTIVE Some Project
-:PROPERTIES:
-:MW_TYPE: project
-:MW_ID: p1
-:END:
-*** NEXT Do thing
-:PROPERTIES:
-:MW_TYPE: task
-:MW_ID: t1
-:MW_AREA_ID: a2
-:END:
-")
-      (org-mode)
-      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
-        (should (string= (plist-get task :projectId) "p1"))
-        (should (string= (plist-get task :areaId) "a2"))))))
 
 (ert-deftest mindwtr-parse-buffer-skips-inbox-container ()
   (with-temp-buffer

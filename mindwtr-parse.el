@@ -15,7 +15,7 @@
 (defconst mindwtr-parse--known-props
   '("MW_TYPE" "MW_ID" "MW_ENERGY" "MW_TIME_ESTIMATE" "MW_RECURRENCE"
     "MW_ASSIGNED_TO" "MW_FOCUS_TODAY" "MW_REVIEW_AT" "MW_LOCATION"
-    "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "MW_AREA_ID" "MW_ATTACH"
+    "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "MW_AREA_ID" "MW_AREA" "MW_ATTACH"
     "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS")
   "PROPERTIES keys the parser interprets; all others are preserved verbatim.")
 
@@ -112,6 +112,29 @@ Description is the prose body minus planning, drawers, and checklist items."
         (setq extra (plist-put extra k v))))
     extra))
 
+(defvar mindwtr-parse--area-names nil
+  "Hash name->id for resolving :MW_AREA:.
+Dynamically bound by `mindwtr-parse-buffer'.")
+
+(defun mindwtr-parse--build-area-names ()
+  "Scan the current buffer for area headings, returning a name->id hash.
+Warns on a duplicate name (keeps the first id)."
+  (let ((h (make-hash-table :test 'equal)))
+    (org-map-entries
+     (lambda ()
+       (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "area")
+         (let ((name (org-get-heading t t t t)) (id (mindwtr-parse--prop "MW_ID")))
+           (when (and name id)
+             (if (gethash name h)
+                 (message "mindwtr: duplicate area name %S; keeping first" name)
+               (puthash name id h)))))))
+    h))
+
+(defun mindwtr-parse--area-id (entity-area-name)
+  "Resolve an :MW_AREA: ENTITY-AREA-NAME to an area id, or nil."
+  (and entity-area-name mindwtr-parse--area-names
+       (gethash entity-area-name mindwtr-parse--area-names)))
+
 (defun mindwtr-parse-heading ()
   "Parse the org heading at point into a Mindwtr entity content plist."
   (save-excursion (mindwtr-parse-ensure-keywords))
@@ -162,6 +185,8 @@ Description is the prose body minus planning, drawers, and checklist items."
                      ("MW_TASK_MODE" . :taskMode)))
           (let ((v (mindwtr-parse--prop (car p))))
             (when v (setq e (plist-put e (cdr p) v)))))))
+    (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
+      (when aid (setq e (plist-put e :areaId aid))))
     e))
 
 (defconst mindwtr-parse--internal-keys '(:mw-kind :mw-extra-props :mw-ancestors)
@@ -188,7 +213,8 @@ Description is the prose body minus planning, drawers, and checklist items."
 (defun mindwtr-parse-buffer ()
   "Parse the current org buffer into a content appdata plist."
   (mindwtr-parse-ensure-keywords)
-  (let (tasks projects sections areas)
+  (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
+        tasks projects sections areas)
     (org-map-entries
      (lambda ()
        (let ((kind (mindwtr-parse--prop "MW_TYPE")))
@@ -196,35 +222,16 @@ Description is the prose body minus planning, drawers, and checklist items."
            (let ((e (mindwtr-parse-heading)))
              (pcase (intern kind)
                ('area (push (mindwtr-parse--strip-internal e) areas))
-               ('project
-                (let ((aid (mindwtr-parse--ancestor-id 'area)))
-                  (when aid (setq e (plist-put e :areaId aid))))
-                (push (mindwtr-parse--strip-internal e) projects))
+               ('project (push (mindwtr-parse--strip-internal e) projects))
                ('section
                 (let ((pid (mindwtr-parse--ancestor-id 'project)))
                   (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) sections))
                ('task
                 (let ((sid (mindwtr-parse--ancestor-id 'section))
-                      (pid (mindwtr-parse--ancestor-id 'project))
-                      (explicit-area (mindwtr-parse--prop "MW_AREA_ID")))
-                  ;; A task stores exactly ONE container reference: its
-                  ;; nearest ancestor container.  Higher containers are
-                  ;; derived structurally on render -- `mindwtr-reconcile--
-                  ;; container-marker' resolves a parent with this same
-                  ;; section>project>area precedence -- so a task in a
-                  ;; project carries `:projectId' only, never a derived
-                  ;; `:areaId'.  This matches the server, which stores a
-                  ;; single container id per task.  The sole exception is
-                  ;; MW_AREA_ID: Mindwtr emits it when a task's areaId is set
-                  ;; independently of its container's area (rare override).
+                      (pid (mindwtr-parse--ancestor-id 'project)))
                   (cond (sid (setq e (plist-put e :sectionId sid)))
-                        (pid (setq e (plist-put e :projectId pid)))
-                        (t (let ((aid (mindwtr-parse--ancestor-id 'area)))
-                             (when aid (setq e (plist-put e :areaId aid))))))
-                  (when explicit-area
-                    (setq e (plist-put e :areaId explicit-area))
-                    (setq e (plist-put e :mw-area-override explicit-area))))
+                        (pid (setq e (plist-put e :projectId pid)))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)
           :sections (nreverse sections) :areas (nreverse areas))))
