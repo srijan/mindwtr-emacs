@@ -38,3 +38,67 @@
           (should (search-forward "t1" nil t))
           (should (search-forward "MINE" nil t)))
       (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-field-diff-lists-differing-content-fields ()
+  "The diff names only content fields that differ, ignoring equal ones."
+  (let ((d (mindwtr-report--field-diff
+            '(:title "a" :priority "high" :status "next")
+            '(:title "b" :priority "high" :status "next"))))
+    (should (= (length d) 1))
+    (should (eq (car (car d)) :title))))
+
+(ert-deftest mindwtr-report-field-diff-ignores-noncontent-and-empty ()
+  "Equal-after-canonicalization values (e.g. tag order) and rev/updatedAt
+\(non-content) do not appear in the diff."
+  (let ((d (mindwtr-report--field-diff
+            '(:title "a" :tags ("#b" "#a") :rev 8 :updatedAt "X")
+            '(:title "a" :tags ("#a" "#b") :rev 9 :updatedAt "Y"))))
+    (should (null d))))
+
+(ert-deftest mindwtr-report-shows-field-diff-and-backup ()
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              '((:id "t1" :kind task
+                 :mine (:id "t1" :title "MINE" :priority "high")
+                 :theirs (:id "t1" :title "THEIRS" :priority "low")))
+              "clock off by 5m"
+              "/tmp/mindwtr/backups/mindwtr-x.org")))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "clock off by 5m" nil t))
+          (should (search-forward "title" nil t))
+          (should (save-excursion (search-forward "MINE" nil t)))
+          (should (save-excursion (search-forward "THEIRS" nil t)))
+          (should (save-excursion (goto-char (point-min)) (search-forward "priority" nil t)))
+          (should (save-excursion (goto-char (point-min)) (search-forward "mindwtr-x.org" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-restore-reapplies-local-edit ()
+  "Pressing restore on a conflict re-applies the local (mine) version into
+the synced buffer so the next sync will push it."
+  (require 'mindwtr-reconcile)
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT theirs version\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let* ((target (current-buffer))
+           (mine '(:id "t1" :title "mine again" :status "next" :areaId "a1"
+                   :rev 9 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
+           (report (mindwtr-report-show
+                    '(:created 0 :updated 0 :deleted 0)
+                    (list (list :id "t1" :kind 'task :mine mine
+                                :theirs '(:id "t1" :title "theirs version")))
+                    nil nil target)))
+      (unwind-protect
+          (progn
+            (with-current-buffer report
+              (goto-char (point-min))
+              (search-forward "t1")
+              (mindwtr-report-restore-conflict))
+            (with-current-buffer target
+              (goto-char (point-min))
+              (should (search-forward "mine again" nil t))
+              (should-not (save-excursion (search-forward "theirs version" nil t)))))
+        (kill-buffer report)))))

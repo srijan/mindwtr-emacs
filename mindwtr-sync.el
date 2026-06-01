@@ -112,24 +112,35 @@ the wire)."
         (setq cand (plist-put cand key (nreverse out)))))
     cand))
 
-(defun mindwtr-sync--find (appdata id)
-  "Find entity with ID in APPDATA across all entity lists."
+(defun mindwtr-sync--key->kind (key)
+  "Map an entity-list KEY like `:tasks' to its singular kind symbol `task'."
+  (intern (substring (symbol-name key) 1 (1- (length (symbol-name key))))))
+
+(defun mindwtr-sync--find-entry (appdata id)
+  "Return (KIND . ENTITY) for ID in APPDATA across all entity lists, or nil.
+KIND is the singular symbol (task/project/section/area)."
   (catch 'hit
     (dolist (key mindwtr-sync--entity-keys)
       (dolist (e (plist-get appdata key))
-        (when (string= (plist-get e :id) id) (throw 'hit e))))
+        (when (string= (plist-get e :id) id)
+          (throw 'hit (cons (mindwtr-sync--key->kind key) e)))))
     nil))
 
 (defun mindwtr-sync-detect-conflicts (candidate merged changed-ids)
-  "Return lost-edit conflicts for CHANGED-IDS comparing CANDIDATE vs MERGED."
+  "Return lost-edit conflicts for CHANGED-IDS comparing CANDIDATE vs MERGED.
+Each conflict is (:id ID :kind KIND :mine OURS :theirs SERVERS); KIND lets
+the report's restore action rebuild the entity in the buffer."
   (let (conflicts)
     (dolist (id changed-ids)
-      (let ((mine (mindwtr-sync--find candidate id))
-            (theirs (mindwtr-sync--find merged id)))
+      (let* ((mine-e (mindwtr-sync--find-entry candidate id))
+             (theirs-e (mindwtr-sync--find-entry merged id))
+             (mine (cdr mine-e))
+             (theirs (cdr theirs-e)))
         (when (and mine theirs
                    (not (string= (mindwtr-signature mine)
                                  (mindwtr-signature theirs))))
-          (push (list :id id :mine mine :theirs theirs) conflicts))))
+          (push (list :id id :kind (car mine-e) :mine mine :theirs theirs)
+                conflicts))))
     (nreverse conflicts)))
 
 (require 'mindwtr-parse)
@@ -166,6 +177,28 @@ the wire)."
               (push id ids))))))
     ids))
 
+(defun mindwtr-sync--stats (local shadow)
+  "Return (:created C :updated U :deleted D) for LOCAL parse vs SHADOW.
+A create is a local entity not in the shadow (including a new heading that
+has no id yet); an update is a local entity whose signature differs from
+its shadow twin; a delete is a live shadow entity absent from LOCAL."
+  (let ((created 0) (updated 0) (deleted 0))
+    (dolist (key mindwtr-sync--entity-keys)
+      (let ((idx (mindwtr-shadow-index shadow key))
+            (seen (make-hash-table :test 'equal)))
+        (dolist (le (plist-get local key))
+          (let* ((id (plist-get le :id))
+                 (se (and id (gethash id idx))))
+            (when id (puthash id t seen))
+            (pcase (mindwtr-sync--classify le se)
+              ('create (setq created (1+ created)))
+              ('update (setq updated (1+ updated))))))
+        (dolist (se (plist-get shadow key))
+          (let ((id (plist-get se :id)))
+            (unless (or (gethash id seen) (plist-get se :deletedAt))
+              (setq deleted (1+ deleted)))))))
+    (list :created created :updated updated :deleted deleted)))
+
 (defun mindwtr-sync-once (buffer now)
   "Run one full sync cycle for org BUFFER, stamping changes with NOW.
 Return (:ok t :conflicts LIST) or signals on hard error."
@@ -181,29 +214,33 @@ Return (:ok t :conflicts LIST) or signals on hard error."
            ;; guard; capturing before parse would make the guard fire spuriously.
            (tick (buffer-chars-modified-tick))
            (changed (mindwtr-sync--changed-ids local shadow))
+           (stats (mindwtr-sync--stats local shadow))
            (candidate (mindwtr-sync-build-candidate local shadow device now))
            (wire (mindwtr-sync--strip-internal-keys candidate)))
       (mindwtr-model-validate-appdata wire)
-      (mindwtr-api-put-data wire)
-      (let* ((got (mindwtr-api-get-data))
+      ;; The PUT response carries {ok, stats, clockSkewWarning}; surface the
+      ;; skew warning so a misconfigured device clock is visible, not silent.
+      (let* ((put-resp (mindwtr-api-put-data wire))
+             (skew (plist-get put-resp :clockSkewWarning))
+             (got (mindwtr-api-get-data))
              (merged (plist-get got :appdata))
-             (conflicts (mindwtr-sync-detect-conflicts wire merged changed)))
+             (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
+             (backup-file nil))
         (unless (= tick (buffer-chars-modified-tick))
           (error "mindwtr: buffer changed during sync; aborting"))
         (when (buffer-file-name)
-          (let ((bdir (expand-file-name "backups/" mindwtr-shadow-directory)))
+          (let* ((bdir (expand-file-name "backups/" mindwtr-shadow-directory))
+                 (bf (expand-file-name
+                      (format "mindwtr-%s.org"
+                              (format-time-string "%Y%m%dT%H%M%S")) bdir)))
             (make-directory bdir t)
-            (write-region (point-min) (point-max)
-                          (expand-file-name
-                           (format "mindwtr-%s.org"
-                                   (format-time-string "%Y%m%dT%H%M%S")) bdir))))
+            (write-region (point-min) (point-max) bf)
+            (setq backup-file bf)))
         (mindwtr-reconcile-buffer merged)
         (mindwtr-shadow-save merged)
         (mindwtr-shadow-set-etag (plist-get got :etag))
-        (mindwtr-report-show
-         (list :created (length changed) :updated 0 :deleted 0)
-         conflicts nil)
-        (list :ok t :conflicts conflicts)))))
+        (mindwtr-report-show stats conflicts skew backup-file (current-buffer))
+        (list :ok t :conflicts conflicts :stats stats :skew skew)))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here

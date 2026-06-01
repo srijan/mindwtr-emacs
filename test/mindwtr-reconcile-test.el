@@ -247,6 +247,43 @@ matched by id (no spurious duplicate insert)."
         (while (re-search-forward "^\\*\\* .* renamed$" nil t) (setq n (1+ n)))
         (should (= n 1))))))
 
+(ert-deftest mindwtr-reconcile-restore-roundtrips-field-edit ()
+  "Restoring a simple field edit reproduces it exactly -> `restored'."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT theirs\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let ((mine '(:id "t1" :title "mine" :status "next" :areaId "a1"
+                  :rev 9 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z")))
+      (should (eq (mindwtr-reconcile-restore-entity mine 'task) 'restored))
+      (goto-char (point-min))
+      (should (search-forward "mine" nil t)))))
+
+(ert-deftest mindwtr-reconcile-restore-refile-is-partial ()
+  "Restoring a refile (containment) edit cannot move the heading in place,
+so it must report `partial' (honest) rather than falsely claim success."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** ACTIVE PA\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: pA\n:END:\n"
+              "** ACTIVE PB\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: pB\n:END:\n"
+              "*** NEXT thing\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    ;; the task currently sits under pB; the lost edit moved it to pA
+    (let ((mine '(:id "t1" :title "thing" :status "next" :projectId "pA"
+                  :rev 9 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z")))
+      (should (eq (mindwtr-reconcile-restore-entity mine 'task) 'partial)))))
+
+(ert-deftest mindwtr-reconcile-restore-missing-heading-returns-nil ()
+  "Restoring an entity that is no longer in the buffer (remote delete) is nil."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+      (org-mode))
+    (should (null (mindwtr-reconcile-restore-entity
+                   '(:id "gone" :title "x" :status "next") 'task)))))
+
 (ert-deftest mindwtr-reconcile-low-priority-does-not-crash ()
   "Updating a task to :priority \"low\" writes [#D] without erroring."
   (with-temp-buffer

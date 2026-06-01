@@ -40,6 +40,13 @@
       (should (string= (plist-get (req) :method) "PUT"))
       (should (string-match-p "\"tasks\"" (plist-get (req) :body))))))
 
+(ert-deftest mindwtr-api-put-tolerates-empty-response-body ()
+  "A server that returns 200/204 with an empty body must not crash the decode."
+  (mindwtr-api-test--stub
+      '(:status 200 :headers nil :body "")
+    (should (null (mindwtr-api-put-data
+                   '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))))
+
 (ert-deftest mindwtr-api-classifies-401 ()
   (mindwtr-api-test--stub
       '(:status 401 :headers nil :body "unauthorized")

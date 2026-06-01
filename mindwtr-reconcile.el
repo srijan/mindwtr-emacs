@@ -9,6 +9,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-render)
+(require 'mindwtr-signature)
 (require 'mindwtr-util)
 
 (defun mindwtr-reconcile--id-markers ()
@@ -160,6 +161,40 @@ region and are left untouched."
                   ;; may need it as a container; rescan so it is resolvable.
                   (mindwtr-reconcile--insert-entity e kind markers)
                   (setq markers (mindwtr-reconcile--id-markers)))))))))))
+
+(defun mindwtr-reconcile--find-parsed (id)
+  "Parse the buffer and return the entity whose id is ID, or nil."
+  (let ((ad (mindwtr-parse-buffer)))
+    (seq-find (lambda (e) (equal (plist-get e :id) id))
+              (append (plist-get ad :tasks) (plist-get ad :projects)
+                      (plist-get ad :sections) (plist-get ad :areas)))))
+
+(defun mindwtr-reconcile-restore-entity (entity kind)
+  "Re-apply ENTITY (kind KIND) onto its existing heading in the current buffer.
+Used by the sync report's restore action: after the server overrode a
+local edit, this puts the local (ENTITY) version back into the buffer so
+the next sync proposes it again.  Returns:
+  `restored' - the rebuilt heading re-parses to ENTITY's content, so the
+               next sync will detect the change and propose it;
+  `partial'  - a heading with ENTITY's id exists but could not be
+               reproduced exactly.  The in-place rebuild rewrites the
+               heading's own fields but does NOT move it, so a containment
+               (refile) edit -- whose parent is derived from outline
+               ancestry, not a field -- cannot be reapplied here;
+  nil        - no heading with ENTITY's id is present (e.g. it was removed
+               by a remote deletion).
+The caller surfaces `partial'/nil so a lost edit is never silently
+reported as restored; the user falls back to the pre-sync backup."
+  (let ((m (gethash (plist-get entity :id) (mindwtr-reconcile--id-markers))))
+    (if (not m)
+        nil
+      (save-excursion
+        (goto-char m)
+        (mindwtr-reconcile--rebuild-entry entity kind))
+      (let ((re (mindwtr-reconcile--find-parsed (plist-get entity :id))))
+        (if (and re (string= (mindwtr-signature re) (mindwtr-signature entity)))
+            'restored
+          'partial)))))
 
 (provide 'mindwtr-reconcile)
 ;;; mindwtr-reconcile.el ends here

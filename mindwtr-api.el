@@ -110,16 +110,21 @@ REQ is (:method :url :headers :body).  Returns (:status :headers :body)."
     (mindwtr-api--header resp "ETag")))
 
 (defun mindwtr-api-put-data (appdata)
-  "PUT /v1/data with APPDATA.  Return the decoded response plist."
-  (let ((resp (mindwtr-api--check
-               (funcall mindwtr-api-http-function
-                        (list :method "PUT" :url (mindwtr-api--url "/v1/data")
-                              :headers (mindwtr-api--headers t)
-                              ;; ASCII-only body: keeps the request unibyte so
-                              ;; the url.el transport won't choke on non-ASCII
-                              ;; content (descriptions, unicode in titles).
-                              :body (mindwtr-util-json-ascii appdata))))))
-    (mindwtr-util-json-decode (plist-get resp :body))))
+  "PUT /v1/data with APPDATA.  Return the decoded response plist, or nil.
+The Cloud server returns {ok, stats, clockSkewWarning}, but a self-hosted
+deployment may answer 200/204 with an empty body; tolerate that (return
+nil) rather than signalling a JSON-end-of-file error on the sync path."
+  (let* ((resp (mindwtr-api--check
+                (funcall mindwtr-api-http-function
+                         (list :method "PUT" :url (mindwtr-api--url "/v1/data")
+                               :headers (mindwtr-api--headers t)
+                               ;; ASCII-only body: keeps the request unibyte so
+                               ;; the url.el transport won't choke on non-ASCII
+                               ;; content (descriptions, unicode in titles).
+                               :body (mindwtr-util-json-ascii appdata)))))
+         (body (plist-get resp :body)))
+    (unless (or (null body) (string-empty-p (string-trim body)))
+      (mindwtr-util-json-decode body))))
 
 (provide 'mindwtr-api)
 ;;; mindwtr-api.el ends here
