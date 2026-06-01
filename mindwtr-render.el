@@ -183,11 +183,13 @@ Returns a string ending with a newline."
           (make-string level ?*) (mindwtr-model-list-title role) role))
 
 (defun mindwtr-render--order-key (e)
+  "Sort key for entity E: its :order, then :orderNum, then a last-sorting sentinel."
   (or (plist-get e :order) (plist-get e :orderNum) most-positive-fixnum))
 
 (defun mindwtr-render--sorted (entities)
-  "Stable sort ENTITIES by :order/:orderNum; entities without an order keep
-their incoming relative position and sort last."
+  "Stable-sort ENTITIES by order key, order-less entries sorting last.
+Entities without an :order/:orderNum keep their incoming relative position
+and sort after all ordered entries."
   (let ((i 0) keyed)
     (dolist (e entities)
       (push (list (mindwtr-render--order-key e) i e) keyed)
@@ -199,8 +201,9 @@ their incoming relative position and sort last."
                       (< (nth 0 a) (nth 0 b))))))))
 
 (defun mindwtr-render--sorted-projects (projects area-order)
-  "Sort PROJECTS grouped by area (AREA-ORDER hash areaId->order, area-less
-last), then by project :order, stably."
+  "Stable-sort PROJECTS grouped by area then project order, area-less last.
+AREA-ORDER is a hash areaId->order; projects without an areaId sort after
+all area-grouped projects, then by project :order within each group."
   (let ((i 0) keyed)
     (dolist (p projects)
       (let ((ao (if (plist-get p :areaId)
@@ -226,8 +229,9 @@ last), then by project :order, stably."
                     (substring rendered cut))))))))
 
 (defun mindwtr-render--entity (e kind level org-only)
-  "Render entity E (KIND) at LEVEL, injecting extra-props and org-only body
-for E's id from ORG-ONLY (a hash id -> (:body STR :extra PLIST), or nil)."
+  "Render entity E of KIND at outline LEVEL, grafting preserved ORG-ONLY content.
+ORG-ONLY is a hash id -> (:body STR :extra PLIST), or nil; extra-props and
+the org-only body for E's id are injected into the rendered heading."
   (let* ((id (plist-get e :id))
          (p (and org-only (gethash id org-only)))
          (e2 (plist-put (plist-put (copy-sequence e) :mw-kind kind)
