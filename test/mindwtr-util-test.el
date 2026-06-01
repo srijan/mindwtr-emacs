@@ -36,6 +36,26 @@
     (should (eq (plist-get back :off) :false))
     (should (equal (plist-get back :tags) '("a" "b")))))
 
+(ert-deftest mindwtr-util-json-prep-omits-nil-scalars-keeps-empty-arrays ()
+  "A nil scalar field is dropped entirely; a nil array field becomes [].
+This is the deletedAt/[] bug: the server rejects `[]' where it wants a
+scalar timestamp, so nil scalars must be absent, not empty arrays."
+  (let* ((obj '(:id "t" :deletedAt nil :dueDate nil :purgedAt nil
+                :tags nil :contexts ("@x") :checklist nil))
+         (s (mindwtr-util-json-encode obj))
+         (back (mindwtr-util-json-decode s)))
+    ;; scalar nils omitted entirely (no key on the wire)
+    (should-not (string-match-p "deletedAt" s))
+    (should-not (string-match-p "dueDate" s))
+    (should-not (string-match-p "purgedAt" s))
+    (should-not (plist-member back :deletedAt))
+    ;; array fields present as [] even when nil
+    (should (string-match-p "\"tags\":\\[\\]" s))
+    (should (string-match-p "\"checklist\":\\[\\]" s))
+    ;; non-nil values untouched
+    (should (equal (plist-get back :contexts) '("@x")))
+    (should (string= (plist-get back :id) "t"))))
+
 (ert-deftest mindwtr-util-json-ascii-is-pure-ascii ()
   "Non-ASCII content is escaped to \\uXXXX yet decodes back unchanged."
   (let* ((obj '(:title "café • “quote”" :emoji "\U0001F600"))

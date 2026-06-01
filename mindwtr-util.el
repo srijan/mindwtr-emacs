@@ -63,17 +63,34 @@ cycle; coarsening here keeps content signatures stable across the trip."
                                       (iso8601-parse iso)))
                         t)))
 
+(defconst mindwtr-util-json-array-fields
+  '(:tasks :projects :sections :areas      ; appdata top-level
+    :tags :contexts :checklist :attachments ; task
+    :tagIds                                  ; project
+    :savedFilters)                           ; settings
+  "Plist keys whose value is a JSON array.
+Emacs cannot tell an empty list from JSON null: both read back as nil.
+A nil value for one of these keys must serialize as `[]'; a nil value
+for any OTHER key is dropped, because nil means \"absent\" everywhere in
+this model and the server rejects `[]' where it expects a scalar (e.g.
+a task's deletedAt must be an ISO timestamp when present).")
+
 (defun mindwtr-util--json-prep (obj)
   "Recursively convert OBJ so json-serialize can handle it.
-Plists are kept as plists; plain lists (used as arrays) are
-converted to vectors; all other values are passed through."
+Plists become JSON objects; plain lists become JSON arrays.  Within an
+object, a nil-valued key in `mindwtr-util-json-array-fields' emits `[]',
+and any other nil-valued key is omitted (nil means absent)."
   (cond
-   ((and (listp obj) (not (null obj)) (keywordp (car obj)))
+   ((and (consp obj) (keywordp (car obj)))
     (let ((result nil))
       (while obj
         (let ((k (pop obj))
               (v (pop obj)))
-          (setq result (append result (list k (mindwtr-util--json-prep v))))))
+          (cond
+           (v (setq result (append result (list k (mindwtr-util--json-prep v)))))
+           ((memq k mindwtr-util-json-array-fields)
+            (setq result (append result (list k []))))
+           (t nil))))            ; drop nil scalar: absent, not [] or null
       result))
    ((listp obj)
     (apply #'vector (mapcar #'mindwtr-util--json-prep obj)))
