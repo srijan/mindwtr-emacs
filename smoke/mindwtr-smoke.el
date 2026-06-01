@@ -284,5 +284,186 @@ On drift, FAIL and print the per-field canonical diff for each entity."
              (format "round-trip signature (%d entities clean)" checked)))))
     (error (mindwtr-smoke-fail "round-trip" (error-message-string err)))))
 
+;;;; Write lifecycle (opt-in; self-cleaning)
+
+(defconst mindwtr-smoke-device-id "mw-smoke"
+  "Recognizable `revBy' device id stamped on lifecycle writes.")
+
+(defun mindwtr-smoke--now ()
+  "Current UTC instant as a whole-second ISO `...Z' string."
+  (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+
+(defun mindwtr-smoke--build-wire (local shadow now)
+  "Build the wire payload from LOCAL parse and SHADOW, stamped with NOW."
+  (mindwtr-sync--strip-internal-keys
+   (mindwtr-sync-build-candidate local shadow mindwtr-smoke-device-id now)))
+
+(defun mindwtr-smoke--replace-heading (id entity)
+  "Replace the top-level heading with MW_ID ID by re-rendering ENTITY.
+ENTITY is a task content plist; it is rendered at level 1 (the lifecycle
+task has no container)."
+  (let ((m (gethash id (mindwtr-reconcile--id-markers))))
+    (unless m (error "smoke: heading %s not found in buffer" id))
+    (goto-char m) (org-back-to-heading t) (org-cut-subtree)
+    (insert (mindwtr-render-heading
+             (plist-put (copy-sequence entity) :mw-kind 'task) 1 nil))))
+
+(defun mindwtr-smoke--assert-target (label tgt desired exp-status exp-rev)
+  "Assert TGT (server entity) matches DESIRED content and EXP-STATUS/EXP-REV.
+Returns non-nil on full success.  On content drift prints the field diff."
+  (let ((ok t))
+    (cond
+     ((null tgt)
+      (setq ok nil) (mindwtr-smoke-fail (format "%s: target present" label)
+                                        "not found after PUT"))
+     (t
+      (unless (equal (plist-get tgt :status) exp-status)
+        (setq ok nil)
+        (mindwtr-smoke-fail (format "%s: status" label)
+                            (format "expected %S got %S"
+                                    exp-status (plist-get tgt :status))))
+      (unless (equal (plist-get tgt :rev) exp-rev)
+        (setq ok nil)
+        (mindwtr-smoke-fail (format "%s: rev" label)
+                            (format "expected %S got %S"
+                                    exp-rev (plist-get tgt :rev))))
+      (unless (string= (mindwtr-signature desired) (mindwtr-signature tgt))
+        (setq ok nil)
+        (mindwtr-smoke-fail (format "%s: content round-trip" label))
+        (dolist (line (mindwtr-smoke-canonical-field-diff desired tgt))
+          (mindwtr-smoke-info line)))))
+    (when ok (mindwtr-smoke-pass label))
+    ok))
+
+(defun mindwtr-smoke--step (label target-id edit-fn assert-fn)
+  "Run one lifecycle step and return the new server appdata, or nil on failure.
+GET the server, render it, run EDIT-FN to mutate the buffer, parse, build
+the wire, assert the blast radius is exactly TARGET-ID, PUT, GET again, and
+run ASSERT-FN with the new appdata and the target entity."
+  (condition-case err
+      (let ((prior (plist-get (mindwtr-api-get-data) :appdata)))
+        (with-temp-buffer
+          (mindwtr-smoke--render-appdata prior)
+          (funcall edit-fn)
+          (let* ((local (mindwtr-parse-buffer))
+                 (now (mindwtr-smoke--now))
+                 (wire (mindwtr-smoke--build-wire local prior now))
+                 (radius (mindwtr-smoke-blast-radius wire prior)))
+            (mindwtr-model-validate-appdata wire)
+            (if (not (equal radius (list target-id)))
+                (progn
+                  (mindwtr-smoke-fail (format "%s: blast radius" label)
+                                      (format "expected only (%s) got %S"
+                                              target-id radius))
+                  nil)
+              (mindwtr-api-put-data wire)
+              (let* ((after (plist-get (mindwtr-api-get-data) :appdata))
+                     (tgt (mindwtr-smoke-find-by-id after target-id)))
+                (funcall assert-fn after tgt)
+                after)))))
+    (error (mindwtr-smoke-fail (format "%s (error)" label)
+                               (error-message-string err))
+           nil)))
+
+(defun mindwtr-smoke--cleanup (id baseline)
+  "Delete the lifecycle task ID (tombstone) and confirm BASELINE is untouched.
+BASELINE is the appdata captured before the lifecycle began.  Always safe
+to call: a no-op PASS if the task is already gone."
+  (condition-case err
+      (let* ((prior (plist-get (mindwtr-api-get-data) :appdata))
+             (tgt (mindwtr-smoke-find-by-id prior id)))
+        (if (or (null tgt) (plist-get tgt :deletedAt))
+            (mindwtr-smoke-pass "cleanup (already gone)")
+          (with-temp-buffer
+            (mindwtr-smoke--render-appdata prior)
+            (let ((m (gethash id (mindwtr-reconcile--id-markers))))
+              (when m (goto-char m) (org-back-to-heading t) (org-cut-subtree)))
+            (let* ((local (mindwtr-parse-buffer))
+                   (now (mindwtr-smoke--now))
+                   (wire (mindwtr-smoke--build-wire local prior now))
+                   (radius (mindwtr-smoke-blast-radius wire prior)))
+              (if (not (equal radius (list id)))
+                  (mindwtr-smoke-fail "cleanup: blast radius"
+                                      (format "expected only (%s) got %S" id radius))
+                (mindwtr-api-put-data wire)
+                (let* ((after (plist-get (mindwtr-api-get-data) :appdata))
+                       (t2 (mindwtr-smoke-find-by-id after id)))
+                  (if (and t2 (not (plist-get t2 :deletedAt)))
+                      (mindwtr-smoke-fail "cleanup (delete)" "task still live after delete")
+                    (mindwtr-smoke-pass "cleanup (delete)"))
+                  ;; final non-target drift check against the pre-lifecycle baseline
+                  (let ((drift 0))
+                    (dolist (key mindwtr-smoke--entity-keys)
+                      (dolist (e (plist-get baseline key))
+                        (let ((e2 (mindwtr-smoke-find-by-id after (plist-get e :id))))
+                          (when (and e2 (not (string= (mindwtr-signature e)
+                                                      (mindwtr-signature e2))))
+                            (setq drift (1+ drift))
+                            (mindwtr-smoke-info
+                             (format "baseline drift id=%s" (plist-get e :id)))))))
+                    (if (= drift 0)
+                        (mindwtr-smoke-pass "lifecycle non-target drift: 0")
+                      (mindwtr-smoke-fail
+                       (format "lifecycle non-target drift: %d" drift))))))))))
+    (error (mindwtr-smoke-fail "cleanup (error)" (error-message-string err)))))
+
+(defun mindwtr-smoke-phase-write-lifecycle ()
+  "Drive a throwaway task through inbox -> next -> done -> delete, self-cleaning."
+  (let* ((baseline (plist-get (mindwtr-api-get-data) :appdata))
+         (run-id (format-time-string "%Y%m%dT%H%M%S"))
+         (id (mindwtr-util-uuid))
+         (base-title (format "[mw-smoke] lifecycle %s" run-id))
+         (desired (list :mw-kind 'task :id id :status "inbox" :title base-title
+                        :contexts '("@computer") :tags '("#smoke")
+                        :priority "high" :energyLevel "low" :dueDate "2026-06-15"
+                        :checklist (list (list :title "step one" :isCompleted :false)
+                                         (list :title "step two" :isCompleted :false)))))
+    (unwind-protect
+        (catch 'abort
+          ;; CREATE in inbox
+          (unless (mindwtr-smoke--step
+                   "create (inbox)" id
+                   (lambda () (goto-char (point-max))
+                     (insert (mindwtr-render-heading desired 1 nil)))
+                   (lambda (_after tgt)
+                     (mindwtr-smoke--assert-target "create (inbox)" tgt desired
+                                                   "inbox" 1)))
+            (throw 'abort nil))
+          ;; MUTATE: edit title + complete the first checklist item
+          (setq desired (plist-put (copy-sequence desired)
+                                   :title (concat base-title " (edited)")))
+          (setq desired (plist-put desired :checklist
+                                   (list (list :title "step one" :isCompleted t)
+                                         (list :title "step two" :isCompleted :false))))
+          (unless (mindwtr-smoke--step
+                   "mutate (title+checklist)" id
+                   (lambda () (mindwtr-smoke--replace-heading id desired))
+                   (lambda (_after tgt)
+                     (mindwtr-smoke--assert-target "mutate (title+checklist)" tgt
+                                                   desired "inbox" 2)))
+            (throw 'abort nil))
+          ;; TRANSITION -> next
+          (setq desired (plist-put (copy-sequence desired) :status "next"))
+          (unless (mindwtr-smoke--step
+                   "transition next" id
+                   (lambda () (mindwtr-smoke--replace-heading id desired))
+                   (lambda (_after tgt)
+                     (mindwtr-smoke--assert-target "transition next" tgt
+                                                   desired "next" 3)))
+            (throw 'abort nil))
+          ;; TRANSITION -> done (with completedAt)
+          (setq desired (plist-put (copy-sequence desired) :status "done"))
+          (setq desired (plist-put desired :completedAt (mindwtr-smoke--now)))
+          (mindwtr-smoke--step
+           "transition done" id
+           (lambda () (mindwtr-smoke--replace-heading id desired))
+           (lambda (_after tgt)
+             (when (mindwtr-smoke--assert-target "transition done" tgt desired "done" 4)
+               (unless (plist-get tgt :completedAt)
+                 (mindwtr-smoke-fail "transition done: completedAt"
+                                     "completedAt not set"))))))
+      ;; CLEANUP always runs
+      (mindwtr-smoke--cleanup id baseline))))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here

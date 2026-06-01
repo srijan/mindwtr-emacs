@@ -136,3 +136,26 @@ returns it re-encoded through JSON so nil/false/[] normalize as on the wire."
       (mindwtr-smoke-phase-roundtrip ad))
     ;; clean data: no failures across connectivity + snapshot + round-trip
     (should (= 0 (plist-get mindwtr-smoke--counts :fail)))))
+
+(ert-deftest mindwtr-smoke-write-lifecycle-end-to-end ()
+  "The lifecycle creates, mutates, transitions, and deletes a task with no
+failures, leaving every pre-existing entity untouched."
+  (let* ((mindwtr-api-base-url "https://mock/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function
+          (mindwtr-smoke-test--server mindwtr-smoke-test--initial)))
+    (mindwtr-smoke-reset)
+    (mindwtr-smoke-phase-write-lifecycle)
+    (should (= 0 (plist-get mindwtr-smoke--counts :fail)))
+    (let* ((final (plist-get (mindwtr-api-get-data) :appdata))
+           (smoke (seq-find
+                   (lambda (tk) (string-prefix-p
+                                 "[mw-smoke]" (or (plist-get tk :title) "")))
+                   (plist-get final :tasks)))
+           (keep (mindwtr-smoke-find-by-id final "t-keep")))
+      ;; the smoke task is gone or tombstoned
+      (should (or (null smoke) (plist-get smoke :deletedAt)))
+      ;; the pre-existing task survived unchanged
+      (should keep)
+      (should (string= (plist-get keep :title) "keep me"))
+      (should-not (plist-get keep :deletedAt)))))
