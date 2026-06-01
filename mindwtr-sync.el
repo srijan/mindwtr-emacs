@@ -94,5 +94,78 @@
           (push (list :id id :mine mine :theirs theirs) conflicts))))
     (nreverse conflicts)))
 
+(require 'mindwtr-parse)
+(require 'mindwtr-api)
+(require 'mindwtr-reconcile)
+(require 'mindwtr-report)
+
+(defun mindwtr-sync--strip-internal-keys (appdata)
+  "Remove internal :mw-* keys from every entity in APPDATA (for the wire)."
+  (let ((out (list :settings (plist-get appdata :settings))))
+    (dolist (key mindwtr-sync--entity-keys)
+      (setq out (plist-put out key
+                           (mapcar
+                            (lambda (e)
+                              (let (clean (i 0))
+                                (while (< i (length e))
+                                  (unless (memq (nth i e)
+                                                '(:mw-kind :mw-extra-props :mw-area-override))
+                                    (setq clean (plist-put clean (nth i e) (nth (1+ i) e))))
+                                  (setq i (+ i 2)))
+                                clean))
+                            (plist-get appdata key)))))
+    out))
+
+(defun mindwtr-sync--changed-ids (local shadow)
+  "Return ids of entities that are create/update vs SHADOW."
+  (let (ids)
+    (dolist (key mindwtr-sync--entity-keys)
+      (let ((idx (mindwtr-shadow-index shadow key)))
+        (dolist (le (plist-get local key))
+          (let* ((id (plist-get le :id))
+                 (se (and id (gethash id idx))))
+            (when (and id (not (eq (mindwtr-sync--classify le se) 'unchanged)))
+              (push id ids))))))
+    ids))
+
+(defun mindwtr-sync-once (buffer now)
+  "Run one full sync cycle for org BUFFER, stamping changes with NOW.
+Return (:ok t :conflicts LIST) or signals on hard error."
+  (with-current-buffer buffer
+    (let* ((shadow (mindwtr-shadow-load))
+           (device (mindwtr-shadow-device-id))
+           (local (mindwtr-parse-buffer))
+           ;; Capture the tick AFTER parsing: `mindwtr-parse-buffer' may call
+           ;; `mindwtr-parse-ensure-keywords' which re-inits `org-mode', and a
+           ;; mode re-init can bump `buffer-chars-modified-tick' without the
+           ;; user editing.  Parsing is a read of the user's buffer state, so
+           ;; the post-parse tick is the correct baseline for the concurrency
+           ;; guard; capturing before parse would make the guard fire spuriously.
+           (tick (buffer-chars-modified-tick))
+           (changed (mindwtr-sync--changed-ids local shadow))
+           (candidate (mindwtr-sync-build-candidate local shadow device now))
+           (wire (mindwtr-sync--strip-internal-keys candidate)))
+      (mindwtr-model-validate-appdata wire)
+      (mindwtr-api-put-data wire)
+      (let* ((got (mindwtr-api-get-data))
+             (merged (plist-get got :appdata))
+             (conflicts (mindwtr-sync-detect-conflicts wire merged changed)))
+        (unless (= tick (buffer-chars-modified-tick))
+          (error "mindwtr: buffer changed during sync; aborting"))
+        (when (buffer-file-name)
+          (let ((bdir (expand-file-name "backups/" mindwtr-shadow-directory)))
+            (make-directory bdir t)
+            (write-region (point-min) (point-max)
+                          (expand-file-name
+                           (format "mindwtr-%s.org"
+                                   (format-time-string "%Y%m%dT%H%M%S")) bdir))))
+        (mindwtr-reconcile-buffer merged)
+        (mindwtr-shadow-save merged)
+        (mindwtr-shadow-set-etag (plist-get got :etag))
+        (mindwtr-report-show
+         (list :created (length changed) :updated 0 :deleted 0)
+         conflicts nil)
+        (list :ok t :conflicts conflicts)))))
+
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here
