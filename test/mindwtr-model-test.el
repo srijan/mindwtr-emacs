@@ -41,3 +41,22 @@
    (mindwtr-model-validate-appdata
     '(:tasks ((:id "1" :title "x" :status "bogus")) :projects nil
       :sections nil :areas nil :settings nil))))
+
+(ert-deftest mindwtr-model-validate-accepts-task-tombstone-without-status ()
+  "A tombstoned task (deletedAt set) need not carry a valid status."
+  (should (mindwtr-model-validate-appdata
+           '(:tasks ((:id "t1" :deletedAt "2026-06-01T00:00:00Z" :rev 4))
+             :projects nil :sections nil :areas nil :settings nil))))
+
+(ert-deftest mindwtr-model-validate-accepts-project-tombstone-without-status ()
+  (should (mindwtr-model-validate-appdata
+           '(:tasks nil
+             :projects ((:id "p1" :deletedAt "2026-06-01T00:00:00Z" :rev 2))
+             :sections nil :areas nil :settings nil))))
+
+(ert-deftest mindwtr-model-still-rejects-live-task-without-status ()
+  "A live task (no deletedAt) with an invalid status is still rejected."
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks ((:id "t1" :title "x" :status "bogus")) :projects nil
+      :sections nil :areas nil :settings nil))))

@@ -148,9 +148,17 @@ Field mapping:
 **TODO keywords**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `ACTIVE` (active
 states) and `DONE` `ARCH` (done states).
 
-Additional task properties with no native org form are stored in the drawer:
-`MW_ENERGY`, `MW_TIME_ESTIMATE`, `MW_RECURRENCE`, `MW_ASSIGNED_TO`,
-`MW_LOCATION`, `MW_TASK_MODE`, `MW_ATTACH` (link attachments), and others.
+Additional task properties with no native org form are stored in the drawer.
+The drawer fields synced **read-write** from org in v1 are exactly:
+`MW_ENERGY`, `MW_TIME_ESTIMATE`, `MW_ASSIGNED_TO`, `MW_LOCATION`, and
+`MW_TASK_MODE` — edits to these in org are parsed back and pushed to the server.
+
+`MW_RECURRENCE`, `MW_FOCUS_TODAY`, `MW_REVIEW_AT`, `MW_SEQUENTIAL`,
+`MW_FOCUSED`, and `MW_ATTACH` (link attachments) are **displayed from server
+data but are effectively read-only in v1** — they are rendered into the drawer
+for your reference, but editing them in org does **not** push back to the
+server. Full read-write for these (along with recurrence-object fidelity and
+file-byte attachment transfer) is deferred to Phase 2.
 
 `MW_CREATED` and `MW_UPDATED` are **read-only display mirrors** — they are
 written into the drawer for your reference but are authoritative in the shadow
@@ -167,12 +175,20 @@ discarded.
 
 ## Status and scope
 
-**v1** syncs tasks, projects, sections, and areas full read-write, including
-`link` attachments via `MW_ATTACH`. Server `settings` are carried through
-verbatim (opaque pass-through; never edited).
+**v1** syncs tasks, projects, sections, and areas read-write for their core
+org-native fields plus the drawer fields `MW_ENERGY`, `MW_TIME_ESTIMATE`,
+`MW_ASSIGNED_TO`, `MW_LOCATION`, and `MW_TASK_MODE`. The reserved drawer keys
+`MW_RECURRENCE`, `MW_FOCUS_TODAY`, `MW_REVIEW_AT`, `MW_SEQUENTIAL`,
+`MW_FOCUSED`, and `MW_ATTACH` (link attachments) are rendered from server data
+but are **read-only in v1** — editing them in org does not push to the server.
+Server `settings` are carried through verbatim (opaque pass-through; never
+edited).
 
 **Deferred to Phase 2:**
 
+- Full read-write for `MW_RECURRENCE`, `MW_FOCUS_TODAY`, `MW_REVIEW_AT`,
+  `MW_SEQUENTIAL`, `MW_FOCUSED`, and `MW_ATTACH` (parsing org edits back to the
+  server).
 - File-byte attachment transfer (upload/download of attachment contents).
 - A one-time importer from an existing `org-gtd` file into the schema.
 - Recurrence-object fidelity beyond serialized round-trip.
