@@ -79,3 +79,61 @@ Some notes.
       (should (string= (plist-get (plist-get e :mw-extra-props)
                                   "CUSTOM_KEY" #'equal)
                        "keepme")))))
+
+(ert-deftest mindwtr-parse-buffer-containment ()
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work
+:PROPERTIES:
+:MW_TYPE: area
+:MW_ID: a1
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** Planning
+:PROPERTIES:
+:MW_TYPE: section
+:MW_ID: s1
+:END:
+**** NEXT Do thing :@x:
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+")
+      (org-mode)
+      (let* ((ad (mindwtr-parse-buffer))
+             (task (car (plist-get ad :tasks)))
+             (proj (car (plist-get ad :projects)))
+             (sec  (car (plist-get ad :sections))))
+        (should (= (length (plist-get ad :areas)) 1))
+        (should (string= (plist-get proj :areaId) "a1"))
+        (should (string= (plist-get sec :projectId) "p1"))
+        (should (string= (plist-get task :projectId) "p1"))
+        (should (string= (plist-get task :sectionId) "s1"))
+        (should (string= (plist-get task :areaId) "a1"))
+        ;; mw internal keys stripped from output entities:
+        (should (null (plist-member task :mw-kind)))))))
+
+(ert-deftest mindwtr-parse-buffer-skips-inbox-container ()
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox
+:PROPERTIES:
+:MW_TYPE: container
+:END:
+** INBOX capture this
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+")
+      (org-mode)
+      (let* ((ad (mindwtr-parse-buffer))
+             (task (car (plist-get ad :tasks))))
+        (should (= (length (plist-get ad :tasks)) 1))
+        (should (null (plist-get task :projectId)))
+        (should (null (plist-get task :areaId)))))))

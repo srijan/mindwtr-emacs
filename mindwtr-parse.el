@@ -152,5 +152,57 @@ Description is the prose body minus planning, drawers, and checklist items."
             (when v (setq e (plist-put e (cdr p) v)))))))
     e))
 
+(defconst mindwtr-parse--internal-keys '(:mw-kind :mw-extra-props :mw-ancestors)
+  "Keys used during parsing that must be stripped from output entities.")
+
+(defun mindwtr-parse--strip-internal (e)
+  "Return E without internal :mw-* keys (but keep :mw-extra-props in metadata)."
+  (let (out (i 0))
+    (while (< i (length e))
+      (unless (memq (nth i e) '(:mw-kind :mw-ancestors))
+        (setq out (plist-put out (nth i e) (nth (1+ i) e))))
+      (setq i (+ i 2)))
+    out))
+
+(defun mindwtr-parse--ancestor-id (kind)
+  "Return MW_ID of the nearest ancestor heading whose MW_TYPE is KIND, or nil."
+  (save-excursion
+    (let (found)
+      (while (and (not found) (org-up-heading-safe))
+        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") (symbol-name kind))
+          (setq found (mindwtr-parse--prop "MW_ID"))))
+      found)))
+
+(defun mindwtr-parse-buffer ()
+  "Parse the current org buffer into a content appdata plist."
+  (mindwtr-parse-ensure-keywords)
+  (let (tasks projects sections areas)
+    (org-map-entries
+     (lambda ()
+       (let ((kind (mindwtr-parse--prop "MW_TYPE")))
+         (when (and kind (not (string= kind "container")))
+           (let ((e (mindwtr-parse-heading)))
+             (pcase (intern kind)
+               ('area (push (mindwtr-parse--strip-internal e) areas))
+               ('project
+                (let ((aid (mindwtr-parse--ancestor-id 'area)))
+                  (when aid (setq e (plist-put e :areaId aid))))
+                (push (mindwtr-parse--strip-internal e) projects))
+               ('section
+                (let ((pid (mindwtr-parse--ancestor-id 'project)))
+                  (when pid (setq e (plist-put e :projectId pid))))
+                (push (mindwtr-parse--strip-internal e) sections))
+               ('task
+                (let ((pid (mindwtr-parse--ancestor-id 'project))
+                      (sid (mindwtr-parse--ancestor-id 'section))
+                      (aid (or (mindwtr-parse--prop "MW_AREA_ID")
+                               (mindwtr-parse--ancestor-id 'area))))
+                  (when pid (setq e (plist-put e :projectId pid)))
+                  (when sid (setq e (plist-put e :sectionId sid)))
+                  (when aid (setq e (plist-put e :areaId aid))))
+                (push (mindwtr-parse--strip-internal e) tasks))))))))
+    (list :tasks (nreverse tasks) :projects (nreverse projects)
+          :sections (nreverse sections) :areas (nreverse areas))))
+
 (provide 'mindwtr-parse)
 ;;; mindwtr-parse.el ends here
