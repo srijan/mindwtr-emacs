@@ -6,15 +6,14 @@
 (require 'mindwtr-model)
 (require 'mindwtr-util)
 
+(defvar mindwtr-render-area-names nil
+  "Hash table id->name for resolving `:MW_AREA:' during rendering.
+Dynamically bound by `mindwtr-render-appdata' / reconcile.")
+
 (defconst mindwtr-render--drawer-order
   '(:energyLevel :timeEstimate :recurrence :assignedTo :focusToday
-    :reviewAt :location :taskMode :sequential :focused :mw-area-override :attach)
-  "Canonical order of content properties in the drawer.
-Note `:mw-area-override' (not `:areaId'): `areaId' is derived from the
-ancestor Area heading and rendering it back as `MW_AREA_ID' would turn a
-derived containment into a spurious override on every reconcile.  Only an
-explicit override (parse sets `:mw-area-override' when `MW_AREA_ID' was
-written in the drawer) is emitted.")
+    :reviewAt :location :taskMode :sequential :focused :attach)
+  "Canonical order of content properties in the drawer.")
 
 (defconst mindwtr-render--prop-names
   '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
@@ -22,7 +21,7 @@ written in the drawer) is emitted.")
     (:focusToday . "MW_FOCUS_TODAY") (:reviewAt . "MW_REVIEW_AT")
     (:location . "MW_LOCATION") (:taskMode . "MW_TASK_MODE")
     (:sequential . "MW_SEQUENTIAL") (:focused . "MW_FOCUSED")
-    (:mw-area-override . "MW_AREA_ID") (:attach . "MW_ATTACH")))
+    (:attach . "MW_ATTACH")))
 
 (defconst mindwtr-render--org-tag-re "\\`[[:alnum:]_@#%]+\\'"
   "A context/tag matching this can be a native org tag.
@@ -116,6 +115,10 @@ Returns a string ending with a newline."
     (push ":PROPERTIES:" lines)
     (push (format ":MW_TYPE: %s" kind) lines)
     (push (format ":MW_ID: %s" (plist-get entity :id)) lines)
+    (let ((aid (plist-get entity :areaId)))
+      (when (and aid mindwtr-render-area-names)
+        (let ((name (gethash aid mindwtr-render-area-names)))
+          (when name (push (format ":MW_AREA: %s" name) lines)))))
     (dolist (k mindwtr-render--drawer-order)
       (let ((v (plist-get entity k)))
         (when v

@@ -55,3 +55,18 @@
                  :recurrence (:rule "weekly"))
                1 nil)))
     (should (string-match-p ":MW_RECURRENCE: weekly" text))))
+
+(ert-deftest mindwtr-render-emits-area-name-from-map ()
+  (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
+    (puthash "a1" "Personal" mindwtr-render-area-names)
+    (let ((text (mindwtr-render-heading
+                 '(:id "p1" :mw-kind project :title "Proj" :status "active" :areaId "a1")
+                 2 nil)))
+      (should (string-match-p ":MW_AREA: Personal" text))
+      (should-not (string-match-p ":MW_AREA_ID:" text)))))
+
+(ert-deftest mindwtr-render-no-area-when-absent ()
+  (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
+    (let ((text (mindwtr-render-heading
+                 '(:id "t1" :mw-kind task :title "x" :status "next") 2 nil)))
+      (should-not (string-match-p ":MW_AREA:" text)))))
