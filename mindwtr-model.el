@@ -20,6 +20,31 @@
   '(("active" . "ACTIVE") ("someday" . "SOMEDAY")
     ("waiting" . "WAIT") ("archived" . "ARCH")))
 
+(defconst mindwtr-model-list-roles
+  '("inbox" "next-actions" "waiting" "someday" "reference" "projects" "areas")
+  "Ordered top-level container roles, used as `:MW_LIST:' discriminators.")
+
+(defconst mindwtr-model--list-titles
+  '(("inbox" . "Inbox") ("next-actions" . "Next Actions") ("waiting" . "Waiting")
+    ("someday" . "Someday") ("reference" . "Reference") ("projects" . "Projects")
+    ("areas" . "Areas of Focus")))
+
+(defun mindwtr-model-list-title (role)
+  "Default heading text for a container ROLE."
+  (or (cdr (assoc role mindwtr-model--list-titles))
+      (error "Unknown list role: %s" role)))
+
+(defconst mindwtr-model--status->list
+  '(("inbox" . "inbox") ("next" . "next-actions") ("done" . "next-actions")
+    ("waiting" . "waiting") ("someday" . "someday") ("reference" . "reference"))
+  "Status -> list role for a STANDALONE task.  `archived' is absent on
+purpose: archived tasks are not rendered.")
+
+(defun mindwtr-model-status->list (status)
+  "Return the list role a standalone task with STATUS renders under, or nil
+when it must not be rendered (e.g. `archived')."
+  (cdr (assoc status mindwtr-model--status->list)))
+
 (defconst mindwtr-model-done-keywords '("DONE" "ARCH")
   "TODO keywords that count as org `done' states.")
 

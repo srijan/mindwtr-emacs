@@ -88,3 +88,19 @@
   (dolist (k mindwtr-model-content-fields)
     (unless (eq k :name)                ; :name is an area field, not a task field
       (should (memq k (cdr (assq 'task mindwtr-model-known-fields)))))))
+
+(ert-deftest mindwtr-model-list-roles-and-titles ()
+  (should (equal mindwtr-model-list-roles
+                 '("inbox" "next-actions" "waiting" "someday" "reference" "projects" "areas")))
+  (should (string= (mindwtr-model-list-title "next-actions") "Next Actions"))
+  (should (string= (mindwtr-model-list-title "areas") "Areas of Focus")))
+
+(ert-deftest mindwtr-model-status->list-maps-standalone-statuses ()
+  (should (string= (mindwtr-model-status->list "inbox") "inbox"))
+  (should (string= (mindwtr-model-status->list "next") "next-actions"))
+  (should (string= (mindwtr-model-status->list "done") "next-actions"))
+  (should (string= (mindwtr-model-status->list "waiting") "waiting"))
+  (should (string= (mindwtr-model-status->list "someday") "someday"))
+  (should (string= (mindwtr-model-status->list "reference") "reference"))
+  ;; archived has no list -> not rendered
+  (should (null (mindwtr-model-status->list "archived"))))
