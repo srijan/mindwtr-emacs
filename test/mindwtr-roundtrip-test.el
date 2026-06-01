@@ -6,6 +6,7 @@
 
 (defconst mindwtr-roundtrip--task
   '(:id "t1" :mw-kind task :title "Buy milk" :status "next" :priority "high"
+    :areaId "a1"
     :contexts ("@errands") :tags ("#focused") :energyLevel "medium"
     :timeEstimate "1hr" :description "Line one.\nLine two."
     :checklist ((:title "a" :done :false) (:title "b" :done t))
@@ -38,6 +39,12 @@
              (t2 (mindwtr-render-heading
                   (plist-put (copy-sequence task) :mw-kind 'task) 2 shadow)))
         (should (string= t1 t2))))))
+
+(ert-deftest mindwtr-roundtrip-containment-affects-signature ()
+  "Re-parenting (changed containment) must change the signature."
+  (let ((a '(:id "t1" :title "x" :status "next" :projectId "p1"))
+        (b '(:id "t1" :title "x" :status "next" :projectId "p2")))
+    (should-not (string= (mindwtr-signature a) (mindwtr-signature b)))))
 
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here

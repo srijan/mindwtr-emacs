@@ -10,14 +10,6 @@
 (defconst mindwtr-signature--set-fields '(:tags :contexts)
   "Fields whose list value is a set (order-insensitive).")
 
-(defconst mindwtr-signature--containment-fields '(:areaId :projectId :sectionId)
-  "Containment IDs derived from ancestor headings, not editable content.
-Per the design, these are reconstructed from tree position (refiling a
-heading = re-parenting), so they have no stable native representation on
-a leaf entity and must not enter the content signature.  Excluding them
-keeps `render -> parse' signature-stable when a standalone entity is
-rendered inside its parent and re-parsed with the containment derived.")
-
 (defun mindwtr-signature--canonical-plist (entity)
   "Return a canonical flat plist of ENTITY's editable fields, sorted by key.
 Excludes shadow-only and display-mirror fields; sorts set-valued fields.
@@ -32,9 +24,13 @@ render/parse cycle and trigger a phantom `rev' bump."
       (let ((k (nth i entity)) (v (nth (1+ i) entity)))
         (unless (or (mindwtr-model-shadow-only-field-p k)
                     (memq k mindwtr-model-display-mirror-fields)
-                    ;; containment IDs are derived from tree position, not content
-                    (memq k mindwtr-signature--containment-fields)
-                    ;; internal parse-only keys must never affect the signature
+                    ;; internal parse-only keys must never affect the signature.
+                    ;; `:mw-area-override' is an internal mirror of an explicit
+                    ;; MW_AREA_ID; the semantic it carries is already captured by
+                    ;; the signed `:areaId', so it stays excluded.  Containment
+                    ;; IDs (:areaId :projectId :sectionId) ARE editable, mapped
+                    ;; fields and MUST be signed: refiling a heading = re-parenting
+                    ;; in Mindwtr, so a changed parent must change the signature.
                     (memq k '(:mw-kind :mw-extra-props :mw-ancestors
                               :mw-area-override))
                     ;; empty == absent: nil, empty list, or empty string
