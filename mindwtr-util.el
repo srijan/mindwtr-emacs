@@ -65,15 +65,21 @@ cycle; coarsening here keeps content signatures stable across the trip."
 
 (defconst mindwtr-util-json-array-fields
   '(:tasks :projects :sections :areas      ; appdata top-level
-    :tags :contexts :checklist :attachments ; task
+    :tags :contexts :checklist :attachments ; task (attachments also project)
     :tagIds                                  ; project
-    :savedFilters)                           ; settings
+    :byDay :byMonthDay                       ; recurrence
+    :savedFilters :savedSearches             ; settings
+    :externalCalendars :lastSyncHistory)     ; settings
   "Plist keys whose value is a JSON array.
 Emacs cannot tell an empty list from JSON null: both read back as nil.
 A nil value for one of these keys must serialize as `[]'; a nil value
 for any OTHER key is dropped, because nil means \"absent\" everywhere in
 this model and the server rejects `[]' where it expects a scalar (e.g.
-a task's deletedAt must be an ISO timestamp when present).")
+a task's deletedAt must be an ISO timestamp when present).  The set is
+the union of array-valued field names across the Mindwtr core types
+\(Task, Project, Recurrence, Settings); `:order' is deliberately absent
+\(a number on entities, an array only inside settings.taskEditor, which
+is echoed verbatim and never emitted nil by us).")
 
 (defun mindwtr-util--json-prep (obj)
   "Recursively convert OBJ so json-serialize can handle it.

@@ -91,3 +91,19 @@ scalar timestamp, so nil scalars must be absent, not empty arrays."
           (mindwtr-util-atomic-write f "hello")
           (should (string= (mindwtr-util-read-file f) "hello")))
       (delete-file f))))
+
+(ert-deftest mindwtr-util-json-array-fields-covers-source-arrays ()
+  "Nested array-valued keys from the source serialize as [] when nil,
+while scalar nils are still omitted."
+  ;; recurrence.byDay is an array; nil -> [] (not omitted, not null)
+  (let ((s (mindwtr-util-json-encode '(:recurrence (:rule "weekly" :byDay nil)))))
+    (should (string-match-p "\"byDay\":\\[\\]" s)))
+  ;; settings array fields -> []
+  (let ((s (mindwtr-util-json-encode '(:externalCalendars nil :savedSearches nil
+                                       :lastSyncHistory nil))))
+    (should (string-match-p "\"externalCalendars\":\\[\\]" s))
+    (should (string-match-p "\"savedSearches\":\\[\\]" s))
+    (should (string-match-p "\"lastSyncHistory\":\\[\\]" s)))
+  ;; a scalar nil is still omitted
+  (should-not (string-match-p "reviewAt"
+                              (mindwtr-util-json-encode '(:reviewAt nil :id "x")))))
