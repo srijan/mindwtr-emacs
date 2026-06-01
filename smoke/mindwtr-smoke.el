@@ -163,5 +163,53 @@ fields that move the content signature."
         (push (format "%s: a=%S  b=%S" k (plist-get a k) (plist-get b k)) lines)))
     (nreverse lines)))
 
+;;;; Schema coverage
+
+(defconst mindwtr-smoke--type->key
+  '((task . :tasks) (project . :projects) (section . :sections) (area . :areas))
+  "Map a known-fields entity type to its appdata list key.")
+
+(defun mindwtr-smoke--union-keys (entities)
+  "Return the set (deduped list) of keys appearing on any entity in ENTITIES."
+  (let (acc)
+    (dolist (e entities) (setq acc (append (mindwtr-smoke-plist-keys e) acc)))
+    (delete-dups acc)))
+
+(defun mindwtr-smoke-schema-coverage (appdata)
+  "Compute per-type schema coverage for APPDATA against the known-fields registry.
+Return an alist (TYPE . (:unknown KEYS :unexercised KEYS)): :unknown are
+wire keys we do not model (server drift); :unexercised are known fields no
+entity of that type uses on this instance."
+  (mapcar
+   (lambda (type)
+     (let* ((known (cdr (assq type mindwtr-model-known-fields)))
+            (live (mindwtr-smoke--union-keys
+                   (plist-get appdata (cdr (assq type mindwtr-smoke--type->key)))))
+            (unknown (seq-remove (lambda (k) (memq k known)) live))
+            (unexercised (seq-remove (lambda (k) (memq k live)) known)))
+       (cons type (list :unknown unknown :unexercised unexercised))))
+   '(task project section area)))
+
+(defun mindwtr-smoke-phase-schema-coverage (appdata)
+  "Report schema coverage: UNKNOWN keys WARN; unexercised keys as one info line."
+  (let ((cov (mindwtr-smoke-schema-coverage appdata)) (any-unknown nil))
+    (dolist (entry cov)
+      (let ((unknown (plist-get (cdr entry) :unknown)))
+        (when unknown
+          (setq any-unknown t)
+          (mindwtr-smoke-warn
+           (format "schema: %s has unknown keys" (car entry))
+           (format "%S -- model may need updating for this server version"
+                   unknown)))))
+    (unless any-unknown
+      (mindwtr-smoke-pass "schema coverage (no unknown keys)"))
+    ;; one non-fatal info line listing model fields not seen on this instance
+    (dolist (entry cov)
+      (let ((unex (plist-get (cdr entry) :unexercised)))
+        (when unex
+          (mindwtr-smoke-info
+           (format "%s fields not exercised on this instance: %S"
+                   (car entry) unex)))))))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here

@@ -77,3 +77,25 @@
     (should (seq-some (lambda (s) (string-match-p ":b" s)) lines))
     (should (seq-some (lambda (s) (string-match-p ":c" s)) lines))
     (should-not (seq-some (lambda (s) (string-match-p ":a" s)) lines))))
+
+(ert-deftest mindwtr-smoke-schema-coverage-flags-unknown-and-unexercised ()
+  "Unknown wire keys land in :unknown; known-but-absent keys in :unexercised."
+  (let* ((ad '(:tasks ((:id "t1" :title "x" :status "next" :aiSummary "hi"))
+               :projects nil :sections nil :areas nil))
+         (cov (mindwtr-smoke-schema-coverage ad))
+         (task (cdr (assq 'task cov))))
+    (should (memq :aiSummary (plist-get task :unknown)))
+    ;; a known task field not present on any task is unexercised, not unknown
+    (should (memq :location (plist-get task :unexercised)))
+    (should-not (memq :location (plist-get task :unknown)))
+    ;; types with no entities report empty unknown
+    (should (null (plist-get (cdr (assq 'area cov)) :unknown)))))
+
+(ert-deftest mindwtr-smoke-phase-schema-coverage-warns-not-fails ()
+  "An unknown key produces a WARN, never a FAIL."
+  (mindwtr-smoke-reset)
+  (mindwtr-smoke-phase-schema-coverage
+   '(:tasks ((:id "t1" :title "x" :status "next" :aiSummary "hi"))
+     :projects nil :sections nil :areas nil))
+  (should (> (plist-get mindwtr-smoke--counts :warn) 0))
+  (should (= 0 (plist-get mindwtr-smoke--counts :fail))))
