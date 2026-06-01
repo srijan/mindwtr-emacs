@@ -10,7 +10,10 @@
          (shadow '(:createdAt "2026-01-01T10:00:00Z"
                    :updatedAt "2026-05-30T15:30:00Z"))
          (text (mindwtr-render-heading task 4 shadow)))
-    (should (string-match-p "^\\*\\*\\*\\* \\[#B\\] NEXT Buy milk" text))
+    ;; Org syntax requires the TODO keyword before the priority cookie:
+    ;; `STARS KEYWORD [#PRIORITY] TITLE'.  This is the only order org can
+    ;; parse back, so render must emit it this way.
+    (should (string-match-p "^\\*\\*\\*\\* NEXT \\[#B\\] Buy milk" text))
     (should (string-match-p ":@errands:focused:" text))
     (should (string-match-p ":MW_TYPE: task" text))
     (should (string-match-p ":MW_ID: t1" text))

@@ -8,8 +8,13 @@
 
 (defconst mindwtr-render--drawer-order
   '(:energyLevel :timeEstimate :recurrence :assignedTo :focusToday
-    :reviewAt :location :taskMode :sequential :focused :areaId :attach)
-  "Canonical order of content properties in the drawer.")
+    :reviewAt :location :taskMode :sequential :focused :mw-area-override :attach)
+  "Canonical order of content properties in the drawer.
+Note `:mw-area-override' (not `:areaId'): `areaId' is derived from the
+ancestor Area heading and rendering it back as `MW_AREA_ID' would turn a
+derived containment into a spurious override on every reconcile.  Only an
+explicit override (parse sets `:mw-area-override' when `MW_AREA_ID' was
+written in the drawer) is emitted.")
 
 (defconst mindwtr-render--prop-names
   '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
@@ -17,7 +22,7 @@
     (:focusToday . "MW_FOCUS_TODAY") (:reviewAt . "MW_REVIEW_AT")
     (:location . "MW_LOCATION") (:taskMode . "MW_TASK_MODE")
     (:sequential . "MW_SEQUENTIAL") (:focused . "MW_FOCUSED")
-    (:areaId . "MW_AREA_ID") (:attach . "MW_ATTACH")))
+    (:mw-area-override . "MW_AREA_ID") (:attach . "MW_ATTACH")))
 
 (defun mindwtr-render--tags (task)
   "Render org tag string `:a:b:' for TASK contexts+tags, or empty."
@@ -54,7 +59,11 @@ Returns a string ending with a newline."
                      (when c (format "[#%c] " c)))))
          (title (or (plist-get entity :title) (plist-get entity :name)))
          (tags (if (eq kind 'task) (mindwtr-render--tags entity) ""))
-         (lines (list (concat stars " " (or cookie "") (or todo "") title tags))))
+         ;; Org heading syntax is `STARS KEYWORD [#PRIORITY] TITLE TAGS'.
+         ;; The TODO keyword MUST precede the priority cookie or org will
+         ;; not recognize it on re-parse (it would absorb the keyword into
+         ;; the title).  Emit todo before cookie so render is parse-inverse.
+         (lines (list (concat stars " " (or todo "") (or cookie "") title tags))))
     ;; planning line (tasks)
     (when (eq kind 'task)
       (let (parts)

@@ -193,13 +193,19 @@ Description is the prose body minus planning, drawers, and checklist items."
                   (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) sections))
                ('task
-                (let ((pid (mindwtr-parse--ancestor-id 'project))
-                      (sid (mindwtr-parse--ancestor-id 'section))
-                      (aid (or (mindwtr-parse--prop "MW_AREA_ID")
-                               (mindwtr-parse--ancestor-id 'area))))
+                (let* ((pid (mindwtr-parse--ancestor-id 'project))
+                       (sid (mindwtr-parse--ancestor-id 'section))
+                       ;; explicit MW_AREA_ID is an override (rare path);
+                       ;; otherwise areaId is derived from the ancestor Area.
+                       (explicit-area (mindwtr-parse--prop "MW_AREA_ID"))
+                       (aid (or explicit-area (mindwtr-parse--ancestor-id 'area))))
                   (when pid (setq e (plist-put e :projectId pid)))
                   (when sid (setq e (plist-put e :sectionId sid)))
-                  (when aid (setq e (plist-put e :areaId aid))))
+                  (when aid (setq e (plist-put e :areaId aid)))
+                  ;; Only round-trip MW_AREA_ID when it was an explicit
+                  ;; override; a derived areaId must not be re-emitted.
+                  (when explicit-area
+                    (setq e (plist-put e :mw-area-override explicit-area))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)
           :sections (nreverse sections) :areas (nreverse areas))))
