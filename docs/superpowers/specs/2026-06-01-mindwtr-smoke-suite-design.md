@@ -104,37 +104,52 @@ The token stays in the user's shell and is never echoed by the suite.
 
 ### Model addition: `mindwtr-model-known-fields`
 
+Transcribed verbatim from the authoritative Mindwtr source — the `Task`,
+`Project`, `Section`, and `Area` interfaces in
+`the Mindwtr server source (packages/core/src/types.ts)` — not from observed
+payloads. Settings is intentionally excluded (see Schema coverage phase below).
+
 ```elisp
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate
-                :assignedTo :location :taskMode :contexts :tags :description
-                :checklist :attachments :recurrence :startTime :dueDate
-                :completedAt :reviewAt :areaId :projectId :sectionId
-                :order :orderNum :pushCount :showFutureRecurrence
-                :isFocusedToday :textDirection
-                :statusBeforeProjectArchive :completedAtBeforeProjectArchive
+                :assignedTo :taskMode :startTime :dueDate :recurrence
+                :showFutureRecurrence :pushCount :tags :contexts :checklist
+                :description :textDirection :attachments :location
+                :projectId :sectionId :areaId :isFocusedToday :reviewAt
+                :completedAt :statusBeforeProjectArchive
+                :completedAtBeforeProjectArchive
                 :isFocusedTodayBeforeProjectArchive :projectArchivedAt
-                :createdAt :updatedAt :deletedAt :purgedAt :rev :revBy))
-    (project . (:id :title :color :order :status :areaId :areaTitle :tagIds
-                :isSequential :isFocused
-                :createdAt :updatedAt :deletedAt :rev :revBy))
-    (section . (:id :title :projectId :order
-                :createdAt :updatedAt :deletedAt :rev :revBy))
-    (area    . (:id :name :color :order
-                :createdAt :updatedAt :deletedAt :rev :revBy))
-    (settings . (:theme :weekStart :keybindingStyle :appearance :gtd :ai
-                 :syncPreferences :syncPreferencesUpdatedAt :savedFilters)))
-  "Every server key we recognize, per entity type.
-The smoke suite flags wire keys absent here as UNKNOWN (server drift) and
-listed keys absent from the wire as MISSING. Doubles as living documentation
-of the full known schema. Built from observed real payloads; extend it
-deliberately when a new server field is intentionally adopted.")
+                :order :orderNum :rev :revBy :createdAt :updatedAt
+                :deletedAt :purgedAt))
+    (project . (:id :title :status :color :order :tagIds :isSequential
+                :sequentialScope :isFocused :supportNotes :attachments
+                :dueDate :reviewAt :areaId :areaTitle :rev :revBy
+                :createdAt :updatedAt :deletedAt))
+    (section . (:id :projectId :title :description :order :isCollapsed
+                :rev :revBy :createdAt :updatedAt :deletedAt
+                :deletedAtBeforeProjectArchive :projectArchivedAt))
+    (area    . (:id :name :color :icon :order :rev :revBy
+                :createdAt :updatedAt :deletedAt)))
+  "Every server key we recognize, per synced entity type.
+Transcribed from the Mindwtr core `types.ts' interfaces. The schema-coverage
+phase flags wire keys absent here as UNKNOWN (server drift). Doubles as living
+documentation of the synced schema; extend it deliberately when a new server
+field is intentionally adopted. Settings is excluded on purpose — it is a
+large, deeply-nested blob passed through verbatim, never rendered to org.")
 ```
 
-The exact field lists are seeded from the real payloads already observed in
-live runs (e.g. the lifecycle dump showing `recurrence`, `attachments`,
-`*BeforeProjectArchive`, `purgedAt`, etc.) and refined during implementation by
-running the coverage phase against the real server and reconciling.
+### Model adjustment: `mindwtr-util-json-array-fields`
+
+The nil→`[]` fix is keyed by field NAME, so the array-fields list must cover
+every array-valued key the source declares, not just the ones seen so far.
+From `types.ts`, add the currently-missing array keys: `:byDay` `:byMonthDay`
+(Recurrence), `:externalCalendars` `:savedSearches` `:lastSyncHistory`
+(Settings). Existing entries (`:tasks :projects :sections :areas :tags
+:contexts :checklist :attachments :tagIds :savedFilters`) already cover
+task/project arrays — note `:attachments` is shared by Task and Project, so the
+key-name match covers both. `:order` is deliberately NOT added: it is a number
+on entities but an array only inside `taskEditor` (settings, echoed verbatim,
+never emitted nil by us).
 
 ### Entrypoint: `smoke/run.el`
 
@@ -154,10 +169,24 @@ running the coverage phase against the real server and reconciling.
 2. **snapshot + validate** — `GET /v1/data`, print counts
    (tasks/projects/sections/areas, settings present?), run
    `mindwtr-model-validate-appdata`. FAIL on validation error.
-3. **schema coverage** — for each entity type, diff live keys (union across all
-   entities of that type) against `mindwtr-model-known-fields`. WARN (non-fatal,
-   exit 0) on UNKNOWN keys (new server field we don't model) and MISSING
-   expected keys.
+3. **schema coverage** — for each synced entity type (task/project/section/
+   area), take the union of keys across all entities of that type and diff
+   against `mindwtr-model-known-fields`.
+   - **UNKNOWN keys** (on the wire, not in our registry) → WARN. This is the
+     real "future server version" signal: the server started sending a field we
+     don't model. (It is not a data-loss warning — unknown fields survive
+     round-trips because the merge path starts from the verbatim shadow entity —
+     but it flags that a new field may be worth rendering.)
+   - **MISSING keys** are intentionally NOT warned per-field. Almost every
+     entity field is optional, so "no entity on this instance uses
+     `:assignedTo`/`:location`/`:purgedAt`" is the normal case, not drift —
+     per-field MISSING warnings would be pure noise. Required-field absence is
+     already caught by `validate-appdata`. Instead, the phase prints ONE
+     info line listing model fields not exercised on this instance (not a WARN,
+     not counted against exit code) — a coverage hint, not a problem.
+   - **Settings** is skipped entirely: it is passed through verbatim and never
+     rendered, so unknown settings keys are harmless, and its ~50 optional
+     fields would dominate the report with noise.
 4. **round-trip signature** — render the snapshot into an org buffer, parse it
    back, compare each entity's content signature to the original. On any drift,
    FAIL and automatically print the per-field canonical diff
@@ -212,7 +241,8 @@ exercised), and directly on the candidate where a state has no org affordance.
 - Round-trip drift → FAIL with automatic per-field diagnostics.
 - Write anomalies → FAIL with per-key wire-vs-server diagnostics; cleanup always
   runs via `unwind-protect`.
-- Non-fatal observations (unknown/missing schema keys) → WARN only.
+- Non-fatal observations (unknown schema keys) → WARN only; unexercised model
+  fields → info line only.
 
 ## Testing
 
@@ -221,7 +251,9 @@ exercised), and directly on the candidate where a state has no org affordance.
 - Pure helpers (`plist-keys`, `find-by-id`, `index-by-id`, `plist-same-p`,
   `canonical-field-diff`, `key-diff`) get direct unit tests.
 - Schema-coverage computation gets a test: a fabricated appdata with one
-  injected unknown key and one missing expected key asserts the WARN set.
+  injected unknown key asserts it appears in the UNKNOWN (WARN) set, and a
+  known-but-absent field appears in the info (unexercised) set, not the WARN
+  set.
 - The **full write lifecycle** runs against an in-memory mock server installed
   via `mindwtr-api-http-function` (the same injection point used in
   `mindwtr-sync-test`): the mock holds an appdata table and actually applies
@@ -251,6 +283,8 @@ the repo root; their behavior is subsumed:
 - Write strategy: self-cleaning lifecycle through the GTD state machine
   (inbox → next → done → delete), with field round-trip checks.
 - Packaging: committed `smoke/` dir with `make smoke` / `make smoke-write`.
-- Schema drift: in-model `known-fields` registry, coverage report as WARN.
+- Schema drift: in-model `known-fields` registry (transcribed from Mindwtr
+  `types.ts`), UNKNOWN keys → WARN. MISSING demoted to a single info line (most
+  fields are optional, so per-field MISSING is noise); settings excluded.
 - Output: human log + exit codes, with automatic diagnostics on any failure.
-- Out of scope: golden snapshot file, TAP/JSON output.
+- Out of scope: golden snapshot file, TAP/JSON output, settings schema coverage.
