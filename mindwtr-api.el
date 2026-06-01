@@ -115,7 +115,10 @@ REQ is (:method :url :headers :body).  Returns (:status :headers :body)."
                (funcall mindwtr-api-http-function
                         (list :method "PUT" :url (mindwtr-api--url "/v1/data")
                               :headers (mindwtr-api--headers t)
-                              :body (mindwtr-util-json-encode appdata))))))
+                              ;; ASCII-only body: keeps the request unibyte so
+                              ;; the url.el transport won't choke on non-ASCII
+                              ;; content (descriptions, unicode in titles).
+                              :body (mindwtr-util-json-ascii appdata))))))
     (mindwtr-util-json-decode (plist-get resp :body))))
 
 (provide 'mindwtr-api)

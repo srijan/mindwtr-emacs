@@ -36,6 +36,18 @@
     (should (eq (plist-get back :off) :false))
     (should (equal (plist-get back :tags) '("a" "b")))))
 
+(ert-deftest mindwtr-util-json-ascii-is-pure-ascii ()
+  "Non-ASCII content is escaped to \\uXXXX yet decodes back unchanged."
+  (let* ((obj '(:title "café • “quote”" :emoji "\U0001F600"))
+         (s (mindwtr-util-json-ascii obj)))
+    (should-not (string-match-p "[^[:ascii:]]" s))   ; pure ASCII on the wire
+    (should (string-match-p "\\\\u00e9" s))           ; é escaped
+    (should (string-match-p "\\\\u2022" s))           ; • escaped
+    (should (string-match-p "\\\\ud83d\\\\ude00" s))  ; emoji as surrogate pair
+    (let ((back (mindwtr-util-json-decode s)))
+      (should (string= (plist-get back :title) "café • “quote”"))
+      (should (string= (plist-get back :emoji) "\U0001F600")))))
+
 (ert-deftest mindwtr-util-date-only-iso->org->iso ()
   "A date-only value round-trips as date-only without a time or day shift."
   (let* ((org (mindwtr-util-iso->org "2026-06-20")))

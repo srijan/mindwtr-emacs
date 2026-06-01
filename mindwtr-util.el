@@ -84,6 +84,24 @@ converted to vectors; all other values are passed through."
 Plain lists nested inside the plist are treated as JSON arrays."
   (json-serialize (mindwtr-util--json-prep obj) :null-object nil :false-object :false))
 
+(defun mindwtr-util-json-ascii (obj)
+  "Encode OBJ to JSON with all non-ASCII escaped as \\uXXXX (pure ASCII).
+Valid JSON that decodes identically server-side, but keeps the HTTP
+request body unibyte: `url.el' concatenates the body with header strings
+and signals \"Multibyte text in HTTP request\" if the body carries raw
+UTF-8.  Astral characters are emitted as UTF-16 surrogate pairs."
+  (mapconcat
+   (lambda (ch)
+     (cond
+      ((< ch 128) (char-to-string ch))
+      ((<= ch #xFFFF) (format "\\u%04x" ch))
+      (t (let ((c (- ch #x10000)))
+           (format "\\u%04x\\u%04x"
+                   (+ #xD800 (ash c -10)) (+ #xDC00 (logand c #x3FF)))))))
+   ;; `json-serialize' returns a unibyte UTF-8 string; decode to code points
+   ;; first so we escape characters, not raw bytes.
+   (decode-coding-string (mindwtr-util-json-encode obj) 'utf-8) ""))
+
 (defun mindwtr-util-json-decode (s)
   "Decode JSON string S to a plist (arrays as lists)."
   (json-parse-string s :object-type 'plist :array-type 'list
