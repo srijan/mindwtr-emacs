@@ -36,6 +36,22 @@
     (should (eq (plist-get back :off) :false))
     (should (equal (plist-get back :tags) '("a" "b")))))
 
+(ert-deftest mindwtr-util-date-only-iso->org->iso ()
+  "A date-only value round-trips as date-only without a time or day shift."
+  (let* ((org (mindwtr-util-iso->org "2026-06-20")))
+    (should (string= org "[2026-06-20 Sat]"))
+    (should (string= (mindwtr-util-org->iso org) "2026-06-20"))))
+
+(ert-deftest mindwtr-util-date-only-predicate ()
+  (should (mindwtr-util-iso-date-only-p "2026-06-20"))
+  (should-not (mindwtr-util-iso-date-only-p "2026-06-20T00:00:00Z")))
+
+(ert-deftest mindwtr-util-datetime-still-roundtrips-to-the-minute ()
+  (let* ((iso "2026-05-31T17:39:53.268Z")
+         (back (mindwtr-util-org->iso (mindwtr-util-iso->org iso))))
+    ;; org keeps minute precision; compare to the minute-truncated UTC form
+    (should (string= back "2026-05-31T17:39:00Z"))))
+
 (ert-deftest mindwtr-util-atomic-write-and-read ()
   (let ((f (make-temp-file "mw-atomic")))
     (unwind-protect

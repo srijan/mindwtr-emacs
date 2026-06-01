@@ -75,6 +75,12 @@ Returns a string ending with a newline."
           (push (format "DEADLINE: %s"
                         (mindwtr-render--active-ts (plist-get entity :dueDate)))
                 parts))
+        ;; CLOSED uses an INACTIVE timestamp (org convention); render the
+        ;; completedAt directly without flipping to `<...>'.
+        (when (plist-get entity :completedAt)
+          (push (format "CLOSED: %s"
+                        (mindwtr-util-iso->org (plist-get entity :completedAt)))
+                parts))
         (when parts (push (mapconcat #'identity (nreverse parts) " ") lines))))
     ;; properties drawer
     (push ":PROPERTIES:" lines)

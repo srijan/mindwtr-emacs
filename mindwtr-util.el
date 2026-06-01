@@ -6,6 +6,7 @@
 ;;; Code:
 (require 'org)
 (require 'iso8601)
+(require 'time-date)
 
 (defun mindwtr-util-uuid ()
   "Return a random RFC-4122 v4 UUID string."
@@ -18,20 +19,37 @@
               (substring h 0 8) (substring h 8 12) (substring h 12 16)
               (substring h 16 20) (substring h 20 32)))))
 
+(defun mindwtr-util-iso-date-only-p (iso)
+  "Non-nil if ISO is a date-only string (no time component)."
+  (and (stringp iso) (not (string-search "T" iso))))
+
 (defun mindwtr-util-iso-normalize (iso)
-  "Normalize ISO-8601 string ISO to whole-second UTC `...Z' form."
-  (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                      (encode-time (iso8601-parse iso)) t))
+  "Normalize ISO to whole-second UTC `...Z', or keep a date-only value as-is."
+  (if (mindwtr-util-iso-date-only-p iso)
+      iso
+    (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                        (encode-time (decoded-time-set-defaults
+                                      (iso8601-parse iso)))
+                        t)))
 
 (defun mindwtr-util-iso->org (iso)
-  "Render ISO-8601 string ISO as an org inactive timestamp in local time."
-  (format-time-string "[%Y-%m-%d %a %H:%M]" (encode-time (iso8601-parse iso))))
+  "Render ISO as an org inactive timestamp in local time.
+Date-only values render without a time-of-day and never shift days."
+  (let ((decoded (decoded-time-set-defaults (iso8601-parse iso))))
+    (if (mindwtr-util-iso-date-only-p iso)
+        (format-time-string "[%Y-%m-%d %a]" (encode-time decoded))
+      (format-time-string "[%Y-%m-%d %a %H:%M]" (encode-time decoded)))))
 
 (defun mindwtr-util-org->iso (org-ts)
-  "Parse org inactive/active timestamp ORG-TS to whole-second UTC ISO string."
+  "Parse org inactive/active timestamp ORG-TS to ISO.
+A timestamp with no time-of-day yields a date-only `YYYY-MM-DD' string;
+one with a time yields whole-second UTC `...Z'."
   (let* ((clean (string-trim org-ts "[\\[<]" "[]>]"))
-         (decoded (org-parse-time-string clean)))
-    (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t)))
+         (decoded (org-parse-time-string clean))
+         (has-time (string-match-p "[0-9][0-9]:[0-9][0-9]" clean)))
+    (if has-time
+        (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t)
+      (format-time-string "%Y-%m-%d" (encode-time decoded)))))
 
 (defun mindwtr-util--json-prep (obj)
   "Recursively convert OBJ so json-serialize can handle it.

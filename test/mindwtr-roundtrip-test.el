@@ -46,5 +46,17 @@
         (b '(:id "t1" :title "x" :status "next" :projectId "p2")))
     (should-not (string= (mindwtr-signature a) (mindwtr-signature b)))))
 
+(ert-deftest mindwtr-roundtrip-date-only-start-time ()
+  (let* ((task '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :areaId "a1" :startTime "2026-06-20" :mw-extra-props nil))
+         (text (concat "* Area\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                       (mindwtr-render-heading task 2 nil)))
+         (sig (mindwtr-signature task)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((re (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get re :startTime) "2026-06-20"))
+        (should (string= (mindwtr-signature re) sig))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here
