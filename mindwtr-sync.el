@@ -74,5 +74,25 @@
         (setq cand (plist-put cand key (nreverse out)))))
     cand))
 
+(defun mindwtr-sync--find (appdata id)
+  "Find entity with ID in APPDATA across all entity lists."
+  (catch 'hit
+    (dolist (key mindwtr-sync--entity-keys)
+      (dolist (e (plist-get appdata key))
+        (when (string= (plist-get e :id) id) (throw 'hit e))))
+    nil))
+
+(defun mindwtr-sync-detect-conflicts (candidate merged changed-ids)
+  "Return lost-edit conflicts for CHANGED-IDS comparing CANDIDATE vs MERGED."
+  (let (conflicts)
+    (dolist (id changed-ids)
+      (let ((mine (mindwtr-sync--find candidate id))
+            (theirs (mindwtr-sync--find merged id)))
+        (when (and mine theirs
+                   (not (string= (mindwtr-signature mine)
+                                 (mindwtr-signature theirs))))
+          (push (list :id id :mine mine :theirs theirs) conflicts))))
+    (nreverse conflicts)))
+
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here
