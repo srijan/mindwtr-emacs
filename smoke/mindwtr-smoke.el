@@ -268,6 +268,8 @@ On drift, FAIL and print the per-field canonical diff for each entity."
         (mindwtr-smoke--render-appdata appdata)
         (let* ((reparsed (mindwtr-parse-buffer))
                (orig-idx (mindwtr-smoke-index-by-id appdata))
+               (total (apply #'+ (mapcar (lambda (k) (length (plist-get appdata k)))
+                                         mindwtr-smoke--entity-keys)))
                (drift 0) (checked 0))
           (dolist (key mindwtr-smoke--entity-keys)
             (dolist (re (plist-get reparsed key))
@@ -284,7 +286,12 @@ On drift, FAIL and print the per-field canonical diff for each entity."
                     (mindwtr-smoke-info line))))))
           (when (= drift 0)
             (mindwtr-smoke-pass
-             (format "round-trip signature (%d entities clean)" checked)))))
+             (format "round-trip signature (%d of %d entities clean)" checked total)))
+          (when (< checked total)
+            (mindwtr-smoke-info
+             (format "%d entit%s not rendered to org (tombstones / non-rendered statuses); not signature-checked"
+                     (- total checked)
+                     (if (= (- total checked) 1) "y" "ies"))))))
     (error (mindwtr-smoke-fail "round-trip" (error-message-string err)))))
 
 ;;;; Write lifecycle (opt-in; self-cleaning)
@@ -307,7 +314,9 @@ ENTITY is a task content plist; it is rendered at level 1 (the lifecycle
 task has no container)."
   (let ((m (gethash id (mindwtr-reconcile--id-markers))))
     (unless m (error "smoke: heading %s not found in buffer" id))
-    (goto-char m) (org-back-to-heading t) (org-cut-subtree)
+    (goto-char m) (org-back-to-heading t)
+    ;; `org-cut-subtree' echoes "Cut: Subtree(s) with N characters"; quiet it.
+    (let ((inhibit-message t)) (org-cut-subtree))
     (insert (mindwtr-render-heading
              (plist-put (copy-sequence entity) :mw-kind 'task) 1 nil))))
 
@@ -380,7 +389,8 @@ to call: a no-op PASS if the task is already gone."
           (with-temp-buffer
             (mindwtr-smoke--render-appdata prior)
             (let ((m (gethash id (mindwtr-reconcile--id-markers))))
-              (when m (goto-char m) (org-back-to-heading t) (org-cut-subtree)))
+              (when m (goto-char m) (org-back-to-heading t)
+                    (let ((inhibit-message t)) (org-cut-subtree))))
             (let* ((local (mindwtr-parse-buffer))
                    (now (mindwtr-smoke--now))
                    (wire (mindwtr-smoke--build-wire local prior now))
