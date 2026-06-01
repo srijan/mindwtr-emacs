@@ -50,6 +50,74 @@
     (should (string= (plist-get task :deletedAt) "NOW"))
     (should (= (plist-get task :rev) 4))))
 
+(ert-deftest mindwtr-sync-unchanged-preserves-full-fidelity ()
+  "An unchanged entity echoes the shadow: checklist item ids and sub-minute
+timestamps survive, even though the lossy org parse dropped them."
+  (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 4
+                                       :createdAt "C" :updatedAt "U"
+                                       :startTime "2026-02-09T14:30:45.500Z"
+                                       :isFocusedToday :false
+                                       :checklist ((:id "c1" :title "a" :isCompleted t)
+                                                   (:id "c2" :title "b" :isCompleted :false))))
+                       :projects nil :sections nil :areas nil :settings nil))
+         ;; what parse would yield from the rendered org: no item ids, minute ts
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "x" :status "next"
+                                      :startTime "2026-02-09T14:30:00Z"
+                                      :checklist ((:title "a" :isCompleted t)
+                                                  (:title "b" :isCompleted :false))))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (task (car (plist-get cand :tasks))))
+    (should (= (plist-get task :rev) 4))                      ; not bumped
+    (should (string= (plist-get task :startTime) "2026-02-09T14:30:45.500Z"))
+    (should (string= (plist-get (nth 0 (plist-get task :checklist)) :id) "c1"))
+    (should (eq (plist-get task :isFocusedToday) :false))))   ; unmapped field kept
+
+(ert-deftest mindwtr-sync-update-preserves-untouched-fields ()
+  "Editing one field (title) must not strip checklist ids or coarsen the
+timestamp of fields the user did not change."
+  (let* ((shadow '(:tasks ((:id "t1" :title "old" :status "next" :rev 4
+                            :createdAt "C"
+                            :startTime "2026-02-09T14:30:45.500Z"
+                            :checklist ((:id "c1" :title "a" :isCompleted t)))
+                           )
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "new" :status "next"
+                                      :startTime "2026-02-09T14:30:00Z"
+                                      :checklist ((:title "a" :isCompleted t))))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (task (car (plist-get cand :tasks))))
+    (should (string= (plist-get task :title) "new"))          ; the real change
+    (should (= (plist-get task :rev) 5))                      ; bumped
+    (should (string= (plist-get task :startTime) "2026-02-09T14:30:45.500Z"))
+    (should (string= (plist-get (car (plist-get task :checklist)) :id) "c1"))))
+
+(ert-deftest mindwtr-sync-update-adopts-genuine-checklist-change ()
+  "When the checklist content actually changes, the new value is taken."
+  (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1
+                                       :checklist ((:id "c1" :title "a" :isCompleted :false))))
+                       :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "x" :status "next"
+                                      :checklist ((:title "a" :isCompleted t))))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (item (car (plist-get (car (plist-get cand :tasks)) :checklist))))
+    (should (eq (plist-get item :isCompleted) t))             ; flipped
+    (should (null (plist-get item :id)))))                    ; org can't carry it
+
+(ert-deftest mindwtr-sync-update-clears-emptied-field ()
+  "Clearing a field in org (e.g. deleting the description) clears it on write."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 1
+                            :description "had notes"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "x" :status "next"
+                                      :description ""))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (task (car (plist-get cand :tasks))))
+    (should (null (plist-member task :description)))))
+
 (ert-deftest mindwtr-sync-candidate-carries-settings-verbatim ()
   (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil
                    :settings (:theme "dark" :gtd (:x 1))))

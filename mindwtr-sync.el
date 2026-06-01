@@ -19,14 +19,47 @@
       (setq i (+ i 2)))
     out))
 
-(defun mindwtr-sync--merge-shadow-fields (local-entity shadow-entity)
-  "Overlay LOCAL-ENTITY (content) on SHADOW-ENTITY (full), local wins for content."
-  (let ((out (copy-sequence (or shadow-entity '()))) (i 0))
-    (while (< i (length local-entity))
-      (let ((k (nth i local-entity)))
-        (unless (eq k :mw-kind)
-          (setq out (plist-put out k (nth (1+ i) local-entity)))))
+(defun mindwtr-sync--empty-p (v)
+  "Non-nil if content value V counts as absent (nil, empty list/string)."
+  (or (null v) (and (stringp v) (string-empty-p v))))
+
+(defun mindwtr-sync--field-canonical (k v)
+  "Canonical comparison form of content field K's value V, or nil if empty.
+Uses the signature's own per-field normalization so the write-merge and
+change detection agree on what \"the same content\" means."
+  (if (mindwtr-sync--empty-p v) nil
+    (mindwtr-signature-canonical-value k v)))
+
+(defun mindwtr-sync--plist-remove (pl k)
+  "Return PL without key K."
+  (let (out (i 0))
+    (while (< i (length pl))
+      (unless (eq (nth i pl) k)
+        (setq out (plist-put out (nth i pl) (nth (1+ i) pl))))
       (setq i (+ i 2)))
+    out))
+
+(defun mindwtr-sync--merge-content (le se)
+  "Overlay LE's genuinely-changed content onto SE (the full shadow entity).
+LE is the lossy org projection (no checklist item ids, minute-precision
+timestamps); SE carries full fidelity plus server-managed and unmapped
+fields.  For each editable field, the shadow value is kept whenever LE's
+canonical projection matches SE's -- so fields the user did not change
+retain their item ids and sub-minute precision -- while a genuine change
+adopts LE's value (clearing the field when LE emptied it).  LE's identity
+and internal keys are carried through (internal keys are stripped before
+the wire)."
+  (let ((out (copy-sequence (or se '()))))
+    (dolist (k '(:id :mw-kind :mw-extra-props :mw-area-override))
+      (when (plist-member le k)
+        (setq out (plist-put out k (plist-get le k)))))
+    (dolist (k mindwtr-model-content-fields)
+      (let ((lv (plist-get le k)) (sv (plist-get se k)))
+        (unless (equal (mindwtr-sync--field-canonical k lv)
+                       (mindwtr-sync--field-canonical k sv))
+          (if (mindwtr-sync--empty-p lv)
+              (setq out (mindwtr-sync--plist-remove out k))
+            (setq out (plist-put out k lv))))))
     out))
 
 (defun mindwtr-sync--classify (local-entity shadow-entity)
@@ -49,19 +82,24 @@
                  (le (plist-put (copy-sequence le) :id id))
                  (se (gethash id shadow-idx))
                  (klass (mindwtr-sync--classify le se))
-                 (merged (mindwtr-sync--merge-shadow-fields le se)))
+                 (merged
+                  (pcase klass
+                    ;; Unchanged: echo the shadow verbatim.  Overlaying the
+                    ;; lossy parse here would silently strip checklist item
+                    ;; ids and truncate sub-minute timestamps on every sync.
+                    ('unchanged (copy-sequence se))
+                    ('create
+                     (let ((m (mindwtr-sync--merge-content le se)))
+                       (setq m (plist-put m :rev 1))
+                       (setq m (plist-put m :createdAt now))
+                       (setq m (plist-put m :updatedAt now))
+                       (plist-put m :revBy device-id)))
+                    ('update
+                     (let ((m (mindwtr-sync--merge-content le se)))
+                       (setq m (plist-put m :rev (1+ (or (plist-get se :rev) 0))))
+                       (setq m (plist-put m :updatedAt now))
+                       (plist-put m :revBy device-id))))))
             (puthash id t seen)
-            (pcase klass
-              ('create
-               (setq merged (plist-put merged :rev 1))
-               (setq merged (plist-put merged :createdAt now))
-               (setq merged (plist-put merged :updatedAt now))
-               (setq merged (plist-put merged :revBy device-id)))
-              ('update
-               (setq merged (plist-put merged :rev (1+ (or (plist-get se :rev) 0))))
-               (setq merged (plist-put merged :updatedAt now))
-               (setq merged (plist-put merged :revBy device-id)))
-              ('unchanged nil))
             (push (mindwtr-sync--strip-device-local merged) out)))
         (dolist (se (plist-get shadow key))
           (let ((id (plist-get se :id)))

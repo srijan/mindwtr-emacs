@@ -27,6 +27,22 @@ explicit false sign identically."
                   :isCompleted (if (eq (plist-get it :isCompleted) t) t :false)))
           items))
 
+(defun mindwtr-signature-canonical-value (k v)
+  "Return the canonical signing form of content field K's value V.
+Set-valued fields are sorted, datetimes coarsened to minute precision,
+and checklists normalized (item :id dropped); every other field is
+returned unchanged.  Callers treat empty values as absent separately.
+Shared with the sync engine so change detection and write-merge use one
+definition of \"the same content\"."
+  (cond
+   ((and (memq k mindwtr-signature--set-fields) (listp v))
+    (sort (copy-sequence v) #'string<))
+   ((memq k mindwtr-signature--datetime-fields)
+    (mindwtr-util-iso-coarsen-minute v))
+   ((eq k :checklist)
+    (mindwtr-signature--norm-checklist v))
+   (t v)))
+
 (defun mindwtr-signature--canonical-plist (entity)
   "Return a canonical flat plist of ENTITY's content fields, sorted by key.
 Signs only the editable fields named in `mindwtr-model-content-fields'
@@ -43,14 +59,7 @@ after a render/parse cycle and trigger a phantom `rev' bump."
     (dolist (k mindwtr-model-content-fields)
       (let ((v (plist-get entity k)))
         (unless (or (null v) (and (stringp v) (string-empty-p v)))
-          (cond
-           ((and (memq k mindwtr-signature--set-fields) (listp v))
-            (setq v (sort (copy-sequence v) #'string<)))
-           ((memq k mindwtr-signature--datetime-fields)
-            (setq v (mindwtr-util-iso-coarsen-minute v)))
-           ((eq k :checklist)
-            (setq v (mindwtr-signature--norm-checklist v))))
-          (push (cons k v) pairs))))
+          (push (cons k (mindwtr-signature-canonical-value k v)) pairs))))
     (setq pairs (sort pairs (lambda (a b)
                               (string< (symbol-name (car a))
                                        (symbol-name (car b))))))
