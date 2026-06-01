@@ -215,32 +215,46 @@ Return (:ok t :conflicts LIST) or signals on hard error."
            (tick (buffer-chars-modified-tick))
            (changed (mindwtr-sync--changed-ids local shadow))
            (stats (mindwtr-sync--stats local shadow))
-           (candidate (mindwtr-sync-build-candidate local shadow device now))
-           (wire (mindwtr-sync--strip-internal-keys candidate)))
-      (mindwtr-model-validate-appdata wire)
-      ;; The PUT response carries {ok, stats, clockSkewWarning}; surface the
-      ;; skew warning so a misconfigured device clock is visible, not silent.
-      (let* ((put-resp (mindwtr-api-put-data wire))
-             (skew (plist-get put-resp :clockSkewWarning))
-             (got (mindwtr-api-get-data))
-             (merged (plist-get got :appdata))
-             (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
-             (backup-file nil))
-        (unless (= tick (buffer-chars-modified-tick))
-          (error "mindwtr: buffer changed during sync; aborting"))
-        (when (buffer-file-name)
-          (let* ((bdir (expand-file-name "backups/" mindwtr-shadow-directory))
-                 (bf (expand-file-name
-                      (format "mindwtr-%s.org"
-                              (format-time-string "%Y%m%dT%H%M%S")) bdir)))
-            (make-directory bdir t)
-            (write-region (point-min) (point-max) bf)
-            (setq backup-file bf)))
-        (mindwtr-reconcile-buffer merged)
-        (mindwtr-shadow-save merged)
-        (mindwtr-shadow-set-etag (plist-get got :etag))
-        (mindwtr-report-show stats conflicts skew backup-file (current-buffer))
-        (list :ok t :conflicts conflicts :stats stats :skew skew)))))
+           (local-dirty (> (+ (plist-get stats :created)
+                              (plist-get stats :updated)
+                              (plist-get stats :deleted))
+                           0))
+           (shadow-etag (mindwtr-shadow-get-etag)))
+      ;; Step 1 of the cycle: with nothing local to push, HEAD the server; if
+      ;; its ETag still matches the shadow, neither side changed -- skip the
+      ;; PUT/GET round-trip.  (When local IS dirty we must PUT regardless, so a
+      ;; HEAD would not change the decision; we go straight to the full cycle,
+      ;; whose follow-up GET also pulls any concurrent remote changes.)
+      (if (and (not local-dirty)
+               shadow-etag (not (string-empty-p shadow-etag))
+               (equal (mindwtr-api-head-etag) shadow-etag))
+          (list :ok t :noop t :conflicts nil :stats stats :skew nil)
+        (let* ((candidate (mindwtr-sync-build-candidate local shadow device now))
+               (wire (mindwtr-sync--strip-internal-keys candidate)))
+          (mindwtr-model-validate-appdata wire)
+          ;; The PUT response carries {ok, stats, clockSkewWarning}; surface
+          ;; the skew warning so a misconfigured device clock is not silent.
+          (let* ((put-resp (mindwtr-api-put-data wire))
+                 (skew (plist-get put-resp :clockSkewWarning))
+                 (got (mindwtr-api-get-data))
+                 (merged (plist-get got :appdata))
+                 (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
+                 (backup-file nil))
+            (unless (= tick (buffer-chars-modified-tick))
+              (error "mindwtr: buffer changed during sync; aborting"))
+            (when (buffer-file-name)
+              (let* ((bdir (expand-file-name "backups/" mindwtr-shadow-directory))
+                     (bf (expand-file-name
+                          (format "mindwtr-%s.org"
+                                  (format-time-string "%Y%m%dT%H%M%S")) bdir)))
+                (make-directory bdir t)
+                (write-region (point-min) (point-max) bf)
+                (setq backup-file bf)))
+            (mindwtr-reconcile-buffer merged)
+            (mindwtr-shadow-save merged)
+            (mindwtr-shadow-set-etag (plist-get got :etag))
+            (mindwtr-report-show stats conflicts skew backup-file (current-buffer))
+            (list :ok t :conflicts conflicts :stats stats :skew skew)))))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here

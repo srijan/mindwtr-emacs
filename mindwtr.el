@@ -38,8 +38,31 @@
   "Seconds between periodic background syncs (nil disables)."
   :type '(choice (const nil) integer) :group 'mindwtr)
 
+(defcustom mindwtr-backoff-initial 5
+  "Initial retry delay, in seconds, after a retryable sync failure."
+  :type 'integer :group 'mindwtr)
+
+(defcustom mindwtr-backoff-max 300
+  "Maximum retry delay, in seconds (the backoff is capped here)."
+  :type 'integer :group 'mindwtr)
+
+(defcustom mindwtr-backoff-max-attempts 12
+  "Give up retrying after this many consecutive retryable failures."
+  :type 'integer :group 'mindwtr)
+
 (defvar mindwtr--timer nil)
 (defvar mindwtr--debounce-timer nil)
+(defvar mindwtr--retry-timer nil
+  "Pending backoff retry timer, or nil.")
+(defvar mindwtr--retry-attempts 0
+  "Count of consecutive retryable sync failures.")
+(defvar mindwtr--error-state nil
+  "Non-nil (a message string) when sync has entered a persistent error state.")
+(defvar mindwtr--sync-in-progress nil
+  "Non-nil while a sync cycle is running.
+Emacs' synchronous HTTP spins a nested event loop that runs pending
+timers, so a periodic/debounce/retry timer can fire mid-sync; this guard
+stops such a re-entrant trigger from launching a second concurrent cycle.")
 
 (defconst mindwtr--todo-keywords
   '((sequence "INBOX(i)" "NEXT(n)" "WAIT(w)" "SOMEDAY(s)" "REF(r)" "ACTIVE(a)"
@@ -88,22 +111,103 @@
         mindwtr-api-token (mindwtr--resolve-token))
   (find-file-noselect mindwtr-file))
 
+(defun mindwtr--backoff-delay (attempt)
+  "Return the backoff delay in seconds for ATTEMPT (1-based).
+Exponential from `mindwtr-backoff-initial', capped at `mindwtr-backoff-max'."
+  (min mindwtr-backoff-max
+       (* mindwtr-backoff-initial (expt 2 (1- attempt)))))
+
+(defun mindwtr--cancel-retry ()
+  "Cancel any pending backoff retry timer."
+  (when (timerp mindwtr--retry-timer)
+    (cancel-timer mindwtr--retry-timer))
+  (setq mindwtr--retry-timer nil))
+
+(defun mindwtr--reset-backoff ()
+  "Clear all backoff state after a success or a non-retryable failure."
+  (mindwtr--cancel-retry)
+  (setq mindwtr--retry-attempts 0
+        mindwtr--error-state nil))
+
+(defun mindwtr--schedule-retry ()
+  "Arm the next backoff retry, or surface a persistent error if exhausted.
+Assumes `mindwtr--retry-attempts' has already been incremented for the
+failure being handled."
+  (mindwtr--cancel-retry)
+  (if (>= mindwtr--retry-attempts mindwtr-backoff-max-attempts)
+      (progn
+        (setq mindwtr--error-state
+              (format "mindwtr: sync still failing after %d attempts; giving up (M-x mindwtr-sync to retry)"
+                      mindwtr--retry-attempts))
+        (message "%s" mindwtr--error-state))
+    (let ((delay (mindwtr--backoff-delay mindwtr--retry-attempts)))
+      (setq mindwtr--retry-timer (run-with-timer delay nil #'mindwtr--retry-sync))
+      (message "mindwtr: server busy/unreachable; retrying in %ds (attempt %d/%d)"
+               delay mindwtr--retry-attempts mindwtr-backoff-max-attempts))))
+
+(defun mindwtr--retry-sync ()
+  "Timer entry for a backoff retry: run one attempt, preserving the count."
+  (setq mindwtr--retry-timer nil)
+  (mindwtr--sync-attempt))
+
+(defun mindwtr--sync-attempt ()
+  "Run one sync cycle and manage backoff state.
+Retryable server errors (429/5xx) arm an exponential backoff retry; all
+other outcomes reset the backoff.  On any failure org and the shadow are
+left untouched (the engine only writes them on success).  Re-entrant calls
+\(a timer firing inside the synchronous HTTP wait) are ignored so two
+cycles never run concurrently."
+  (if mindwtr--sync-in-progress
+      nil
+    (let ((mindwtr--sync-in-progress t)
+          (buf (mindwtr--prepare)))
+      (condition-case err
+          (let ((res (mindwtr-sync-once
+                      buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
+            (mindwtr--reset-backoff)
+            (cond
+             ((plist-get res :noop) (message "mindwtr: up to date"))
+             (t (message "mindwtr: sync ok%s"
+                         (if (plist-get res :conflicts)
+                             (format " (%d conflict(s) — see report)"
+                                     (length (plist-get res :conflicts)))
+                           "")))))
+        (mindwtr-api-auth-error
+         (mindwtr--reset-backoff)
+         (message "mindwtr: authentication failed (check token)"))
+        (mindwtr-api-error
+         (if (plist-get (cdr err) :retryable)
+             (progn
+               ;; Cap the counter at the ceiling so persistent failures don't
+               ;; grow it unbounded across repeated triggers.
+               (setq mindwtr--retry-attempts
+                     (min mindwtr-backoff-max-attempts
+                          (1+ mindwtr--retry-attempts)))
+               (mindwtr--schedule-retry))
+           (mindwtr--reset-backoff)
+           (message "mindwtr: server error %s" (plist-get (cdr err) :status))))
+        (error
+         (mindwtr--reset-backoff)
+         (message "mindwtr: %s" (error-message-string err)))))))
+
+(defun mindwtr--auto-sync ()
+  "Entry point for automatic triggers (save/focus/periodic).
+A no-op while a cycle is in progress, while a backoff retry is armed, or
+after sync has given up -- so backoff fully owns the retry cadence and
+overlapping triggers never pile on.  A manual `mindwtr-sync' is the escape
+hatch that resets this state."
+  (unless (or mindwtr--sync-in-progress
+              (timerp mindwtr--retry-timer)
+              mindwtr--error-state)
+    (mindwtr--sync-attempt)))
+
 ;;;###autoload
 (defun mindwtr-sync ()
-  "Run one synchronization cycle now."
+  "Run one synchronization cycle now.
+A manual sync clears any pending backoff and starts a fresh attempt."
   (interactive)
-  (let ((buf (mindwtr--prepare)))
-    (condition-case err
-        (let ((res (mindwtr-sync-once buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
-          (message "mindwtr: sync ok%s"
-                   (if (plist-get res :conflicts)
-                       (format " (%d conflict(s) — see report)"
-                               (length (plist-get res :conflicts)))
-                     "")))
-      (mindwtr-api-auth-error (message "mindwtr: authentication failed (check token)"))
-      (mindwtr-api-error (message "mindwtr: server error %s"
-                                  (plist-get (cdr err) :status)))
-      (error (message "mindwtr: %s" (error-message-string err))))))
+  (mindwtr--reset-backoff)
+  (mindwtr--sync-attempt))
 
 ;;;###autoload
 (defun mindwtr-bootstrap ()
@@ -124,12 +228,12 @@
       (message "mindwtr: bootstrapped from server"))))
 
 (defun mindwtr--maybe-debounced-sync ()
-  "Schedule a debounced sync after saving the mindwtr file."
+  "Schedule a debounced auto-sync after saving the mindwtr file."
   (when (and mindwtr-file buffer-file-name
              (file-equal-p buffer-file-name mindwtr-file))
     (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
     (setq mindwtr--debounce-timer
-          (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr-sync))))
+          (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync))))
 
 ;;;###autoload
 (define-minor-mode mindwtr-auto-sync-mode
@@ -142,26 +246,22 @@
         (when mindwtr-sync-interval
           (setq mindwtr--timer
                 (run-with-timer mindwtr-sync-interval mindwtr-sync-interval
-                                #'mindwtr--periodic-sync))))
+                                #'mindwtr--auto-sync))))
     (remove-hook 'after-save-hook #'mindwtr--maybe-debounced-sync)
     (remove-function after-focus-change-function #'mindwtr--on-focus)
-    (when mindwtr--timer (cancel-timer mindwtr--timer) (setq mindwtr--timer nil))))
+    (when mindwtr--timer (cancel-timer mindwtr--timer) (setq mindwtr--timer nil))
+    ;; Don't leave a backoff retry firing after auto-sync is turned off.
+    (mindwtr--cancel-retry)))
 
 (defvar mindwtr--last-focus-sync 0)
 (defun mindwtr--on-focus (&rest _)
-  "Sync on frame focus, throttled to 30s."
+  "Auto-sync on frame focus, throttled to 30s.
+The engine HEAD-guards a clean buffer, so a focus with nothing to do is a
+single cheap HEAD request."
   (when (and (frame-focus-state)
              (> (- (float-time) mindwtr--last-focus-sync) 30))
     (setq mindwtr--last-focus-sync (float-time))
-    (ignore-errors (mindwtr-sync))))
-
-(defun mindwtr--periodic-sync ()
-  "Periodic sync that skips work when the remote ETag is unchanged."
-  (ignore-errors
-    (mindwtr--prepare)
-    (let ((etag (mindwtr-api-head-etag)))
-      (unless (equal etag (mindwtr-shadow-get-etag))
-        (mindwtr-sync)))))
+    (mindwtr--auto-sync)))
 
 (provide 'mindwtr)
 ;;; mindwtr.el ends here

@@ -200,6 +200,89 @@ stats in its result."
          (c (car (mindwtr-sync-detect-conflicts candidate merged '("t1")))))
     (should (eq (plist-get c :kind) 'task))))
 
+(ert-deftest mindwtr-sync-merge-content-only-touches-content-fields ()
+  "merge-content must not introduce or change any field outside the
+signature's content-fields (plus identity keys).  The HEAD short-circuit's
+safety depends on this: anything build-candidate can meaningfully change
+must be visible to the content signature, or a sync could be skipped that
+would actually alter a field."
+  (let* ((se '(:id "t1" :title "x" :rev 5 :revBy "p" :createdAt "C"
+               :weirdServerField "keep"))
+         (le '(:id "t1" :mw-kind task :title "y"))
+         (merged (mindwtr-sync--merge-content le se))
+         (allowed (append '(:id :mw-kind :mw-extra-props :mw-area-override)
+                          mindwtr-model-content-fields))
+         (i 0))
+    (while (< i (length merged))
+      (let ((k (nth i merged)) (v (nth (1+ i) merged)))
+        (unless (equal v (plist-get se k))
+          (should (memq k allowed))))
+      (setq i (+ i 2)))
+    ;; an unmapped server field is preserved verbatim, never dropped
+    (should (string= (plist-get merged :weirdServerField) "keep"))))
+
+(ert-deftest mindwtr-sync-once-noop-when-clean-and-etag-matches ()
+  "No local edits + a remote ETag matching the shadow => HEAD only, no PUT/GET."
+  (let* ((dir (make-temp-file "mw-noop" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (calls nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (push (plist-get req :method) calls)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              (m (error "mindwtr: unexpected %s on a no-op sync" m))))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+            (should (plist-get res :noop))
+            (should (equal calls '("HEAD")))))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-pulls-when-clean-but-remote-moved ()
+  "No local edits but a changed remote ETag => full cycle that pulls the
+remote change into the buffer."
+  (let* ((dir (make-temp-file "mw-pull" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (remote (concat "{\"tasks\":[{\"id\":\"t9\",\"title\":\"from server\","
+                         "\"status\":\"next\",\"areaId\":\"a1\",\"rev\":1,"
+                         "\"createdAt\":\"2026-06-01T00:00:00Z\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}],"
+                         "\"projects\":[],\"sections\":[],"
+                         "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],\"settings\":{}}"))
+         (saw-put nil) (saw-get nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v2")) :body ""))
+              ("PUT" (setq saw-put t) '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ("GET" (setq saw-get t)
+                     (list :status 200 :headers '(("ETag" . "v2")) :body remote))))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+            (should-not (plist-get res :noop))
+            (should saw-put)
+            (should saw-get)
+            (goto-char (point-min))
+            (should (search-forward "from server" nil t))))
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-end-to-end ()
   "A local edit is PUT, merged result is reconciled, shadow updated."
   (let* ((dir (make-temp-file "mw-e2e" t))

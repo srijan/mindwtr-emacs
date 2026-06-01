@@ -134,7 +134,11 @@ buffer a restore action writes back into."
               ;; Tag the whole block so `r' anywhere within it restores.
               (put-text-property start (point) 'mindwtr-conflict c))))
         (goto-char (point-min))))
-    (display-buffer buf)
+    ;; Only steal a window when there is something to act on; a clean
+    ;; auto-sync should not pop the report every few seconds.  The buffer is
+    ;; refreshed regardless, so it is there when the user looks for it.
+    (when (or conflicts skew-warning)
+      (display-buffer buf))
     buf))
 
 (provide 'mindwtr-report)
