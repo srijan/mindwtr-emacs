@@ -82,6 +82,34 @@ the signature.")
     :pendingRemoteWriteAt :pendingRemoteWriteRetryAt :pendingRemoteWriteAttempts)
   "Fields that must be stripped before sending to the server.")
 
+(defconst mindwtr-model-known-fields
+  '((task    . (:id :title :status :priority :energyLevel :timeEstimate
+                :assignedTo :taskMode :startTime :dueDate :recurrence
+                :showFutureRecurrence :pushCount :tags :contexts :checklist
+                :description :textDirection :attachments :location
+                :projectId :sectionId :areaId :isFocusedToday :reviewAt
+                :completedAt :statusBeforeProjectArchive
+                :completedAtBeforeProjectArchive
+                :isFocusedTodayBeforeProjectArchive :projectArchivedAt
+                :order :orderNum :rev :revBy :createdAt :updatedAt
+                :deletedAt :purgedAt))
+    (project . (:id :title :status :color :order :tagIds :isSequential
+                :sequentialScope :isFocused :supportNotes :attachments
+                :dueDate :reviewAt :areaId :areaTitle :rev :revBy
+                :createdAt :updatedAt :deletedAt))
+    (section . (:id :projectId :title :description :order :isCollapsed
+                :rev :revBy :createdAt :updatedAt :deletedAt
+                :deletedAtBeforeProjectArchive :projectArchivedAt))
+    (area    . (:id :name :color :icon :order :rev :revBy
+                :createdAt :updatedAt :deletedAt)))
+  "Every server key we recognize, per synced entity type.
+Transcribed from the Mindwtr core `types.ts' interfaces (Task, Project,
+Section, Area).  The smoke suite flags wire keys absent here as UNKNOWN
+\(server drift); doubles as living documentation of the synced schema.
+Extend it deliberately when a new server field is intentionally adopted.
+Settings is excluded on purpose -- it is a large, deeply-nested blob
+passed through verbatim and never rendered to org.")
+
 (defun mindwtr-model-shadow-only-field-p (field)
   "Non-nil if FIELD (a keyword) is shadow-only."
   (and (memq field mindwtr-model-shadow-only-fields) t))
