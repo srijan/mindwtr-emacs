@@ -135,8 +135,20 @@ Description is the prose body minus planning, drawers, and checklist items."
       (let* ((body (mindwtr-parse--body))
              (pr (nth 3 (org-heading-components))))
         (setq e (plist-put e :priority (mindwtr-model-cookie->priority pr)))
-        (setq e (plist-put e :contexts (car split)))
-        (setq e (plist-put e :tags (cdr split)))
+        ;; MW_CONTEXTS/MW_TAGS are the exact-fidelity fallback for values
+        ;; org tags can't hold; when present they are authoritative and the
+        ;; native `:tags:' line (suppressed by render in that case) is
+        ;; ignored for the corresponding list.
+        (let ((mw-contexts (mindwtr-parse--prop "MW_CONTEXTS"))
+              (mw-tags (mindwtr-parse--prop "MW_TAGS")))
+          (setq e (plist-put e :contexts
+                             (if mw-contexts
+                                 (mindwtr-util-json-decode mw-contexts)
+                               (car split))))
+          (setq e (plist-put e :tags
+                             (if mw-tags
+                                 (mindwtr-util-json-decode mw-tags)
+                               (cdr split)))))
         (setq e (plist-put e :description (car body)))
         (when (cdr body) (setq e (plist-put e :checklist (cdr body))))
         (let ((s (mindwtr-parse--planning-iso "SCHEDULED: *\\(<[^>]+>\\)"))

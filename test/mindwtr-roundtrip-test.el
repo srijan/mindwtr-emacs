@@ -46,6 +46,38 @@
         (b '(:id "t1" :title "x" :status "next" :projectId "p2")))
     (should-not (string= (mindwtr-signature a) (mindwtr-signature b)))))
 
+(ert-deftest mindwtr-roundtrip-unsafe-contexts-use-drawer ()
+  "Contexts/tags org can't represent move to MW_CONTEXTS/MW_TAGS and round-trip.
+Regression for a task whose `@agenda/jane-doe' context (with
+`/' and `-') was swallowed into the title by org's tag parser."
+  (let* ((task '(:id "t1" :mw-kind task :title "Talk to Jane" :status "next"
+                 :areaId "a1"
+                 :contexts ("@agenda/jane-doe" "@work")
+                 :tags ("#in-progress")))
+         (text (concat "* Area\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                       (mindwtr-render-heading task 2 nil)))
+         (sig (mindwtr-signature task)))
+    ;; native tag line must NOT carry the unsafe values
+    (should-not (string-match-p ":@agenda/jane-doe:" text))
+    (should (string-match-p "MW_CONTEXTS:" text))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((re (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get re :title) "Talk to Jane"))
+        (should (equal (plist-get re :contexts)
+                       '("@agenda/jane-doe" "@work")))
+        (should (equal (plist-get re :tags) '("#in-progress")))
+        (should (string= (mindwtr-signature re) sig))))))
+
+(ert-deftest mindwtr-roundtrip-safe-tags-stay-native ()
+  "Safe contexts/tags still render as native org tags (no drawer fallback)."
+  (let* ((task '(:id "t1" :mw-kind task :title "x" :status "next" :areaId "a1"
+                 :contexts ("@work") :tags ("#focused")))
+         (text (concat "* Area\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                       (mindwtr-render-heading task 2 nil))))
+    (should (string-match-p ":@work:focused:" text))
+    (should-not (string-match-p "MW_CONTEXTS:" text))))
+
 (ert-deftest mindwtr-roundtrip-checklist-server-shape ()
   "A server checklist (items carry :id + :isCompleted) round-trips stably.
 Render reads :isCompleted, org checkboxes drop the server-assigned :id,

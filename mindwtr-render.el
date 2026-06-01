@@ -24,12 +24,32 @@ written in the drawer) is emitted.")
     (:sequential . "MW_SEQUENTIAL") (:focused . "MW_FOCUSED")
     (:mw-area-override . "MW_AREA_ID") (:attach . "MW_ATTACH")))
 
+(defconst mindwtr-render--org-tag-re "\\`[[:alnum:]_@#%]+\\'"
+  "A context/tag matching this can be a native org tag.
+Mirrors Org's own `org-tag-re' character class; anything outside it
+\(spaces, `-', `/', `.', ...) makes Org silently drop the tag, so such
+values fall back to the MW_CONTEXTS/MW_TAGS drawer to stay exact.")
+
+(defun mindwtr-render--org-tag-tokens (task)
+  "Return TASK's contexts (verbatim) + hashtags (minus `#') as org tag tokens."
+  (append (plist-get task :contexts)
+          (mapcar (lambda (s) (string-remove-prefix "#" s))
+                  (plist-get task :tags))))
+
+(defun mindwtr-render--tags-org-safe-p (task)
+  "Non-nil if every context/tag of TASK can be a native org tag."
+  (seq-every-p (lambda (s) (string-match-p mindwtr-render--org-tag-re s))
+               (mindwtr-render--org-tag-tokens task)))
+
 (defun mindwtr-render--tags (task)
-  "Render org tag string `:a:b:' for TASK contexts+tags, or empty."
-  (let ((all (append (plist-get task :contexts)
-                     (mapcar (lambda (s) (string-remove-prefix "#" s))
-                             (plist-get task :tags)))))
-    (if all (concat " :" (mapconcat #'identity all ":") ":") "")))
+  "Render org tag string `:a:b:' for TASK contexts+tags, or empty.
+Returns empty when TASK has no tags, OR when any context/tag contains
+characters org tags can't hold -- in that case the values move wholesale
+to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
+  (let ((all (mindwtr-render--org-tag-tokens task)))
+    (if (and all (mindwtr-render--tags-org-safe-p task))
+        (concat " :" (mapconcat #'identity all ":") ":")
+      "")))
 
 (defun mindwtr-render--checklist (task)
   "Render TASK checklist items as org checkboxes."
@@ -92,6 +112,18 @@ Returns a string ending with a newline."
           (push (format ":%s: %s" (cdr (assq k mindwtr-render--prop-names))
                         (if (eq v t) "t" v))
                 lines))))
+    ;; contexts/tags fallback: when any value can't be a native org tag,
+    ;; move the whole list into a drawer property (JSON-encoded for
+    ;; exactness, since the trigger includes spaces and other separators).
+    (when (and (eq kind 'task) (not (mindwtr-render--tags-org-safe-p entity)))
+      (when (plist-get entity :contexts)
+        (push (format ":MW_CONTEXTS: %s"
+                      (mindwtr-util-json-encode (plist-get entity :contexts)))
+              lines))
+      (when (plist-get entity :tags)
+        (push (format ":MW_TAGS: %s"
+                      (mindwtr-util-json-encode (plist-get entity :tags)))
+              lines)))
     ;; display-mirror fields from shadow
     (when shadow
       (when (plist-get shadow :createdAt)
