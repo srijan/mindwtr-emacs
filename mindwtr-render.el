@@ -3,6 +3,7 @@
 ;; Deterministic rendering of entities to org.  The inverse of mindwtr-parse.
 ;;; Code:
 
+(require 'cl-lib)
 (require 'mindwtr-model)
 (require 'mindwtr-util)
 
@@ -160,6 +161,134 @@ Returns a string ending with a newline."
         (when (and desc (> (length desc) 0)) (push desc lines))
         (when (> (length cl) 0) (push cl lines))))
     (concat (mapconcat #'identity (nreverse lines) "\n") "\n")))
+
+(defun mindwtr-render--area-name-map (appdata)
+  "Return a hash id->name for APPDATA's areas."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (a (plist-get appdata :areas))
+      (when (plist-get a :id)
+        (puthash (plist-get a :id) (or (plist-get a :name) "") h)))
+    h))
+
+(defun mindwtr-render--area-order-map (appdata)
+  "Return a hash areaId->:order for APPDATA's areas."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (a (plist-get appdata :areas))
+      (puthash (plist-get a :id) (or (plist-get a :order) most-positive-fixnum) h))
+    h))
+
+(defun mindwtr-render--container (role level)
+  "Render the list container heading for ROLE at outline LEVEL."
+  (format "%s %s\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: %s\n:END:\n"
+          (make-string level ?*) (mindwtr-model-list-title role) role))
+
+(defun mindwtr-render--order-key (e)
+  (or (plist-get e :order) (plist-get e :orderNum) most-positive-fixnum))
+
+(defun mindwtr-render--sorted (entities)
+  "Stable sort ENTITIES by :order/:orderNum; entities without an order keep
+their incoming relative position and sort last."
+  (let ((i 0) keyed)
+    (dolist (e entities)
+      (push (list (mindwtr-render--order-key e) i e) keyed)
+      (setq i (1+ i)))
+    (mapcar (lambda (x) (nth 2 x))
+            (sort (nreverse keyed)
+                  (lambda (a b)
+                    (if (= (nth 0 a) (nth 0 b)) (< (nth 1 a) (nth 1 b))
+                      (< (nth 0 a) (nth 0 b))))))))
+
+(defun mindwtr-render--sorted-projects (projects area-order)
+  "Sort PROJECTS grouped by area (AREA-ORDER hash areaId->order, area-less
+last), then by project :order, stably."
+  (let ((i 0) keyed)
+    (dolist (p projects)
+      (let ((ao (if (plist-get p :areaId)
+                    (gethash (plist-get p :areaId) area-order most-positive-fixnum)
+                  most-positive-fixnum)))
+        (push (list ao (mindwtr-render--order-key p) i p) keyed))
+      (setq i (1+ i)))
+    (mapcar (lambda (x) (nth 3 x))
+            (sort (nreverse keyed)
+                  (lambda (a b)
+                    (cond ((/= (nth 0 a) (nth 0 b)) (< (nth 0 a) (nth 0 b)))
+                          ((/= (nth 1 a) (nth 1 b)) (< (nth 1 a) (nth 1 b)))
+                          (t (< (nth 2 a) (nth 2 b)))))))))
+
+(defun mindwtr-render--graft-org-only (rendered id org-only)
+  "Inject preserved org-only body for ID into RENDERED after PROPERTIES :END:."
+  (let ((p (and org-only (gethash id org-only))))
+    (if (not (and p (plist-get p :body))) rendered
+      (let ((i (string-match "\n:END:\n" rendered)))
+        (if (not i) rendered
+          (let ((cut (+ i (length "\n:END:\n"))))
+            (concat (substring rendered 0 cut) (plist-get p :body)
+                    (substring rendered cut))))))))
+
+(defun mindwtr-render--entity (e kind level org-only)
+  "Render entity E (KIND) at LEVEL, injecting extra-props and org-only body
+for E's id from ORG-ONLY (a hash id -> (:body STR :extra PLIST), or nil)."
+  (let* ((id (plist-get e :id))
+         (p (and org-only (gethash id org-only)))
+         (e2 (plist-put (plist-put (copy-sequence e) :mw-kind kind)
+                        :mw-extra-props (and p (plist-get p :extra)))))
+    (mindwtr-render--graft-org-only (mindwtr-render-heading e2 level e2) id org-only)))
+
+(defun mindwtr-render--live (entities &optional drop-archived)
+  "Return ENTITIES without tombstones (and without archived if DROP-ARCHIVED)."
+  (cl-remove-if (lambda (e)
+                  (or (plist-get e :deletedAt)
+                      (and drop-archived (equal (plist-get e :status) "archived"))))
+                entities))
+
+(defun mindwtr-render-appdata (appdata &optional org-only)
+  "Render APPDATA to the canonical GTD-list org layout, returning a string.
+ORG-ONLY, when given, is a hash id -> (:body STR :extra PLIST) of org-only
+content to preserve across a reconcile.  Tombstoned and archived entities
+are not rendered."
+  (let* ((mindwtr-render-area-names (mindwtr-render--area-name-map appdata))
+         (area-order (mindwtr-render--area-order-map appdata))
+         (areas (mindwtr-render--live (plist-get appdata :areas)))
+         (projects (mindwtr-render--live (plist-get appdata :projects) t))
+         (sections (mindwtr-render--live (plist-get appdata :sections)))
+         (tasks (mindwtr-render--live (plist-get appdata :tasks) t))
+         (out ""))
+    ;; Standalone task lists (no project, no section), placed by status.
+    (dolist (role '("inbox" "next-actions" "waiting" "someday" "reference"))
+      (setq out (concat out (mindwtr-render--container role 1)))
+      (dolist (e (mindwtr-render--sorted
+                  (cl-remove-if-not
+                   (lambda (e)
+                     (and (not (plist-get e :projectId))
+                          (not (plist-get e :sectionId))
+                          (equal (mindwtr-model-status->list (plist-get e :status)) role)))
+                   tasks)))
+        (setq out (concat out (mindwtr-render--entity e 'task 2 org-only)))))
+    ;; Projects, grouped by area then order; each with sections+tasks nested.
+    (setq out (concat out (mindwtr-render--container "projects" 1)))
+    (dolist (proj (mindwtr-render--sorted-projects projects area-order))
+      (setq out (concat out (mindwtr-render--entity proj 'project 2 org-only)))
+      (dolist (sec (mindwtr-render--sorted
+                    (cl-remove-if-not
+                     (lambda (s) (equal (plist-get s :projectId) (plist-get proj :id)))
+                     sections)))
+        (setq out (concat out (mindwtr-render--entity sec 'section 3 org-only)))
+        (dolist (tk (mindwtr-render--sorted
+                     (cl-remove-if-not
+                      (lambda (tk) (equal (plist-get tk :sectionId) (plist-get sec :id)))
+                      tasks)))
+          (setq out (concat out (mindwtr-render--entity tk 'task 4 org-only)))))
+      (dolist (tk (mindwtr-render--sorted
+                   (cl-remove-if-not
+                    (lambda (tk) (and (equal (plist-get tk :projectId) (plist-get proj :id))
+                                      (not (plist-get tk :sectionId))))
+                    tasks)))
+        (setq out (concat out (mindwtr-render--entity tk 'task 3 org-only)))))
+    ;; Areas of Focus reference section.
+    (setq out (concat out (mindwtr-render--container "areas" 1)))
+    (dolist (a (mindwtr-render--sorted areas))
+      (setq out (concat out (mindwtr-render--entity a 'area 2 org-only))))
+    out))
 
 (provide 'mindwtr-render)
 ;;; mindwtr-render.el ends here
