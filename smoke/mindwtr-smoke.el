@@ -25,7 +25,7 @@
 
 ;;;; Reporting + exit
 
-(defvar mindwtr-smoke--counts nil
+(defvar mindwtr-smoke--counts (list :pass 0 :fail 0 :warn 0)
   "Plist (:pass N :fail N :warn N) of results for the current run.")
 
 (defun mindwtr-smoke-reset ()
