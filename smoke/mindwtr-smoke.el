@@ -80,5 +80,61 @@
               (ignore-errors (mindwtr--resolve-token)))
             (error "No token: set MINDWTR_TOKEN or an auth-source entry for the host"))))
 
+;;;; Pure helpers
+
+(defconst mindwtr-smoke--entity-keys '(:tasks :projects :sections :areas))
+
+(defun mindwtr-smoke-plist-keys (pl)
+  "Return the list of keys in plist PL."
+  (let (ks (i 0))
+    (while (< i (length pl)) (push (nth i pl) ks) (setq i (+ i 2)))
+    (nreverse ks)))
+
+(defun mindwtr-smoke-plist-same-p (a b)
+  "Non-nil if plists A and B have identical key->value sets (order-insensitive)."
+  (let ((ka (mindwtr-smoke-plist-keys a)) (kb (mindwtr-smoke-plist-keys b)))
+    (and (= (length ka) (length kb))
+         (seq-every-p (lambda (k) (and (plist-member b k)
+                                       (equal (plist-get a k) (plist-get b k))))
+                      ka))))
+
+(defun mindwtr-smoke-find-by-id (appdata id)
+  "Return the entity with ID anywhere in APPDATA, or nil."
+  (catch 'hit
+    (dolist (key mindwtr-smoke--entity-keys)
+      (dolist (e (plist-get appdata key))
+        (when (string= (plist-get e :id) id) (throw 'hit e))))
+    nil))
+
+(defun mindwtr-smoke-index-by-id (appdata &optional live-only)
+  "Return a hash id->entity over all of APPDATA's entity lists.
+With LIVE-ONLY non-nil, omit tombstoned entities (those with :deletedAt)."
+  (let ((idx (make-hash-table :test 'equal)))
+    (dolist (key mindwtr-smoke--entity-keys)
+      (dolist (e (plist-get appdata key))
+        (unless (and live-only (plist-get e :deletedAt))
+          (puthash (plist-get e :id) e idx))))
+    idx))
+
+(defun mindwtr-smoke-blast-radius (wire prior)
+  "Return the sorted list of entity ids that differ between PRIOR and WIRE.
+Considers only the live view of each (tombstones are not live): an id is
+in the radius if it is newly live in WIRE (create), no longer live in WIRE
+\(delete/tombstone), or live in both but with different content (update)."
+  (let ((wi (mindwtr-smoke-index-by-id wire t))
+        (pi (mindwtr-smoke-index-by-id prior t))
+        (ids (make-hash-table :test 'equal))
+        out)
+    (maphash (lambda (id w)
+               (let ((p (gethash id pi)))
+                 (when (or (null p) (not (mindwtr-smoke-plist-same-p w p)))
+                   (puthash id t ids))))
+             wi)
+    (maphash (lambda (id _p)
+               (unless (gethash id wi) (puthash id t ids)))
+             pi)
+    (maphash (lambda (id _) (push id out)) ids)
+    (sort out #'string<)))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here
