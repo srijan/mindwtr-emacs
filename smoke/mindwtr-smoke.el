@@ -211,5 +211,78 @@ entity of that type uses on this instance."
            (format "%s fields not exercised on this instance: %S"
                    (car entry) unex)))))))
 
+;;;; Buffer rendering helper
+
+(defun mindwtr-smoke--render-appdata (appdata)
+  "Erase the current buffer and render APPDATA into it as a Mindwtr org file."
+  (erase-buffer)
+  (let ((org-inhibit-startup t))
+    (insert "#+TITLE: mw smoke\n")
+    (org-mode))
+  (mindwtr-parse-ensure-keywords)
+  (mindwtr-reconcile-buffer appdata))
+
+;;;; Read-only phases
+
+(defun mindwtr-smoke-phase-connectivity ()
+  "HEAD the server; PASS (returning t) on success, FAIL (returning nil) otherwise."
+  (condition-case err
+      (let ((etag (mindwtr-api-head-etag)))
+        (mindwtr-smoke-pass "connectivity (HEAD)" (format "ETag: %s" (or etag "(none)")))
+        t)
+    (mindwtr-api-auth-error
+     (mindwtr-smoke-fail "connectivity (HEAD)" "authentication failed (401)")
+     nil)
+    (error
+     (mindwtr-smoke-fail "connectivity (HEAD)" (error-message-string err))
+     nil)))
+
+(defun mindwtr-smoke-phase-snapshot ()
+  "GET + validate the snapshot.  Return the appdata, or nil on error."
+  (condition-case err
+      (let* ((got (mindwtr-api-get-data))
+             (ad (plist-get got :appdata)))
+        (mindwtr-smoke-pass
+         "snapshot (GET)"
+         (format "%d tasks, %d projects, %d sections, %d areas, settings:%s"
+                 (length (plist-get ad :tasks)) (length (plist-get ad :projects))
+                 (length (plist-get ad :sections)) (length (plist-get ad :areas))
+                 (if (plist-get ad :settings) "present" "empty")))
+        (condition-case verr
+            (progn (mindwtr-model-validate-appdata ad)
+                   (mindwtr-smoke-pass "validate-appdata"))
+          (error (mindwtr-smoke-fail "validate-appdata" (error-message-string verr))))
+        ad)
+    (mindwtr-api-auth-error
+     (mindwtr-smoke-fail "snapshot (GET)" "authentication failed (401)") nil)
+    (error (mindwtr-smoke-fail "snapshot (GET)" (error-message-string err)) nil)))
+
+(defun mindwtr-smoke-phase-roundtrip (appdata)
+  "Render APPDATA to org, parse it back, and compare content signatures.
+On drift, FAIL and print the per-field canonical diff for each entity."
+  (condition-case err
+      (with-temp-buffer
+        (mindwtr-smoke--render-appdata appdata)
+        (let* ((reparsed (mindwtr-parse-buffer))
+               (orig-idx (mindwtr-smoke-index-by-id appdata))
+               (drift 0) (checked 0))
+          (dolist (key mindwtr-smoke--entity-keys)
+            (dolist (re (plist-get reparsed key))
+              (setq checked (1+ checked))
+              (let ((orig (gethash (plist-get re :id) orig-idx)))
+                (when (and orig (not (string= (mindwtr-signature re)
+                                              (mindwtr-signature orig))))
+                  (setq drift (1+ drift))
+                  (mindwtr-smoke-fail
+                   (format "round-trip drift id=%s title=%S"
+                           (plist-get re :id)
+                           (or (plist-get re :title) (plist-get re :name))))
+                  (dolist (line (mindwtr-smoke-canonical-field-diff orig re))
+                    (mindwtr-smoke-info line))))))
+          (when (= drift 0)
+            (mindwtr-smoke-pass
+             (format "round-trip signature (%d entities clean)" checked)))))
+    (error (mindwtr-smoke-fail "round-trip" (error-message-string err)))))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here

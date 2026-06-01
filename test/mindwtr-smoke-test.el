@@ -99,3 +99,40 @@
      :projects nil :sections nil :areas nil))
   (should (> (plist-get mindwtr-smoke--counts :warn) 0))
   (should (= 0 (plist-get mindwtr-smoke--counts :fail))))
+
+(defun mindwtr-smoke-test--server (initial)
+  "Return an `mindwtr-api-http-function' backed by an in-memory appdata.
+A PUT replaces the whole state (full-replace, like the real server); GET
+returns it re-encoded through JSON so nil/false/[] normalize as on the wire."
+  (let ((state (copy-tree initial)) (etag 0))
+    (lambda (req)
+      (pcase (plist-get req :method)
+        ("HEAD" (list :status 200
+                      :headers (list (cons "ETag" (number-to-string etag)))
+                      :body ""))
+        ("GET" (list :status 200
+                     :headers (list (cons "ETag" (number-to-string etag)))
+                     :body (mindwtr-util-json-ascii state)))
+        ("PUT" (setq state (mindwtr-util-json-decode (plist-get req :body)))
+               (setq etag (1+ etag))
+               (list :status 200 :headers nil :body "{\"ok\":true}"))))))
+
+(defconst mindwtr-smoke-test--initial
+  '(:tasks ((:id "t-keep" :title "keep me" :status "next" :rev 1
+             :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-01T00:00:00Z"
+             :contexts ("@computer") :tags nil))
+    :projects nil :sections nil :areas nil :settings nil)
+  "A minimal but valid server snapshot for offline phase tests.")
+
+(ert-deftest mindwtr-smoke-readonly-phases-pass-on-clean-data ()
+  (let* ((mindwtr-api-base-url "https://mock/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function
+          (mindwtr-smoke-test--server mindwtr-smoke-test--initial)))
+    (mindwtr-smoke-reset)
+    (should (mindwtr-smoke-phase-connectivity))
+    (let ((ad (mindwtr-smoke-phase-snapshot)))
+      (should ad)
+      (mindwtr-smoke-phase-roundtrip ad))
+    ;; clean data: no failures across connectivity + snapshot + round-trip
+    (should (= 0 (plist-get mindwtr-smoke--counts :fail)))))
