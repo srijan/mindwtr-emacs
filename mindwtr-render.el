@@ -35,7 +35,7 @@ written in the drawer) is emitted.")
   "Render TASK checklist items as org checkboxes."
   (mapconcat (lambda (it)
                (format "- [%s] %s"
-                       (if (eq (plist-get it :done) t) "X" " ")
+                       (if (eq (plist-get it :isCompleted) t) "X" " ")
                        (plist-get it :title)))
              (plist-get task :checklist) "\n"))
 

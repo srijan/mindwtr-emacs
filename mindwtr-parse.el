@@ -98,7 +98,7 @@ Description is the prose body minus planning, drawers, and checklist items."
          ((string-match-p "^[ \t]*\\(SCHEDULED\\|DEADLINE\\|CLOSED\\):" ln) nil)
          ((string-match "^[ \t]*- \\[\\([ X]\\)\\] \\(.*\\)$" ln)
           (push (list :title (match-string 2 ln)
-                      :done (if (string= (match-string 1 ln) "X") t :false))
+                      :isCompleted (if (string= (match-string 1 ln) "X") t :false))
                 checklist))
          (t (push ln prose))))
       (cons (string-trim (mapconcat #'identity (nreverse prose) "\n"))
@@ -193,18 +193,25 @@ Description is the prose body minus planning, drawers, and checklist items."
                   (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) sections))
                ('task
-                (let* ((pid (mindwtr-parse--ancestor-id 'project))
-                       (sid (mindwtr-parse--ancestor-id 'section))
-                       ;; explicit MW_AREA_ID is an override (rare path);
-                       ;; otherwise areaId is derived from the ancestor Area.
-                       (explicit-area (mindwtr-parse--prop "MW_AREA_ID"))
-                       (aid (or explicit-area (mindwtr-parse--ancestor-id 'area))))
-                  (when pid (setq e (plist-put e :projectId pid)))
-                  (when sid (setq e (plist-put e :sectionId sid)))
-                  (when aid (setq e (plist-put e :areaId aid)))
-                  ;; Only round-trip MW_AREA_ID when it was an explicit
-                  ;; override; a derived areaId must not be re-emitted.
+                (let ((sid (mindwtr-parse--ancestor-id 'section))
+                      (pid (mindwtr-parse--ancestor-id 'project))
+                      (explicit-area (mindwtr-parse--prop "MW_AREA_ID")))
+                  ;; A task stores exactly ONE container reference: its
+                  ;; nearest ancestor container.  Higher containers are
+                  ;; derived structurally on render -- `mindwtr-reconcile--
+                  ;; container-marker' resolves a parent with this same
+                  ;; section>project>area precedence -- so a task in a
+                  ;; project carries `:projectId' only, never a derived
+                  ;; `:areaId'.  This matches the server, which stores a
+                  ;; single container id per task.  The sole exception is
+                  ;; MW_AREA_ID: Mindwtr emits it when a task's areaId is set
+                  ;; independently of its container's area (rare override).
+                  (cond (sid (setq e (plist-put e :sectionId sid)))
+                        (pid (setq e (plist-put e :projectId pid)))
+                        (t (let ((aid (mindwtr-parse--ancestor-id 'area)))
+                             (when aid (setq e (plist-put e :areaId aid))))))
                   (when explicit-area
+                    (setq e (plist-put e :areaId explicit-area))
                     (setq e (plist-put e :mw-area-override explicit-area))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)

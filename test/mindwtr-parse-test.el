@@ -47,8 +47,8 @@ Some notes.
       (should (string-match-p "2026-02-15" (plist-get e :dueDate)))
       (should (string= (plist-get e :description) "Some notes."))
       (should (equal (plist-get e :checklist)
-                     '((:title "sub a" :done :false)
-                       (:title "sub b" :done t)))))))
+                     '((:title "sub a" :isCompleted :false)
+                       (:title "sub b" :isCompleted t)))))))
 
 (ert-deftest mindwtr-parse-area-has-no-keyword ()
   (mindwtr-parse-test--with
@@ -112,11 +112,89 @@ Some notes.
         (should (= (length (plist-get ad :areas)) 1))
         (should (string= (plist-get proj :areaId) "a1"))
         (should (string= (plist-get sec :projectId) "p1"))
-        (should (string= (plist-get task :projectId) "p1"))
+        ;; A task stores ONLY its nearest container (section here).  The
+        ;; project and area are derived structurally on render, never
+        ;; stamped onto the task -- mirroring the server's single
+        ;; container-id-per-task model.
         (should (string= (plist-get task :sectionId) "s1"))
-        (should (string= (plist-get task :areaId) "a1"))
+        (should (null (plist-get task :projectId)))
+        (should (null (plist-get task :areaId)))
         ;; mw internal keys stripped from output entities:
         (should (null (plist-member task :mw-kind)))))))
+
+(ert-deftest mindwtr-parse-task-in-project-has-no-derived-area ()
+  "A task in a project carries :projectId only, never a derived :areaId.
+Regression for the live-data drift where the parser stamped both, which
+would corrupt containment on write (the server stores projectId alone)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Personal
+:PROPERTIES:
+:MW_TYPE: area
+:MW_ID: a1
+:END:
+** ACTIVE Some Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** NEXT Do thing
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+")
+      (org-mode)
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :projectId) "p1"))
+        (should (null (plist-get task :areaId)))
+        (should (null (plist-get task :sectionId)))))))
+
+(ert-deftest mindwtr-parse-task-directly-in-area-keeps-area ()
+  "A task directly under an Area (no project/section) keeps :areaId."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Personal
+:PROPERTIES:
+:MW_TYPE: area
+:MW_ID: a1
+:END:
+** NEXT Loose task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+")
+      (org-mode)
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :areaId) "a1"))
+        (should (null (plist-get task :projectId)))))))
+
+(ert-deftest mindwtr-parse-task-explicit-area-override ()
+  "MW_AREA_ID sets :areaId even alongside a project (independent-area override)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Personal
+:PROPERTIES:
+:MW_TYPE: area
+:MW_ID: a1
+:END:
+** ACTIVE Some Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** NEXT Do thing
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_AREA_ID: a2
+:END:
+")
+      (org-mode)
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :projectId) "p1"))
+        (should (string= (plist-get task :areaId) "a2"))))))
 
 (ert-deftest mindwtr-parse-buffer-skips-inbox-container ()
   (with-temp-buffer

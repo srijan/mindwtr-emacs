@@ -51,6 +51,18 @@ one with a time yields whole-second UTC `...Z'."
         (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t)
       (format-time-string "%Y-%m-%d" (encode-time decoded)))))
 
+(defun mindwtr-util-iso-coarsen-minute (iso)
+  "Coarsen ISO to minute precision (drop seconds and sub-seconds), in UTC.
+Date-only values are returned unchanged.  Org timestamps carry only
+minute precision, so sub-minute components never survive a render/parse
+cycle; coarsening here keeps content signatures stable across the trip."
+  (if (mindwtr-util-iso-date-only-p iso)
+      iso
+    (format-time-string "%Y-%m-%dT%H:%MZ"
+                        (encode-time (decoded-time-set-defaults
+                                      (iso8601-parse iso)))
+                        t)))
+
 (defun mindwtr-util--json-prep (obj)
   "Recursively convert OBJ so json-serialize can handle it.
 Plists are kept as plists; plain lists (used as arrays) are

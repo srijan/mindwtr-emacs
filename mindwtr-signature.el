@@ -10,36 +10,47 @@
 (defconst mindwtr-signature--set-fields '(:tags :contexts)
   "Fields whose list value is a set (order-insensitive).")
 
+(defconst mindwtr-signature--datetime-fields '(:startTime :dueDate :completedAt)
+  "Content fields holding ISO datetimes.
+Coarsened to minute precision for signing, because org timestamps cannot
+represent sub-minute values and so the seconds never round-trip.")
+
+(defun mindwtr-signature--norm-checklist (items)
+  "Normalize checklist ITEMS to a stable signable form.
+Keeps only (:title :isCompleted) per item, in fixed key order, dropping
+the server-assigned :id (org checkbox syntax cannot carry it, so it does
+not round-trip).  Order is preserved -- a checklist is a sequence, not a
+set.  Completion is coerced to t/`:false' so a missing flag and an
+explicit false sign identically."
+  (mapcar (lambda (it)
+            (list :title (or (plist-get it :title) "")
+                  :isCompleted (if (eq (plist-get it :isCompleted) t) t :false)))
+          items))
+
 (defun mindwtr-signature--canonical-plist (entity)
-  "Return a canonical flat plist of ENTITY's editable fields, sorted by key.
-Excludes shadow-only and display-mirror fields; sorts set-valued fields.
-An empty editable value (nil, empty list, or empty string) is treated as
-absent so that producers which emit an explicit empty (e.g. the parser
-sets `:priority nil'/`:tags nil'/`:description \"\"' for a sparse task)
-sign identically to producers which omit the key.  Without this, an
-unchanged sparse entity would get a different signature after a
-render/parse cycle and trigger a phantom `rev' bump."
-  (let (pairs (i 0))
-    (while (< i (length entity))
-      (let ((k (nth i entity)) (v (nth (1+ i) entity)))
-        (unless (or (mindwtr-model-shadow-only-field-p k)
-                    (memq k mindwtr-model-display-mirror-fields)
-                    ;; internal parse-only keys must never affect the signature.
-                    ;; `:mw-area-override' is an internal mirror of an explicit
-                    ;; MW_AREA_ID; the semantic it carries is already captured by
-                    ;; the signed `:areaId', so it stays excluded.  Containment
-                    ;; IDs (:areaId :projectId :sectionId) ARE editable, mapped
-                    ;; fields and MUST be signed: refiling a heading = re-parenting
-                    ;; in Mindwtr, so a changed parent must change the signature.
-                    (memq k '(:mw-kind :mw-extra-props :mw-ancestors
-                              :mw-area-override))
-                    ;; empty == absent: nil, empty list, or empty string
-                    (null v)
-                    (and (stringp v) (string-empty-p v)))
-          (when (and (memq k mindwtr-signature--set-fields) (listp v))
+  "Return a canonical flat plist of ENTITY's content fields, sorted by key.
+Signs only the editable fields named in `mindwtr-model-content-fields'
+\(an allow-list); every other server field is excluded by construction,
+so unmapped fields can neither drift the signature nor leak into change
+detection.  Set-valued fields are sorted, datetimes coarsened to minute
+precision, and checklists normalized (see
+`mindwtr-signature--norm-checklist').  An empty value (nil, empty list,
+or empty string) is treated as absent so a sparse entity signs
+identically whether a producer omits the key or emits an explicit empty;
+without this an unchanged sparse entity would get a different signature
+after a render/parse cycle and trigger a phantom `rev' bump."
+  (let (pairs)
+    (dolist (k mindwtr-model-content-fields)
+      (let ((v (plist-get entity k)))
+        (unless (or (null v) (and (stringp v) (string-empty-p v)))
+          (cond
+           ((and (memq k mindwtr-signature--set-fields) (listp v))
             (setq v (sort (copy-sequence v) #'string<)))
-          (push (cons k v) pairs)))
-      (setq i (+ i 2)))
+           ((memq k mindwtr-signature--datetime-fields)
+            (setq v (mindwtr-util-iso-coarsen-minute v)))
+           ((eq k :checklist)
+            (setq v (mindwtr-signature--norm-checklist v))))
+          (push (cons k v) pairs))))
     (setq pairs (sort pairs (lambda (a b)
                               (string< (symbol-name (car a))
                                        (symbol-name (car b))))))
