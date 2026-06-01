@@ -154,7 +154,10 @@ fields that move the content signature."
     (nreverse lines)))
 
 (defun mindwtr-smoke-key-diff (a b)
-  "Return diagnostic lines for every key whose value differs between A and B."
+  "Return diagnostic lines for every key whose value differs between A and B.
+A raw whole-plist diff (every key, not just content fields), provided for
+ad-hoc interactive debugging; the built-in phases use the content-scoped
+`mindwtr-smoke-canonical-field-diff' instead."
   (let ((allk (delete-dups (append (mindwtr-smoke-plist-keys a)
                                    (mindwtr-smoke-plist-keys b))))
         lines)
@@ -415,7 +418,7 @@ to call: a no-op PASS if the task is already gone."
          (base-title (format "[mw-smoke] lifecycle %s" run-id))
          (desired (list :mw-kind 'task :id id :status "inbox" :title base-title
                         :contexts '("@computer") :tags '("#smoke")
-                        :priority "high" :energyLevel "low" :dueDate "2026-06-15"
+                        :priority "high" :energyLevel "low" :dueDate "2099-12-31"
                         :checklist (list (list :title "step one" :isCompleted :false)
                                          (list :title "step two" :isCompleted :false)))))
     (unwind-protect
@@ -451,17 +454,16 @@ to call: a no-op PASS if the task is already gone."
                      (mindwtr-smoke--assert-target "transition next" tgt
                                                    desired "next" 3)))
             (throw 'abort nil))
-          ;; TRANSITION -> done (with completedAt)
+          ;; TRANSITION -> done.  completedAt is a content field, so
+          ;; `mindwtr-smoke--assert-target' already fails on a missing or
+          ;; mismatched value via the signature check -- no separate guard.
           (setq desired (plist-put (copy-sequence desired) :status "done"))
           (setq desired (plist-put desired :completedAt (mindwtr-smoke--now)))
           (mindwtr-smoke--step
            "transition done" id
            (lambda () (mindwtr-smoke--replace-heading id desired))
            (lambda (_after tgt)
-             (when (mindwtr-smoke--assert-target "transition done" tgt desired "done" 4)
-               (unless (plist-get tgt :completedAt)
-                 (mindwtr-smoke-fail "transition done: completedAt"
-                                     "completedAt not set"))))))
+             (mindwtr-smoke--assert-target "transition done" tgt desired "done" 4))))
       ;; CLEANUP always runs
       (mindwtr-smoke--cleanup id baseline))))
 
