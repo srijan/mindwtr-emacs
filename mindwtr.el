@@ -16,6 +16,7 @@
 (require 'mindwtr-sync)
 (require 'mindwtr-shadow)
 (require 'mindwtr-reconcile)
+(require 'mindwtr-commands)
 
 (defgroup mindwtr nil "Sync org with Mindwtr Cloud." :group 'org)
 
@@ -92,6 +93,10 @@ stops such a re-entrant trigger from launching a second concurrent cycle.")
   (setq-local org-priority-highest ?A)
   (setq-local org-priority-lowest ?D)
   (setq-local org-priority-default ?C))
+
+(define-key mindwtr-mode-map (kbd "C-c C-t") #'mindwtr-set-status)
+(define-key mindwtr-mode-map (kbd "S-<right>") #'mindwtr-cycle-status-forward)
+(define-key mindwtr-mode-map (kbd "S-<left>") #'mindwtr-cycle-status-backward)
 
 (defun mindwtr--resolve-token ()
   "Return the bearer token from `mindwtr-auth-token' or auth-source."

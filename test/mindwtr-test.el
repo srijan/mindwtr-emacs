@@ -124,6 +124,14 @@ the max and gives up (no further timer)."
       (delete-file f)
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-mode-binds-type-aware-status-keys ()
+  "mindwtr-mode shadows C-c C-t and S-arrow with the type-aware commands."
+  (with-temp-buffer
+    (mindwtr-mode)
+    (should (eq (lookup-key mindwtr-mode-map (kbd "C-c C-t")) #'mindwtr-set-status))
+    (should (eq (lookup-key mindwtr-mode-map (kbd "S-<right>")) #'mindwtr-cycle-status-forward))
+    (should (eq (lookup-key mindwtr-mode-map (kbd "S-<left>")) #'mindwtr-cycle-status-backward))))
+
 (ert-deftest mindwtr-success-clears-backoff-state ()
   "A successful (no-op) sync resets the attempt counter and clears the
 persistent error."
