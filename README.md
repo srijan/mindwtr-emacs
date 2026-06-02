@@ -74,6 +74,45 @@ registers the Mindwtr keywords for this file even when your global
 not `SOMEDAY`/`REF`). The parser also re-installs the full sequence before
 reading the buffer if any keyword is missing.
 
+### Working the file
+
+`mindwtr-mode` binds type-aware status commands that replace the default org
+equivalents for Mindwtr headings:
+
+| Key | Command | Behaviour |
+|---|---|---|
+| `C-c C-t` | `mindwtr-set-status` | Prompt for a status; offers **only** the keywords valid for the entity type at point (task vs project). |
+| `S-<right>` | `mindwtr-cycle-status-forward` | Cycle forward through type-valid keywords. |
+| `S-<left>` | `mindwtr-cycle-status-backward` | Cycle backward through type-valid keywords. |
+
+Tasks and projects have **disjoint** valid keyword sets:
+
+- **Task statuses**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `DONE` `ARCH`
+- **Project statuses**: `ACTIVE` `WAIT` `SOMEDAY` `ARCH`
+
+This means you can never accidentally apply a task-only keyword (`INBOX`, `NEXT`,
+`REF`, `DONE`) to a project, or a project-only keyword (`ACTIVE`) to a task.
+
+**Immediate relocation.** After a status change, a standalone task or a project
+is moved to the bucket matching its new status right away — no need to wait for
+the next sync. A task inside a project, a section heading, and an archived entity
+are left in place (they have no independent bucket to relocate to).
+
+**Re-parenting.** Moving a task into or out of a project is done with standard
+`C-c C-w` (`org-refile`). Containment is encoded by outline nesting, so nesting a
+task under a project heading makes it a project task; lifting it out makes it
+standalone.
+
+**Graceful degradation.** If a type-invalid keyword reaches the file through a
+raw text edit, org-capture, or editing outside `mindwtr-mode`, the parser does
+not abort the sync. It retains the entity's previous status, or assigns a
+type-appropriate default for a brand-new entity (task → `inbox`, project →
+`active`), and emits a warning. A stray keyword degrades gracefully instead of
+breaking the sync cycle.
+
+**Fallback.** Off a Mindwtr task or project heading these keys fall back to
+standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
+
 ## Usage
 
 1. **`M-x mindwtr-bootstrap`** (run once) — fetch the current server snapshot
@@ -101,6 +140,28 @@ reading the buffer if any keyword is missing.
 | `mindwtr-sync-interval` | `600` | Seconds between periodic syncs (`nil` disables). |
 
 ## Org schema
+
+### v3 file layout
+
+The rendered file is structured into six top-level buckets (in order), followed
+by the `* Someday` container which holds two nested sub-buckets:
+
+| Heading | Contents |
+|---|---|
+| `* Inbox` | Standalone tasks with status `inbox` |
+| `* Single Actions` | Standalone tasks with status `next`, `waiting`, or `done` |
+| `* Projects` | Active and waiting projects, each with their sections and tasks nested beneath; projects are further grouped by area |
+| `* Someday` | Container — holds `** Single Actions` (someday standalone tasks) and `** Projects` (someday projects) |
+| `* Reference` | Standalone tasks with status `reference` |
+| `* Areas of Focus` | Your areas, for reference |
+
+Tasks and projects have **disjoint** valid statuses. Task statuses are `inbox`,
+`next`, `waiting`, `someday`, `reference`, `done`, and `archived`. Project
+statuses are `active`, `waiting`, `someday`, and `archived`. Archived entities
+are not rendered into the file — see "Archived projects preserve their tasks"
+below.
+
+### Entity schema
 
 Each synced heading carries a `:PROPERTIES:` drawer with at least:
 
@@ -149,7 +210,8 @@ Field mapping:
 | `CLOSED:` | `completedAt` |
 
 **TODO keywords**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `ACTIVE` (active
-states) and `DONE` `ARCH` (done states).
+states) and `DONE` `ARCH` (done states). Not all keywords are valid for every
+entity type — see "Working the file" above for the per-type breakdown.
 
 Additional task properties with no native org form are stored in the drawer.
 The drawer fields synced **read-write** from org in v1 are exactly:
