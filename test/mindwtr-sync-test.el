@@ -320,6 +320,21 @@ shadow-saves without raw-byte corruption or a coding-system prompt."
           (should (search-forward "Plan • review “x”" nil t)))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-archived-not-tombstoned ()
+  "An archived shadow entity absent from org is not turned into a tombstone."
+  (let* ((shadow '(:tasks ((:id "t1" :title "live" :status "next" :rev 1)
+                           (:id "t2" :title "arch" :status "archived" :rev 1))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "live" :status "next"))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (t2 (seq-find (lambda (e) (equal (plist-get e :id) "t2")) (plist-get cand :tasks))))
+    ;; t2 is echoed (still archived), NOT freshly tombstoned with :deletedAt NOW
+    (should t2)
+    (should-not (string= (or (plist-get t2 :deletedAt) "") "NOW"))
+    ;; and stats does not count it as a delete
+    (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 0))))
+
 (ert-deftest mindwtr-sync-once-end-to-end ()
   "A local edit is PUT, merged result is reconciled, shadow updated."
   (let* ((dir (make-temp-file "mw-e2e" t))
