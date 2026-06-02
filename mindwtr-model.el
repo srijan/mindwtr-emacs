@@ -11,6 +11,26 @@
 (defconst mindwtr-model-project-statuses
   '("active" "someday" "waiting" "archived"))
 
+(defconst mindwtr-model-todo-keywords
+  '((sequence "INBOX(i)" "NEXT(n)" "WAIT(w)" "SOMEDAY(s)" "REF(r)" "ACTIVE(a)"
+              "|" "DONE(d)" "ARCH(x)"))
+  "Canonical `org-todo-keywords' sequence for Mindwtr buffers.
+The single source of truth: `mindwtr-mode' and the parser both bind this,
+and `mindwtr-model-todo-keyword-line' renders it as the in-buffer header so
+the keywords are registered regardless of the user's global config.")
+
+(defconst mindwtr-model-todo-keyword-names
+  '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH")
+  "Bare Mindwtr TODO keyword names (no fast-access keys, no `|').
+Used to test whether a buffer already has the full sequence registered.")
+
+(defun mindwtr-model-todo-keyword-line ()
+  "Return the in-buffer `#+TODO:' line registering the Mindwtr keywords.
+Emitted at the top of the rendered file so org honours these keywords for
+the file alone, overriding whatever the user's global `org-todo-keywords'
+defines."
+  (concat "#+TODO: " (mapconcat #'identity (cdar mindwtr-model-todo-keywords) " ")))
+
 (defconst mindwtr-model--task-status-keywords
   '(("inbox" . "INBOX") ("next" . "NEXT") ("waiting" . "WAIT")
     ("someday" . "SOMEDAY") ("reference" . "REF")

@@ -63,6 +63,27 @@ Some notes.
       (should (string= (plist-get e :name) "My Area"))
       (should (null (plist-get e :status))))))
 
+(ert-deftest mindwtr-parse-recovers-keywords-when-global-config-defines-next ()
+  "Regression: a user whose personal `org-todo-keywords' defines NEXT but
+not the rest of the Mindwtr sequence must still parse a SOMEDAY heading to
+status \"someday\".  The old guard trusted the presence of NEXT alone, so it
+skipped installing the keywords; SOMEDAY then went unrecognised, leaking
+into the title and yielding a nil status that aborted the whole sync."
+  (with-temp-buffer
+    (let ((org-todo-keywords '((sequence "TODO" "NEXT" "WAIT" "|" "DONE")))
+          (org-inhibit-startup t))
+      (org-mode)
+      ;; The false-positive trap: NEXT is registered, SOMEDAY is not.
+      (should (member "NEXT" org-todo-keywords-1))
+      (should-not (member "SOMEDAY" org-todo-keywords-1))
+      (insert "* SOMEDAY Try out annotate in place :@computer:\n"
+              ":PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (goto-char (point-min))
+      (org-next-visible-heading 1)
+      (let ((e (mindwtr-parse-heading)))
+        (should (string= (plist-get e :status) "someday"))
+        (should (string= (plist-get e :title) "Try out annotate in place"))))))
+
 (ert-deftest mindwtr-parse-preserves-unknown-properties ()
   (mindwtr-parse-test--with
       "* NEXT Task :@x:

@@ -102,6 +102,13 @@
     ;; area entity under Areas of Focus
     (should (string-match-p "^\\*\\* Personal$" text))))
 
+(ert-deftest mindwtr-render-appdata-leads-with-todo-keyword-line ()
+  "The rendered buffer opens with an in-buffer `#+TODO:' line so the Mindwtr
+keywords are registered regardless of the user's global `org-todo-keywords'."
+  (let ((text (mindwtr-render-appdata
+               '(:areas nil :projects nil :sections nil :tasks nil :settings nil))))
+    (should (string-prefix-p (concat (mindwtr-model-todo-keyword-line) "\n") text))))
+
 (ert-deftest mindwtr-render-appdata-orders-and-groups ()
   "Standalone tasks sort by :order; projects group by area :order then :order."
   (let* ((ad '(:areas ((:id "a1" :name "Personal" :order 0)

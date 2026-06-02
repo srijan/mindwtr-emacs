@@ -19,19 +19,20 @@
     "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS")
   "PROPERTIES keys the parser interprets; all others are preserved verbatim.")
 
-(defconst mindwtr-parse--todo-keywords
-  '((sequence "INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE"
-              "|" "DONE" "ARCH"))
-  "The Mindwtr org TODO keyword sequence.
-Mirrors the status<->keyword maps in `mindwtr-model'.")
-
 (defun mindwtr-parse-ensure-keywords ()
   "Make sure the Mindwtr TODO keywords are recognized in this buffer.
 Org only registers keywords from `org-todo-keywords' during mode
 initialization, so when parsing a buffer that was put into plain
-`org-mode' (e.g. tests) we rebind the keywords and re-init org once."
-  (unless (member "NEXT" org-todo-keywords-1)
-    (let ((org-todo-keywords mindwtr-parse--todo-keywords)
+`org-mode' (e.g. tests, or a file opened under a personal org config) we
+rebind the keywords and re-init org once.
+
+We must check that the *whole* sequence is present, not just one keyword:
+a personal GTD config commonly defines NEXT but not SOMEDAY/REF/etc., and
+trusting NEXT alone left those unrecognized -- their headings then parsed
+to a nil status, leaking the keyword into the title and aborting the sync."
+  (unless (seq-every-p (lambda (k) (member k org-todo-keywords-1))
+                       mindwtr-model-todo-keyword-names)
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
           (org-inhibit-startup t))
       (org-mode))))
 

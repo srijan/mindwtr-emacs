@@ -61,6 +61,18 @@
     '(:tasks ((:id "t1" :title "x" :status "bogus")) :projects nil
       :sections nil :areas nil :settings nil))))
 
+(ert-deftest mindwtr-model-todo-keyword-line-lists-full-sequence ()
+  "The in-buffer `#+TODO:' line carries every Mindwtr keyword, in order,
+with fast-access keys and the done-state separator."
+  (should (string= (mindwtr-model-todo-keyword-line)
+                   "#+TODO: INBOX(i) NEXT(n) WAIT(w) SOMEDAY(s) REF(r) ACTIVE(a) | DONE(d) ARCH(x)")))
+
+(ert-deftest mindwtr-model-todo-keyword-names-are-bare ()
+  "The bare-name list has no fast-access keys and omits the `|' separator."
+  (should (equal mindwtr-model-todo-keyword-names
+                 '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH")))
+  (should-not (member "|" mindwtr-model-todo-keyword-names)))
+
 (ert-deftest mindwtr-model-known-fields-covers-entity-types ()
   "The registry has an entry per synced entity type with representative keys."
   (should (assq 'task mindwtr-model-known-fields))

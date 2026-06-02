@@ -11,6 +11,7 @@
 (require 'org)
 (require 'auth-source)
 (require 'url-parse)
+(require 'mindwtr-model)
 (require 'mindwtr-api)
 (require 'mindwtr-sync)
 (require 'mindwtr-shadow)
@@ -64,10 +65,6 @@ Emacs' synchronous HTTP spins a nested event loop that runs pending
 timers, so a periodic/debounce/retry timer can fire mid-sync; this guard
 stops such a re-entrant trigger from launching a second concurrent cycle.")
 
-(defconst mindwtr--todo-keywords
-  '((sequence "INBOX(i)" "NEXT(n)" "WAIT(w)" "SOMEDAY(s)" "REF(r)" "ACTIVE(a)"
-              "|" "DONE(d)" "ARCH(x)")))
-
 (define-derived-mode mindwtr-mode org-mode "Mindwtr"
   "Major mode for the Mindwtr-synced org file."
   ;; Org only registers TODO keywords from `org-todo-keywords' during its
@@ -81,14 +78,17 @@ stops such a re-entrant trigger from launching a second concurrent cycle.")
   ;; `org-todo-kwd-alist' from those keywords.  That call resets
   ;; `major-mode' back to `org-mode', so we re-stamp the derived identity
   ;; afterward.  Guarded so a buffer already carrying the keywords is not
-  ;; needlessly re-initialised.
-  (unless (member "NEXT" org-todo-keywords-1)
-    (let ((org-todo-keywords mindwtr--todo-keywords)
+  ;; needlessly re-initialised.  We check the *whole* sequence, not just
+  ;; NEXT: a personal config defining NEXT but not SOMEDAY/REF/etc. would
+  ;; otherwise pass the guard and leave those keywords unregistered.
+  (unless (seq-every-p (lambda (k) (member k org-todo-keywords-1))
+                       mindwtr-model-todo-keyword-names)
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
           (org-inhibit-startup t))
       (org-mode)))
   (setq major-mode 'mindwtr-mode
         mode-name "Mindwtr")
-  (setq-local org-todo-keywords mindwtr--todo-keywords)
+  (setq-local org-todo-keywords mindwtr-model-todo-keywords)
   (setq-local org-priority-highest ?A)
   (setq-local org-priority-lowest ?D)
   (setq-local org-priority-default ?C))

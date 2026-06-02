@@ -256,7 +256,9 @@ are not rendered."
          (projects (mindwtr-render--live (plist-get appdata :projects) t))
          (sections (mindwtr-render--live (plist-get appdata :sections)))
          (tasks (mindwtr-render--live (plist-get appdata :tasks) t))
-         (out ""))
+         ;; Lead with the in-buffer keyword line so org registers the Mindwtr
+         ;; TODO sequence for this file regardless of the user's global config.
+         (out (concat (mindwtr-model-todo-keyword-line) "\n")))
     ;; Standalone task lists (no project, no section), placed by status.
     (dolist (role '("inbox" "next-actions" "waiting" "someday" "reference"))
       (setq out (concat out (mindwtr-render--container role 1)))

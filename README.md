@@ -67,9 +67,12 @@ or put a file-local line at the top of the file:
 # -*- mode: mindwtr -*-
 ```
 
-Using the mode is recommended for correct keyword/priority display, but **sync
-works without it**: the parser installs the keywords itself before reading the
-buffer.
+Using the mode is recommended for correct priority display, but **sync works
+without it**. The rendered file leads with an in-buffer `#+TODO:` line, so org
+registers the Mindwtr keywords for this file even when your global
+`org-todo-keywords` differs (e.g. a personal GTD config that defines `NEXT` but
+not `SOMEDAY`/`REF`). The parser also re-installs the full sequence before
+reading the buffer if any keyword is missing.
 
 ## Usage
 
