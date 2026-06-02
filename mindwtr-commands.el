@@ -42,8 +42,64 @@ task or a project to the container matching its new status."
           (save-excursion (org-back-to-heading t) (org-todo kw))
           (mindwtr-commands--relocate kind))))))
 
-;; TEMPORARY no-op stub; replaced with the real implementation in Task 8.
-(defun mindwtr-commands--relocate (_kind) nil)
+(defun mindwtr-commands--status-at-point (kind)
+  "Status string for the KIND entity at point, derived from its TODO keyword."
+  (let ((kw (save-excursion (org-back-to-heading t) (org-get-todo-state))))
+    (and kw (mindwtr-model-keyword->status-safe kind kw))))
+
+(defun mindwtr-commands--in-project-p ()
+  "Non-nil if the heading at point has a project or section ancestor."
+  (or (mindwtr-parse--ancestor-id 'section)
+      (mindwtr-parse--ancestor-id 'project)))
+
+(defun mindwtr-commands--target-role (kind)
+  "Container role the KIND entity at point should live under, or nil for no move.
+Only standalone tasks and projects relocate; archived statuses have no role."
+  (pcase kind
+    ('task
+     (unless (mindwtr-commands--in-project-p)
+       (mindwtr-model-status->list (mindwtr-commands--status-at-point 'task))))
+    ('project
+     (mindwtr-model-project-status->list (mindwtr-commands--status-at-point 'project)))
+    (_ nil)))
+
+(defun mindwtr-commands--parent-list-role ()
+  "Return the MW_LIST role of the nearest container ancestor of point, or nil."
+  (save-excursion
+    (org-back-to-heading t)
+    (let (role)
+      (while (and (not role) (org-up-heading-safe))
+        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "container")
+          (setq role (mindwtr-parse--prop "MW_LIST"))))
+      role)))
+
+(defun mindwtr-commands--container-marker (role)
+  "Return a marker at the container heading whose MW_LIST is ROLE, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((re (format "^[ \t]*:MW_LIST:[ \t]*%s[ \t]*$" (regexp-quote role))))
+      (when (re-search-forward re nil t)
+        (org-back-to-heading t)
+        (point-marker)))))
+
+(defun mindwtr-commands--relocate (kind)
+  "Move the KIND entity at point under the container matching its current status.
+No-op when the target role is nil (archived / project task / section) or the
+entity already sits directly under the target container."
+  (let ((role (mindwtr-commands--target-role kind)))
+    (when (and role (not (equal (mindwtr-commands--parent-list-role) role)))
+      (let ((target (mindwtr-commands--container-marker role)))
+        (when target
+          (save-excursion
+            (org-back-to-heading t)
+            (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
+              (org-cut-subtree)
+              (goto-char target)
+              ;; To the start of the heading after this container's subtree
+              ;; (or end of buffer) -- a clean line boundary -- then paste as
+              ;; the container's last child at the computed level.
+              (org-end-of-subtree t t)
+              (org-paste-subtree level))))))))
 
 (provide 'mindwtr-commands)
 ;;; mindwtr-commands.el ends here

@@ -47,4 +47,73 @@
       (org-back-to-heading t)
       (should (string= (org-get-todo-state) "WAIT")))))
 
+(defun mindwtr-commands-test--parent-list-of (title)
+  "Return the MW_LIST role of the container the heading named TITLE sits under."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward (regexp-quote title))
+    (mindwtr-commands--parent-list-role)))
+
+(ert-deftest mindwtr-commands-relocates-standalone-task-by-status ()
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Move me" :status "next")) :settings nil)
+    ;; starts under single-actions
+    (should (string= (mindwtr-commands-test--parent-list-of "Move me") "single-actions"))
+    ;; next -> someday relocates to someday-single-actions
+    (goto-char (point-min)) (re-search-forward "Move me") (org-back-to-heading t)
+    (org-todo "SOMEDAY")
+    (mindwtr-commands--relocate 'task)
+    (should (string= (mindwtr-commands-test--parent-list-of "Move me")
+                     "someday-single-actions"))
+    ;; someday -> reference relocates to reference
+    (goto-char (point-min)) (re-search-forward "Move me") (org-back-to-heading t)
+    (org-todo "REF")
+    (mindwtr-commands--relocate 'task)
+    (should (string= (mindwtr-commands-test--parent-list-of "Move me") "reference"))))
+
+(ert-deftest mindwtr-commands-relocates-project-subtree-with-children ()
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "MyProj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Child task" :status "next" :projectId "p1"))
+        :settings nil)
+    (should (string= (mindwtr-commands-test--parent-list-of "MyProj") "projects"))
+    (goto-char (point-min)) (re-search-forward "MyProj") (org-back-to-heading t)
+    (org-todo "SOMEDAY")
+    (mindwtr-commands--relocate 'project)
+    ;; project moved under someday-projects, child carried along (still its task)
+    (should (string= (mindwtr-commands-test--parent-list-of "MyProj") "someday-projects"))
+    (should (string= (mindwtr-commands-test--parent-list-of "Child task") "someday-projects"))
+    ;; re-parse confirms the child still belongs to the project
+    (let* ((ad (mindwtr-parse-buffer))
+           (child (car (plist-get ad :tasks))))
+      (should (string= (plist-get child :projectId) "p1")))))
+
+(ert-deftest mindwtr-commands-project-task-does-not-relocate ()
+  "A status change on a task inside a project leaves it nested under the project."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "MyProj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Inside" :status "next" :projectId "p1"))
+        :settings nil)
+    (goto-char (point-min)) (re-search-forward "Inside") (org-back-to-heading t)
+    (org-todo "WAIT")
+    (mindwtr-commands--relocate 'task)
+    (let* ((ad (mindwtr-parse-buffer))
+           (child (car (plist-get ad :tasks))))
+      (should (string= (plist-get child :projectId) "p1")))))
+
+(ert-deftest mindwtr-commands-archived-task-stays-in-place ()
+  "Archiving a standalone task does not move it (archived has no bucket)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Bye" :status "next")) :settings nil)
+    (goto-char (point-min)) (re-search-forward "Bye") (org-back-to-heading t)
+    (org-todo "ARCH")
+    (mindwtr-commands--relocate 'task)
+    (should (string= (mindwtr-commands-test--parent-list-of "Bye") "single-actions"))))
+
 ;;; mindwtr-commands-test.el ends here
