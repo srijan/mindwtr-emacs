@@ -143,8 +143,8 @@ standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
 
 ### v3 file layout
 
-The rendered file is structured into six top-level buckets (in order), followed
-by the `* Someday` container which holds two nested sub-buckets:
+The rendered file is structured into six top-level buckets (in order), one of
+which — `* Someday` — is a container holding two nested sub-buckets:
 
 | Heading | Contents |
 |---|---|
