@@ -90,16 +90,20 @@ entity already sits directly under the target container."
     (when (and role (not (equal (mindwtr-commands--parent-list-role) role)))
       (let ((target (mindwtr-commands--container-marker role)))
         (when target
-          (save-excursion
-            (org-back-to-heading t)
-            (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
-              (org-cut-subtree)
-              (goto-char target)
-              ;; To the start of the heading after this container's subtree
-              ;; (or end of buffer) -- a clean line boundary -- then paste as
-              ;; the container's last child at the computed level.
-              (org-end-of-subtree t t)
-              (org-paste-subtree level))))))))
+          (unwind-protect
+              ;; No `save-excursion': leave point on the moved heading so the
+              ;; cursor follows the entity the user just re-statused.
+              (progn
+                (org-back-to-heading t)
+                (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
+                  (org-cut-subtree)
+                  (goto-char target)
+                  ;; To the start of the heading after this container's subtree
+                  ;; (or end of buffer) -- a clean line boundary -- then paste as
+                  ;; the container's last child at the computed level.
+                  (org-end-of-subtree t t)
+                  (org-paste-subtree level)))
+            (set-marker target nil)))))))
 
 (provide 'mindwtr-commands)
 ;;; mindwtr-commands.el ends here
