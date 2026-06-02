@@ -82,25 +82,57 @@
                        (:id "t5" :title "deleted" :status "next" :deletedAt "2026-01-01T00:00:00Z"))
                :settings nil))
          (text (mindwtr-render-appdata ad)))
-    ;; containers exist in order
+    ;; v3 containers exist in order
     (should (string-match-p "^\\* Inbox$" text))
-    (should (string-match-p "^\\* Next Actions$" text))
+    (should (string-match-p "^\\* Single Actions$" text))
     (should (string-match-p "^\\* Projects$" text))
+    (should (string-match-p "^\\* Someday$" text))
+    (should (string-match-p "^\\* Reference$" text))
     (should (string-match-p "^\\* Areas of Focus$" text))
-    ;; standalone next under Next Actions; project task NOT a standalone
+    ;; standalone next under Single Actions; project task NOT a standalone
     (should (string-match-p "loose next" text))
-    ;; inbox task under Inbox
     (should (string-match-p "old captured" text))
-    ;; project + nested task
     (should (string-match-p "Proj" text))
     (should (string-match-p "in project" text))
-    ;; project carries area name
     (should (string-match-p ":MW_AREA: Personal" text))
     ;; archived + tombstoned tasks NOT rendered
     (should-not (string-match-p "gone" text))
     (should-not (string-match-p "deleted" text))
-    ;; area entity under Areas of Focus
     (should (string-match-p "^\\*\\* Personal$" text))))
+
+(ert-deftest mindwtr-render-appdata-v3-splits-someday-and-waiting ()
+  "Waiting projects sit under * Projects with active ones; someday tasks and
+projects live under the nested * Someday container."
+  (let* ((ad '(:areas nil
+               :projects ((:id "pa" :title "ActiveProj" :status "active" :order 0)
+                          (:id "pw" :title "WaitingProj" :status "waiting" :order 1)
+                          (:id "ps" :title "SomedayProj" :status "someday" :order 2))
+               :sections nil
+               :tasks ((:id "ts" :title "someday single" :status "someday")
+                       (:id "tp" :title "someday proj task" :status "next" :projectId "ps"))
+               :settings nil))
+         (text (mindwtr-render-appdata ad))
+         ;; positions of the structural anchors
+         (single (string-match "^\\* Single Actions$" text))
+         (projects (string-match "^\\* Projects$" text))
+         (someday (string-match "^\\* Someday$" text))
+         (sd-single (string-match "^\\*\\* Single Actions$" text))
+         (sd-projects (string-match "^\\*\\* Projects$" text))
+         (reference (string-match "^\\* Reference$" text)))
+    ;; nested Someday children exist as level-2 containers
+    (should sd-single)
+    (should sd-projects)
+    ;; active and waiting projects are under top-level * Projects (before * Someday)
+    (should (< projects (string-match "ActiveProj" text) someday))
+    (should (< projects (string-match "WaitingProj" text) someday))
+    ;; someday project + its task are under the nested ** Projects (after * Someday)
+    (should (< someday sd-projects (string-match "SomedayProj" text) reference))
+    (should (< (string-match "SomedayProj" text)
+               (string-match "someday proj task" text)))
+    ;; someday standalone task under nested ** Single Actions
+    (should (< sd-single (string-match "someday single" text) sd-projects))
+    ;; the nested children sit inside the Someday subtree
+    (should (< someday sd-single))))
 
 (ert-deftest mindwtr-render-appdata-leads-with-todo-keyword-line ()
   "The rendered buffer opens with an in-buffer `#+TODO:' line so the Mindwtr

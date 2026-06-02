@@ -245,8 +245,59 @@ the org-only body for E's id are injected into the rendered heading."
                       (and drop-archived (equal (plist-get e :status) "archived"))))
                 entities))
 
+(defun mindwtr-render--standalone-for (role tasks)
+  "Standalone (no projectId/sectionId) TASKS whose status maps to container ROLE."
+  (cl-remove-if-not
+   (lambda (e)
+     (and (not (plist-get e :projectId))
+          (not (plist-get e :sectionId))
+          (equal (mindwtr-model-status->list (plist-get e :status)) role)))
+   tasks))
+
+(defun mindwtr-render--task-bucket (role level tasks org-only)
+  "Render container ROLE at LEVEL, then standalone TASKS (pre-filtered) at LEVEL+1."
+  (let ((out (mindwtr-render--container role level)))
+    (dolist (e (mindwtr-render--sorted tasks))
+      (setq out (concat out (mindwtr-render--entity e 'task (1+ level) org-only))))
+    out))
+
+(defun mindwtr-render--project-subtree (proj level sections tasks org-only)
+  "Render PROJ at LEVEL, its sections at LEVEL+1 (their tasks LEVEL+2), and its
+section-less tasks at LEVEL+1."
+  (let ((out (mindwtr-render--entity proj 'project level org-only)))
+    (dolist (sec (mindwtr-render--sorted
+                  (cl-remove-if-not
+                   (lambda (s) (equal (plist-get s :projectId) (plist-get proj :id)))
+                   sections)))
+      (setq out (concat out (mindwtr-render--entity sec 'section (1+ level) org-only)))
+      (dolist (tk (mindwtr-render--sorted
+                   (cl-remove-if-not
+                    (lambda (tk) (equal (plist-get tk :sectionId) (plist-get sec :id)))
+                    tasks)))
+        (setq out (concat out (mindwtr-render--entity tk 'task (+ level 2) org-only)))))
+    (dolist (tk (mindwtr-render--sorted
+                 (cl-remove-if-not
+                  (lambda (tk) (and (equal (plist-get tk :projectId) (plist-get proj :id))
+                                    (not (plist-get tk :sectionId))))
+                  tasks)))
+      (setq out (concat out (mindwtr-render--entity tk 'task (1+ level) org-only))))
+    out))
+
+(defun mindwtr-render--projects-bucket (role level projects sections tasks area-order org-only)
+  "Render container ROLE at LEVEL, then PROJECTS whose project-status maps to ROLE,
+grouped by area, each as a subtree at LEVEL+1."
+  (let ((out (mindwtr-render--container role level))
+        (matched (cl-remove-if-not
+                  (lambda (p)
+                    (equal (mindwtr-model-project-status->list (plist-get p :status)) role))
+                  projects)))
+    (dolist (proj (mindwtr-render--sorted-projects matched area-order))
+      (setq out (concat out (mindwtr-render--project-subtree
+                             proj (1+ level) sections tasks org-only))))
+    out))
+
 (defun mindwtr-render-appdata (appdata &optional org-only)
-  "Render APPDATA to the canonical GTD-list org layout, returning a string.
+  "Render APPDATA to the canonical v3 GTD-list org layout, returning a string.
 ORG-ONLY, when given, is a hash id -> (:body STR :extra PLIST) of org-only
 content to preserve across a reconcile.  Tombstoned and archived entities
 are not rendered."
@@ -259,38 +310,30 @@ are not rendered."
          ;; Lead with the in-buffer keyword line so org registers the Mindwtr
          ;; TODO sequence for this file regardless of the user's global config.
          (out (concat (mindwtr-model-todo-keyword-line) "\n")))
-    ;; Standalone task lists (no project, no section), placed by status.
-    (dolist (role '("inbox" "next-actions" "waiting" "someday" "reference"))
-      (setq out (concat out (mindwtr-render--container role 1)))
-      (dolist (e (mindwtr-render--sorted
-                  (cl-remove-if-not
-                   (lambda (e)
-                     (and (not (plist-get e :projectId))
-                          (not (plist-get e :sectionId))
-                          (equal (mindwtr-model-status->list (plist-get e :status)) role)))
-                   tasks)))
-        (setq out (concat out (mindwtr-render--entity e 'task 2 org-only)))))
-    ;; Projects, grouped by area then order; each with sections+tasks nested.
-    (setq out (concat out (mindwtr-render--container "projects" 1)))
-    (dolist (proj (mindwtr-render--sorted-projects projects area-order))
-      (setq out (concat out (mindwtr-render--entity proj 'project 2 org-only)))
-      (dolist (sec (mindwtr-render--sorted
-                    (cl-remove-if-not
-                     (lambda (s) (equal (plist-get s :projectId) (plist-get proj :id)))
-                     sections)))
-        (setq out (concat out (mindwtr-render--entity sec 'section 3 org-only)))
-        (dolist (tk (mindwtr-render--sorted
-                     (cl-remove-if-not
-                      (lambda (tk) (equal (plist-get tk :sectionId) (plist-get sec :id)))
-                      tasks)))
-          (setq out (concat out (mindwtr-render--entity tk 'task 4 org-only)))))
-      (dolist (tk (mindwtr-render--sorted
-                   (cl-remove-if-not
-                    (lambda (tk) (and (equal (plist-get tk :projectId) (plist-get proj :id))
-                                      (not (plist-get tk :sectionId))))
-                    tasks)))
-        (setq out (concat out (mindwtr-render--entity tk 'task 3 org-only)))))
-    ;; Areas of Focus reference section.
+    ;; Inbox
+    (setq out (concat out (mindwtr-render--task-bucket
+                           "inbox" 1
+                           (mindwtr-render--standalone-for "inbox" tasks) org-only)))
+    ;; Single Actions (next | waiting | done)
+    (setq out (concat out (mindwtr-render--task-bucket
+                           "single-actions" 1
+                           (mindwtr-render--standalone-for "single-actions" tasks) org-only)))
+    ;; Projects (active | waiting), grouped by area
+    (setq out (concat out (mindwtr-render--projects-bucket
+                           "projects" 1 projects sections tasks area-order org-only)))
+    ;; Someday parent with two nested children
+    (setq out (concat out (mindwtr-render--container "someday" 1)))
+    (setq out (concat out (mindwtr-render--task-bucket
+                           "someday-single-actions" 2
+                           (mindwtr-render--standalone-for "someday-single-actions" tasks)
+                           org-only)))
+    (setq out (concat out (mindwtr-render--projects-bucket
+                           "someday-projects" 2 projects sections tasks area-order org-only)))
+    ;; Reference
+    (setq out (concat out (mindwtr-render--task-bucket
+                           "reference" 1
+                           (mindwtr-render--standalone-for "reference" tasks) org-only)))
+    ;; Areas of Focus reference section
     (setq out (concat out (mindwtr-render--container "areas" 1)))
     (dolist (a (mindwtr-render--sorted areas))
       (setq out (concat out (mindwtr-render--entity a 'area 2 org-only))))
