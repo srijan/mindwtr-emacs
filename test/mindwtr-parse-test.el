@@ -221,6 +221,18 @@ would corrupt containment on write (the server stores projectId alone)."
         (should (string= (plist-get task :areaId) "a1"))
         (should (null (plist-get task :projectId)))))))
 
+(ert-deftest mindwtr-parse-type-invalid-keyword-omits-status-not-errors ()
+  "A project carrying a task-only keyword (NEXT) must not error or leak the
+keyword into the title; it parses with no :status and warns."
+  (mindwtr-parse-test--with
+      (concat "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** NEXT Build the deck\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+    ;; jump to the project heading (second heading)
+    (org-next-visible-heading 1)
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :title) "Build the deck"))
+      (should (null (plist-get e :status))))))
+
 (ert-deftest mindwtr-parse-buffer-skips-inbox-container ()
   (with-temp-buffer
     (let ((org-inhibit-startup t))

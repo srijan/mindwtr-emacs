@@ -153,8 +153,20 @@ Warns on a duplicate name (keeps the first id)."
     (pcase kind
       ('area (setq e (plist-put e :name title)))
       ((or 'project 'section 'task) (setq e (plist-put e :title title))))
-    (when (and todo (memq kind '(task project)))
-      (setq e (plist-put e :status (mindwtr-model-keyword->status kind todo))))
+    (when (memq kind '(task project))
+      (let ((status (and todo (mindwtr-model-keyword->status-safe kind todo))))
+        (cond
+         (status (setq e (plist-put e :status status)))
+         (todo
+          ;; An org-recognized keyword that is wrong for this kind (e.g. NEXT on
+          ;; a project).  Omit the status rather than erroring -- the shadow
+          ;; merge keeps the prior status (or a type default for a new entity),
+          ;; so a stray keyword no longer aborts the whole sync.
+          (display-warning
+           'mindwtr
+           (format "heading %S has TODO keyword %s, which is not a valid %s status; leaving its status unchanged"
+                   title todo kind)
+           :warning)))))
     (when (eq kind 'task)
       (let* ((body (mindwtr-parse--body))
              (pr (nth 3 (org-heading-components))))
