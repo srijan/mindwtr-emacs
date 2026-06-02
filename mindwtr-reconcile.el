@@ -1,8 +1,11 @@
 ;;; mindwtr-reconcile.el --- Apply merged appdata into the org buffer -*- lexical-binding: t; -*-
 ;;; Commentary:
-;; Updates the current buffer to reflect a merged AppData by id, editing
-;; recognized fields in place and preserving org-only drawers (LOGBOOK,
-;; unknown PROPERTIES) and the user's point.
+;; Rebuilds the current buffer in full from a merged AppData via the canonical
+;; renderer (`mindwtr-render-appdata').  Per-id org-only content (LOGBOOK/CLOCK
+;; drawers, unknown PROPERTIES) is collected beforehand and grafted back so it
+;; survives the rebuild; point is restored to the heading of the entity it was
+;; on (column / in-body position is not preserved).  `mindwtr-reconcile-restore-entity'
+;; still does an in-place single-heading rebuild for the conflict-restore action.
 ;;; Code:
 
 (require 'org)
@@ -136,8 +139,9 @@ region and are left untouched."
                                             :updatedAt (plist-get entity :updatedAt)))))))
 
 (defun mindwtr-reconcile--collect-org-only ()
-  "Return a hash id -> (:body STR :extra PLIST) of org-only content for every
-MW_ID heading in the current buffer, so a full rebuild can carry it across."
+  "Return a hash id -> (:body STR :extra PLIST) of preserved org-only content.
+This is collected for every MW_ID heading in the current buffer, so a full
+rebuild can carry it across."
   (let ((h (make-hash-table :test 'equal)))
     (org-map-entries
      (lambda ()
