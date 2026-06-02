@@ -135,32 +135,52 @@ region and are left untouched."
                                       (list :createdAt (plist-get entity :createdAt)
                                             :updatedAt (plist-get entity :updatedAt)))))))
 
-(defun mindwtr-reconcile-buffer (merged)
-  "Reconcile the current buffer to reflect MERGED AppData."
-  (mindwtr-parse-ensure-keywords)
+(defun mindwtr-reconcile--collect-org-only ()
+  "Return a hash id -> (:body STR :extra PLIST) of org-only content for every
+MW_ID heading in the current buffer, so a full rebuild can carry it across."
+  (let ((h (make-hash-table :test 'equal)))
+    (org-map-entries
+     (lambda ()
+       (let ((id (mindwtr-parse--prop "MW_ID"))
+             (kind (mindwtr-parse--prop "MW_TYPE")))
+         (when (and id kind (not (string= kind "container")))
+           (let* ((end (save-excursion (outline-next-heading) (point)))
+                  (body (mindwtr-reconcile--preserved-body
+                         (intern kind) (mindwtr-reconcile--body-start) end))
+                  (extra (mindwtr-parse--extra-props)))
+             (when (or body extra)
+               (puthash id (list :body body :extra extra) h)))))))
+    h))
+
+(defun mindwtr-reconcile--id-at-point ()
+  "Return the MW_ID of the entity heading containing point, or nil."
   (save-excursion
-    (let ((markers (mindwtr-reconcile--id-markers)))
-      (dolist (key '(:tasks :projects :sections :areas))
-        (dolist (e (plist-get merged key))
-          (when (plist-get e :deletedAt)
-            (let ((m (gethash (plist-get e :id) markers)))
-              (when m (goto-char m) (org-back-to-heading t)
-                    (org-cut-subtree) (remhash (plist-get e :id) markers))))))
-      (dolist (key '(:areas :projects :sections :tasks))
-        (let ((kind (intern (substring (symbol-name key) 1
-                                       (1- (length (symbol-name key)))))))
-          (dolist (e (plist-get merged key))
-            (unless (plist-get e :deletedAt)
-              (let ((m (gethash (plist-get e :id) markers)))
-                (if m
-                    ;; Update in place: `--rebuild-entry' inserts-before-deletes,
-                    ;; so existing markers stay valid -- no rescan needed.
-                    (progn (goto-char m)
-                           (mindwtr-reconcile--rebuild-entry e kind))
-                  ;; A new heading's id is not yet in the map and a later entity
-                  ;; may need it as a container; rescan so it is resolvable.
-                  (mindwtr-reconcile--insert-entity e kind markers)
-                  (setq markers (mindwtr-reconcile--id-markers)))))))))))
+    (when (ignore-errors (org-back-to-heading t) t)
+      (let ((id (mindwtr-parse--prop "MW_ID")))
+        (while (and (not id) (org-up-heading-safe))
+          (setq id (mindwtr-parse--prop "MW_ID")))
+        id))))
+
+(defun mindwtr-reconcile--goto-id (id)
+  "Move point to the heading whose MW_ID is ID, if present."
+  (when id
+    (goto-char (point-min))
+    (let ((re (format ":MW_ID: *%s *$" (regexp-quote id))))
+      (when (re-search-forward re nil t)
+        (org-back-to-heading t)))))
+
+(defun mindwtr-reconcile-buffer (merged)
+  "Rebuild the current buffer to the canonical GTD-list layout of MERGED.
+Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
+and point is restored to the entity it was on."
+  (mindwtr-parse-ensure-keywords)
+  (let ((org-only (mindwtr-reconcile--collect-org-only))
+        (at-id (mindwtr-reconcile--id-at-point)))
+    (let ((inhibit-message t))
+      (erase-buffer)
+      (insert (mindwtr-render-appdata merged org-only)))
+    (goto-char (point-min))
+    (mindwtr-reconcile--goto-id at-id)))
 
 (defun mindwtr-reconcile--find-parsed (id)
   "Parse the buffer and return the entity whose id is ID, or nil."
@@ -185,7 +205,8 @@ the next sync proposes it again.  Returns:
                by a remote deletion).
 The caller surfaces `partial'/nil so a lost edit is never silently
 reported as restored; the user falls back to the pre-sync backup."
-  (let ((m (gethash (plist-get entity :id) (mindwtr-reconcile--id-markers))))
+  (let ((m (gethash (plist-get entity :id) (mindwtr-reconcile--id-markers)))
+        (mindwtr-render-area-names (mindwtr-render--area-name-map (mindwtr-parse-buffer))))
     (if (not m)
         nil
       (save-excursion

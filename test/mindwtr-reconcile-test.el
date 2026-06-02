@@ -284,6 +284,51 @@ so it must report `partial' (honest) rather than falsely claim success."
     (should (null (mindwtr-reconcile-restore-entity
                    '(:id "gone" :title "x" :status "next") 'task)))))
 
+(ert-deftest mindwtr-reconcile-builds-list-layout ()
+  (with-temp-buffer
+    (let ((org-inhibit-startup t)) (insert "") (org-mode))
+    (let ((merged '(:areas ((:id "a1" :name "Personal" :order 0))
+                    :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+                    :sections nil
+                    :tasks ((:id "t1" :title "loose next" :status "next")
+                            (:id "t2" :title "child" :status "next" :projectId "p1"))
+                    :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (search-forward "* Next Actions" nil t))
+      (should (save-excursion (goto-char (point-min)) (search-forward "loose next" nil t)))
+      (should (save-excursion (goto-char (point-min)) (search-forward "* Projects" nil t)))
+      (should (save-excursion (goto-char (point-min)) (search-forward "child" nil t)))
+      (should (save-excursion (goto-char (point-min)) (search-forward "* Areas of Focus" nil t))))))
+
+(ert-deftest mindwtr-reconcile-preserves-logbook-into-new-layout ()
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      ;; an existing buffer (any layout) with a LOGBOOK under task t1
+      (insert "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              ":LOGBOOK:\n- note KEEPME\n:END:\n")
+      (org-mode))
+    (let ((merged '(:areas nil :projects nil :sections nil
+                    :tasks ((:id "t1" :title "renamed" :status "next"))
+                    :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (search-forward "renamed" nil t))
+      (should (save-excursion (goto-char (point-min)) (search-forward "KEEPME" nil t))))))
+
+(ert-deftest mindwtr-reconcile-archived-not-rendered ()
+  (with-temp-buffer
+    (let ((org-inhibit-startup t)) (insert "") (org-mode))
+    (let ((merged '(:areas nil :projects nil :sections nil
+                    :tasks ((:id "t1" :title "keep me" :status "next")
+                            (:id "t2" :title "archived one" :status "archived"))
+                    :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (search-forward "keep me" nil t))
+      (should-not (save-excursion (goto-char (point-min)) (search-forward "archived one" nil t))))))
+
 (ert-deftest mindwtr-reconcile-low-priority-does-not-crash ()
   "Updating a task to :priority \"low\" writes [#D] without erroring."
   (with-temp-buffer
