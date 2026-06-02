@@ -448,3 +448,48 @@ default so validation does not abort."
     ;; the candidate validates (no invalid nil status)
     (should (mindwtr-model-validate-appdata
              (mindwtr-sync--strip-internal-keys cand)))))
+
+(ert-deftest mindwtr-sync-once-threads-parse-warnings-into-report ()
+  "A type-invalid keyword surfaces in the return plist and the report buffer."
+  (let* ((dir (make-temp-file "mw-warn" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2"))
+                           :body put-body))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              ;; NEXT is task-only; on a project it is type-invalid.  The new
+              ;; title makes the entity dirty so the full cycle (not the noop
+              ;; path) runs and renders the report.
+              (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+                      "** NEXT Build the deck\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save
+             '(:tasks nil
+               :projects ((:id "p1" :title "old name" :status "active" :rev 1
+                           :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+               :sections nil :areas nil :settings nil))
+            (let ((result (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (plist-get result :ok))
+              (let ((ws (plist-get result :warnings)))
+                (should (= (length ws) 1))
+                (should (string= (plist-get (car ws) :keyword) "NEXT"))
+                (should (string= (plist-get (car ws) :id) "p1")))
+              (with-current-buffer "*Mindwtr Sync Report*"
+                (goto-char (point-min))
+                (should (search-forward "invalid status keyword" nil t))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))

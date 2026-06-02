@@ -86,11 +86,14 @@ than falsely reporting success."
          (message "%s is no longer in the buffer (removed on the server).%s"
                   id (mindwtr-report--backup-hint)))))))
 
-(defun mindwtr-report-show (stats conflicts skew-warning &optional backup-file target-buffer)
+(defun mindwtr-report-show (stats conflicts skew-warning &optional backup-file target-buffer parse-warnings)
   "Display STATS, CONFLICTS, SKEW-WARNING; return the report buffer.
 BACKUP-FILE, when given, is the pre-sync buffer snapshot and is surfaced
 so a lost edit can be recovered from disk.  TARGET-BUFFER is the org
-buffer a restore action writes back into."
+buffer a restore action writes back into.  PARSE-WARNINGS, when given, is
+a list of plists (:id :title :keyword :kind) for headings whose TODO
+keyword was not valid for their entity kind; they are listed so a stray
+keyword is visible here rather than silently ignored."
   (let ((buf (get-buffer-create "*Mindwtr Sync Report*")))
     (with-current-buffer buf
       (mindwtr-report-mode)
@@ -107,6 +110,16 @@ buffer a restore action writes back into."
                         (or (plist-get stats :deleted) 0)))
         (when skew-warning
           (insert (format "⚠ Clock skew: %s\n\n" skew-warning)))
+        (when parse-warnings
+          (insert (format "⚠ %d heading(s) with an invalid status keyword (status left unchanged):\n"
+                          (length parse-warnings)))
+          (dolist (w parse-warnings)
+            (insert (format "  • %s %S — %s is not a valid %s status\n"
+                            (or (plist-get w :id) "(new)")
+                            (plist-get w :title)
+                            (plist-get w :keyword)
+                            (plist-get w :kind))))
+          (insert "\n"))
         (when backup-file
           (insert (format "Pre-sync backup: %s\n\n" backup-file)))
         (if (null conflicts)
@@ -137,7 +150,7 @@ buffer a restore action writes back into."
     ;; Only steal a window when there is something to act on; a clean
     ;; auto-sync should not pop the report every few seconds.  The buffer is
     ;; refreshed regardless, so it is there when the user looks for it.
-    (when (or conflicts skew-warning)
+    (when (or conflicts skew-warning parse-warnings)
       (display-buffer buf))
     buf))
 

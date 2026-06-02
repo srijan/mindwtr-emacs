@@ -252,3 +252,25 @@ keyword into the title; it parses with no :status and warns."
         (should (= (length (plist-get ad :tasks)) 1))
         (should (null (plist-get task :projectId)))
         (should (null (plist-get task :areaId)))))))
+
+(ert-deftest mindwtr-parse-buffer-accumulates-invalid-keyword-warnings ()
+  "A type-invalid keyword is recorded in `mindwtr-parse-warnings'."
+  (mindwtr-parse-test--with
+      (concat "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** NEXT Build the deck\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+    (mindwtr-parse-buffer)
+    (let ((ws (mindwtr-parse-warnings)))
+      (should (= (length ws) 1))
+      (let ((w (car ws)))
+        (should (string= (plist-get w :id) "p1"))
+        (should (string= (plist-get w :title) "Build the deck"))
+        (should (string= (plist-get w :keyword) "NEXT"))
+        (should (eq (plist-get w :kind) 'project))))))
+
+(ert-deftest mindwtr-parse-buffer-clean-has-no-warnings ()
+  "A valid buffer accumulates no warnings (and a fresh parse resets them)."
+  (mindwtr-parse-test--with
+      (concat "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE Build the deck\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+    (mindwtr-parse-buffer)
+    (should (null (mindwtr-parse-warnings)))))

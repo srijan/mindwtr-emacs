@@ -102,3 +102,18 @@ the synced buffer so the next sync will push it."
               (should (search-forward "mine again" nil t))
               (should-not (save-excursion (search-forward "theirs version" nil t)))))
         (kill-buffer report)))))
+
+(ert-deftest mindwtr-report-shows-parse-warnings ()
+  "Type-invalid keyword warnings are surfaced in the report buffer."
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 0 :deleted 0)
+              nil nil nil nil
+              '((:id "p1" :title "Build the deck" :keyword "NEXT" :kind project)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "invalid status keyword" nil t))
+          (should (save-excursion (goto-char (point-min)) (search-forward "Build the deck" nil t)))
+          (should (save-excursion (goto-char (point-min)) (search-forward "NEXT" nil t)))
+          (should (save-excursion (goto-char (point-min)) (search-forward "p1" nil t))))
+      (kill-buffer buf))))

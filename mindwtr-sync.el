@@ -277,6 +277,7 @@ Return (:ok t :conflicts LIST) or signals on hard error."
     (let* ((shadow (mindwtr-shadow-load))
            (device (mindwtr-shadow-device-id))
            (local (mindwtr-parse-buffer))
+           (parse-warnings (mindwtr-parse-warnings))
            ;; Capture the tick AFTER parsing: `mindwtr-parse-buffer' may call
            ;; `mindwtr-parse-ensure-keywords' which re-inits `org-mode', and a
            ;; mode re-init can bump `buffer-chars-modified-tick' without the
@@ -299,7 +300,13 @@ Return (:ok t :conflicts LIST) or signals on hard error."
       (if (and (not local-dirty)
                shadow-etag (not (string-empty-p shadow-etag))
                (equal (mindwtr-api-head-etag) shadow-etag))
-          (list :ok t :noop t :conflicts nil :stats stats :skew nil)
+          (progn
+            ;; Even when nothing needs pushing, a stray keyword should not be
+            ;; silently swallowed -- surface it in the report.
+            (when parse-warnings
+              (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
+            (list :ok t :noop t :conflicts nil :stats stats :skew nil
+                  :warnings parse-warnings))
         (let* ((candidate (mindwtr-sync-build-candidate local shadow device now))
                (wire (mindwtr-sync--strip-internal-keys candidate)))
           (mindwtr-model-validate-appdata wire)
@@ -324,8 +331,9 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             (mindwtr-reconcile-buffer merged)
             (mindwtr-shadow-save merged)
             (mindwtr-shadow-set-etag (plist-get got :etag))
-            (mindwtr-report-show stats conflicts skew backup-file (current-buffer))
-            (list :ok t :conflicts conflicts :stats stats :skew skew)))))))
+            (mindwtr-report-show stats conflicts skew backup-file (current-buffer) parse-warnings)
+            (list :ok t :conflicts conflicts :stats stats :skew skew
+                  :warnings parse-warnings)))))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here

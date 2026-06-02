@@ -117,6 +117,19 @@ Description is the prose body minus planning, drawers, and checklist items."
   "Hash name->id for resolving :MW_AREA:.
 Dynamically bound by `mindwtr-parse-buffer'.")
 
+(defvar mindwtr-parse--warnings nil
+  "Accumulator of data-quality warnings for the current `mindwtr-parse-buffer'.
+Each element is a plist (:id ID :title TITLE :keyword KW :kind KIND) recording
+a heading whose TODO keyword was not valid for its entity kind.  Reset at the
+start of every `mindwtr-parse-buffer'; read afterwards via
+`mindwtr-parse-warnings' so the sync report can surface them.")
+
+(defun mindwtr-parse-warnings ()
+  "Return warnings accumulated by the most recent `mindwtr-parse-buffer'.
+A list of plists (:id :title :keyword :kind) in document order; empty when
+the parse was clean."
+  (reverse mindwtr-parse--warnings))
+
 (defun mindwtr-parse--build-area-names ()
   "Scan the current buffer for area headings, returning a name->id hash.
 Warns on a duplicate name (keeps the first id)."
@@ -161,12 +174,10 @@ Warns on a duplicate name (keeps the first id)."
           ;; An org-recognized keyword that is wrong for this kind (e.g. NEXT on
           ;; a project).  Omit the status rather than erroring -- the shadow
           ;; merge keeps the prior status (or a type default for a new entity),
-          ;; so a stray keyword no longer aborts the whole sync.
-          (display-warning
-           'mindwtr
-           (format "heading %S has TODO keyword %s, which is not a valid %s status; leaving its status unchanged"
-                   title todo kind)
-           :warning)))))
+          ;; so a stray keyword no longer aborts the whole sync.  Record it so
+          ;; the sync report can surface it (see `mindwtr-parse-warnings').
+          (push (list :id id :title title :keyword todo :kind kind)
+                mindwtr-parse--warnings)))))
     (when (eq kind 'task)
       (let* ((body (mindwtr-parse--body))
              (pr (nth 3 (org-heading-components))))
@@ -225,6 +236,7 @@ Warns on a duplicate name (keeps the first id)."
 
 (defun mindwtr-parse-buffer ()
   "Parse the current org buffer into a content appdata plist."
+  (setq mindwtr-parse--warnings nil)
   (mindwtr-parse-ensure-keywords)
   (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
         tasks projects sections areas)
