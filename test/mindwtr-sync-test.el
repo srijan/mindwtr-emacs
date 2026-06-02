@@ -331,6 +331,7 @@ shadow-saves without raw-byte corruption or a coding-system prompt."
          (t2 (seq-find (lambda (e) (equal (plist-get e :id) "t2")) (plist-get cand :tasks))))
     ;; t2 is echoed (still archived), NOT freshly tombstoned with :deletedAt NOW
     (should t2)
+    (should (string= (plist-get t2 :status) "archived"))
     (should-not (string= (or (plist-get t2 :deletedAt) "") "NOW"))
     ;; and stats does not count it as a delete
     (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 0))))

@@ -111,6 +111,9 @@ the wire)."
                 (setq tomb (plist-put tomb :rev (1+ (or (plist-get se :rev) 0))))
                 (setq tomb (plist-put tomb :revBy device-id))
                 (push (mindwtr-sync--strip-device-local tomb) out)))))
+        ;; Archived shadow entities absent from org are echoed verbatim (not
+        ;; tombstoned): the app owns archived state and org never renders it,
+        ;; so a missing org heading is not a user deletion.
         (dolist (se (plist-get shadow key))
           (let ((id (plist-get se :id)))
             (when (and (not (gethash id seen))
@@ -189,7 +192,8 @@ the report's restore action rebuild the entity in the buffer."
   "Return (:created C :updated U :deleted D) for LOCAL parse vs SHADOW.
 A create is a local entity not in the shadow (including a new heading that
 has no id yet); an update is a local entity whose signature differs from
-its shadow twin; a delete is a live shadow entity absent from LOCAL."
+its shadow twin; a delete is a non-archived live shadow entity absent from
+LOCAL."
   (let ((created 0) (updated 0) (deleted 0))
     (dolist (key mindwtr-sync--entity-keys)
       (let ((idx (mindwtr-shadow-index shadow key))
