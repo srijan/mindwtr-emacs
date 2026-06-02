@@ -103,16 +103,26 @@ with fast-access keys and the done-state separator."
 
 (ert-deftest mindwtr-model-list-roles-and-titles ()
   (should (equal mindwtr-model-list-roles
-                 '("inbox" "next-actions" "waiting" "someday" "reference" "projects" "areas")))
-  (should (string= (mindwtr-model-list-title "next-actions") "Next Actions"))
+                 '("inbox" "single-actions" "projects"
+                   "someday" "someday-single-actions" "someday-projects"
+                   "reference" "areas")))
+  (should (string= (mindwtr-model-list-title "single-actions") "Single Actions"))
+  (should (string= (mindwtr-model-list-title "someday-single-actions") "Single Actions"))
+  (should (string= (mindwtr-model-list-title "someday-projects") "Projects"))
   (should (string= (mindwtr-model-list-title "areas") "Areas of Focus")))
 
 (ert-deftest mindwtr-model-status->list-maps-standalone-statuses ()
   (should (string= (mindwtr-model-status->list "inbox") "inbox"))
-  (should (string= (mindwtr-model-status->list "next") "next-actions"))
-  (should (string= (mindwtr-model-status->list "done") "next-actions"))
-  (should (string= (mindwtr-model-status->list "waiting") "waiting"))
-  (should (string= (mindwtr-model-status->list "someday") "someday"))
+  (should (string= (mindwtr-model-status->list "next") "single-actions"))
+  (should (string= (mindwtr-model-status->list "waiting") "single-actions"))
+  (should (string= (mindwtr-model-status->list "done") "single-actions"))
+  (should (string= (mindwtr-model-status->list "someday") "someday-single-actions"))
   (should (string= (mindwtr-model-status->list "reference") "reference"))
   ;; archived has no list -> not rendered
   (should (null (mindwtr-model-status->list "archived"))))
+
+(ert-deftest mindwtr-model-project-status->list-maps-project-statuses ()
+  (should (string= (mindwtr-model-project-status->list "active") "projects"))
+  (should (string= (mindwtr-model-project-status->list "waiting") "projects"))
+  (should (string= (mindwtr-model-project-status->list "someday") "someday-projects"))
+  (should (null (mindwtr-model-project-status->list "archived"))))
