@@ -29,13 +29,6 @@
          (when id (puthash id (point-marker) h)))))
     h))
 
-(defun mindwtr-reconcile--container-marker (markers entity)
-  "Return marker of ENTITY's container heading, or nil for top-level."
-  (let ((parent (or (plist-get entity :sectionId)
-                    (plist-get entity :projectId)
-                    (plist-get entity :areaId))))
-    (and parent (gethash parent markers))))
-
 (defun mindwtr-reconcile--body-start ()
   "Return the position just after this entry's PROPERTIES drawer.
 Point must be at the heading.  Falls back to the line after the heading
@@ -121,22 +114,6 @@ region and are left untouched."
     (goto-char beg)
     (insert rendered)
     (delete-region (point) (+ (point) (- end beg)))))
-
-(defun mindwtr-reconcile--insert-entity (entity kind markers)
-  "Insert ENTITY (kind KIND) as a new heading under its container."
-  (let* ((cmark (mindwtr-reconcile--container-marker markers entity))
-         (level (if cmark
-                    (1+ (save-excursion (goto-char cmark) (org-current-level)))
-                  1)))
-    (if cmark
-        (progn (goto-char cmark)
-               (org-end-of-subtree t t)
-               (unless (bolp) (insert "\n")))
-      (goto-char (point-max)) (unless (bolp) (insert "\n")))
-    (let ((e (plist-put (copy-sequence entity) :mw-kind kind)))
-      (insert (mindwtr-render-heading e level
-                                      (list :createdAt (plist-get entity :createdAt)
-                                            :updatedAt (plist-get entity :updatedAt)))))))
 
 (defun mindwtr-reconcile--collect-org-only ()
   "Return a hash id -> (:body STR :extra PLIST) of preserved org-only content.
