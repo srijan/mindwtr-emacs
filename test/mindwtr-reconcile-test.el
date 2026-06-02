@@ -295,7 +295,7 @@ so it must report `partial' (honest) rather than falsely claim success."
                     :settings nil)))
       (mindwtr-reconcile-buffer merged)
       (goto-char (point-min))
-      (should (search-forward "* Next Actions" nil t))
+      (should (search-forward "* Single Actions" nil t))
       (should (save-excursion (goto-char (point-min)) (search-forward "loose next" nil t)))
       (should (save-excursion (goto-char (point-min)) (search-forward "* Projects" nil t)))
       (should (save-excursion (goto-char (point-min)) (search-forward "child" nil t)))
@@ -355,9 +355,13 @@ emptied the user's file."
               "** NEXT keep me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
       (org-mode))
     (let ((before (buffer-string))
-          ;; a project with an unknown status makes mindwtr-render-appdata signal
-          (merged '(:areas nil :projects ((:id "p1" :title "P" :status "bogus"))
-                    :sections nil :tasks nil :settings nil)))
+          ;; a task with an unknown status under a project makes
+          ;; mindwtr-render-appdata signal (project-subtree renders its child
+          ;; tasks unconditionally, so status->keyword aborts on "bogus")
+          (merged '(:areas nil :projects ((:id "p1" :title "P" :status "active"))
+                    :sections nil
+                    :tasks ((:id "t1" :title "x" :status "bogus" :projectId "p1"))
+                    :settings nil)))
       (should-error (mindwtr-reconcile-buffer merged))
       ;; buffer content is unchanged -- nothing was erased
       (should (string= (buffer-string) before)))))

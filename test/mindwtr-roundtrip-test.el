@@ -126,12 +126,17 @@ and the signature normalizes items to (:title :isCompleted) so the lost
   "render-appdata -> parse-buffer preserves every entity's content signature,
 with areaId via MW_AREA and projectId via nesting."
   (let* ((ad '(:areas ((:id "a1" :name "Personal" :order 0))
-               :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1" :order 0))
+               :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1" :order 0)
+                          (:id "pw" :title "Waiting proj" :status "waiting" :order 7)
+                          (:id "ps" :title "Someday proj" :status "someday" :order 8))
                :sections nil
                :tasks ((:id "t1" :mw-kind task :title "loose" :status "next"
                         :areaId "a1" :contexts ("@home") :order 0)
                        (:id "t2" :mw-kind task :title "child" :status "next"
-                        :projectId "p1" :order 0))
+                        :projectId "p1" :order 0)
+                       (:id "tsd" :mw-kind task :title "Someday single" :status "someday" :order 9)
+                       (:id "tsp" :mw-kind task :title "Someday proj task" :status "next"
+                        :projectId "ps" :order 0))
                :settings nil))
          (text (mindwtr-render-appdata ad)))
     (with-temp-buffer
