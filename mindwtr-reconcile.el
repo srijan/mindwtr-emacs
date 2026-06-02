@@ -155,11 +155,15 @@ rebuild can carry it across."
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
 and point is restored to the entity it was on."
   (mindwtr-parse-ensure-keywords)
-  (let ((org-only (mindwtr-reconcile--collect-org-only))
-        (at-id (mindwtr-reconcile--id-at-point)))
+  (let* ((org-only (mindwtr-reconcile--collect-org-only))
+         (at-id (mindwtr-reconcile--id-at-point))
+         ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
+         ;; status from the server), the buffer is left intact rather than
+         ;; wiped between erase and insert.
+         (rendered (mindwtr-render-appdata merged org-only)))
     (let ((inhibit-message t))
       (erase-buffer)
-      (insert (mindwtr-render-appdata merged org-only)))
+      (insert rendered))
     (goto-char (point-min))
     (mindwtr-reconcile--goto-id at-id)))
 

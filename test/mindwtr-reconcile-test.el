@@ -344,3 +344,20 @@ so it must report `partial' (honest) rather than falsely claim success."
       (mindwtr-reconcile-buffer merged)
       (goto-char (point-min))
       (should (search-forward "[#D]" nil t)))))
+
+(ert-deftest mindwtr-reconcile-render-error-leaves-buffer-intact ()
+  "If rendering the merged appdata errors, the buffer is NOT wiped.
+Regression: erase-buffer ran before insert, so a bad server status
+emptied the user's file."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT keep me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let ((before (buffer-string))
+          ;; a project with an unknown status makes mindwtr-render-appdata signal
+          (merged '(:areas nil :projects ((:id "p1" :title "P" :status "bogus"))
+                    :sections nil :tasks nil :settings nil)))
+      (should-error (mindwtr-reconcile-buffer merged))
+      ;; buffer content is unchanged -- nothing was erased
+      (should (string= (buffer-string) before)))))
