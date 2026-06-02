@@ -120,9 +120,21 @@ returns it re-encoded through JSON so nil/false/[] normalize as on the wire."
 (defconst mindwtr-smoke-test--initial
   '(:tasks ((:id "t-keep" :title "keep me" :status "next" :rev 1
              :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-01T00:00:00Z"
-             :contexts ("@computer") :tags nil))
-    :projects nil :sections nil :areas nil :settings nil)
-  "A minimal but valid server snapshot for offline phase tests.")
+             :contexts ("@computer") :tags nil :areaId "a-work")
+            (:id "t-child" :title "child task" :status "next" :rev 1
+             :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-01T00:00:00Z"
+             :projectId "p-1" :contexts nil :tags nil))
+    :projects ((:id "p-1" :title "Some Project" :status "active" :areaId "a-work"
+                :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                :updatedAt "2026-01-01T00:00:00Z"))
+    :sections nil
+    :areas ((:id "a-work" :name "Work" :rev 1
+             :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-01T00:00:00Z"))
+    :settings nil)
+  "A minimal but valid server snapshot for offline phase tests.
+Exercises the new GTD-list layout: a standalone task carrying an area
+\(round-tripped via `:MW_AREA:'), an active project in that area, and a
+task nested under the project (`:projectId' round-tripped via nesting).")
 
 (ert-deftest mindwtr-smoke-readonly-phases-pass-on-clean-data ()
   (let* ((mindwtr-api-base-url "https://mock/")
