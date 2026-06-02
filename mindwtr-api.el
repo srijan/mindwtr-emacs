@@ -51,18 +51,23 @@ REQ is (:method :url :headers :body).  Returns (:status :headers :body)."
           (url-request-extra-headers (plist-get req :headers))
           (url-request-data (when (plist-get req :body)
                               (encode-coding-string (plist-get req :body) 'utf-8))))
-      (with-current-buffer (url-retrieve-synchronously (plist-get req :url) t)
-        (goto-char (point-min))
-        (let* ((status (progn (re-search-forward "HTTP/[0-9.]+ \\([0-9]+\\)" nil t)
-                              (string-to-number (or (match-string 1) "0"))))
-               (etag (progn (goto-char (point-min))
-                            (when (re-search-forward "^ETag: *\\(.*\\)$" nil t)
-                              (string-trim (match-string 1)))))
-               (body (progn (goto-char (point-min))
-                            (when (re-search-forward "\n\n" nil t)
-                              (buffer-substring-no-properties (point) (point-max))))))
-          (list :status status :headers (when etag (list (cons "ETag" etag)))
-                :body body))))))
+      (let ((buf (url-retrieve-synchronously (plist-get req :url) t)))
+        ;; url-retrieve-synchronously hands back a fresh *http HOST:PORT*
+        ;; buffer that the caller owns; kill it so requests don't leak.
+        (unwind-protect
+            (with-current-buffer buf
+              (goto-char (point-min))
+              (let* ((status (progn (re-search-forward "HTTP/[0-9.]+ \\([0-9]+\\)" nil t)
+                                    (string-to-number (or (match-string 1) "0"))))
+                     (etag (progn (goto-char (point-min))
+                                  (when (re-search-forward "^ETag: *\\(.*\\)$" nil t)
+                                    (string-trim (match-string 1)))))
+                     (body (progn (goto-char (point-min))
+                                  (when (re-search-forward "\n\n" nil t)
+                                    (buffer-substring-no-properties (point) (point-max))))))
+                (list :status status :headers (when etag (list (cons "ETag" etag)))
+                      :body body)))
+          (when (buffer-live-p buf) (kill-buffer buf)))))))
 
 (defvar mindwtr-api-http-function #'mindwtr-api--default-http
   "Function taking a request plist and returning a response plist.")
