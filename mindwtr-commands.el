@@ -7,6 +7,7 @@
 ;; a project stays on native `org-refile'.
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
@@ -104,6 +105,32 @@ entity already sits directly under the target container."
                   (org-end-of-subtree t t)
                   (org-paste-subtree level)))
             (set-marker target nil)))))))
+
+(defun mindwtr-commands--cycle (dir)
+  "Cycle the entity at point by DIR (+1/-1) through its type-valid keywords,
+then relocate.  Falls back to plain org shift-cycling off Mindwtr headings."
+  (let ((kind (mindwtr-commands--kind-at-point)))
+    (if (not (memq kind '(task project)))
+        (call-interactively (if (> dir 0) #'org-shiftright #'org-shiftleft))
+      (let* ((kws (mapcar #'car (mindwtr-model-status-choices kind)))
+             (cur (save-excursion (org-back-to-heading t) (org-get-todo-state)))
+             (idx (and cur (cl-position cur kws :test #'string=)))
+             (next (cond ((null idx) (if (> dir 0) 0 (1- (length kws))))
+                         (t (mod (+ idx dir) (length kws))))))
+        (save-excursion (org-back-to-heading t) (org-todo (nth next kws)))
+        (mindwtr-commands--relocate kind)))))
+
+;;;###autoload
+(defun mindwtr-cycle-status-forward ()
+  "Cycle the entity at point to its next type-valid status, then relocate."
+  (interactive)
+  (mindwtr-commands--cycle 1))
+
+;;;###autoload
+(defun mindwtr-cycle-status-backward ()
+  "Cycle the entity at point to its previous type-valid status, then relocate."
+  (interactive)
+  (mindwtr-commands--cycle -1))
 
 (provide 'mindwtr-commands)
 ;;; mindwtr-commands.el ends here

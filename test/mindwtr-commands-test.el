@@ -116,4 +116,29 @@
     (mindwtr-commands--relocate 'task)
     (should (string= (mindwtr-commands-test--parent-list-of "Bye") "single-actions"))))
 
+(ert-deftest mindwtr-commands-cycle-task-skips-active ()
+  "Forward-cycling a task walks only task keywords (never ACTIVE) and relocates."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Cyc" :status "inbox")) :settings nil)
+    (goto-char (point-min)) (re-search-forward "Cyc") (org-back-to-heading t)
+    ;; inbox -> next (first forward step from INBOX)
+    (mindwtr-cycle-status-forward)
+    (save-excursion (goto-char (point-min)) (re-search-forward "Cyc") (org-back-to-heading t)
+      (should (string= (org-get-todo-state) "NEXT")))
+    (should (string= (mindwtr-commands-test--parent-list-of "Cyc") "single-actions"))))
+
+(ert-deftest mindwtr-commands-cycle-project-only-project-keywords ()
+  "Cycling a project never lands on a task-only keyword."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "PCyc" :status "active")) :sections nil
+        :tasks nil :settings nil)
+    (let ((valid '("ACTIVE" "SOMEDAY" "WAIT" "ARCH")))
+      (dotimes (_ 6)
+        (goto-char (point-min)) (re-search-forward "PCyc") (org-back-to-heading t)
+        (mindwtr-cycle-status-forward)
+        (goto-char (point-min)) (re-search-forward "PCyc") (org-back-to-heading t)
+        (should (member (org-get-todo-state) valid))))))
+
 ;;; mindwtr-commands-test.el ends here
