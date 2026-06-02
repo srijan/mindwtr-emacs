@@ -218,11 +218,12 @@ entity of that type uses on this instance."
 
 (defun mindwtr-smoke--render-appdata (appdata)
   "Erase the current buffer and render APPDATA into it as a Mindwtr org file."
-  (erase-buffer)
   (let ((org-inhibit-startup t))
-    (insert "#+TITLE: mw smoke\n")
     (org-mode))
   (mindwtr-parse-ensure-keywords)
+  ;; `mindwtr-reconcile-buffer' erases and rebuilds the whole buffer, so no
+  ;; pre-population is needed here -- only the major mode and keyword set,
+  ;; which the rebuild does not establish on its own.
   (mindwtr-reconcile-buffer appdata))
 
 ;;;; Read-only phases
