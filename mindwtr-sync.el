@@ -70,11 +70,50 @@ the wire)."
     'unchanged)
    (t 'update)))
 
+(defun mindwtr-sync--live-container-ids (shadow)
+  "Return (PROJECTS . SECTIONS): hashes of SHADOW container ids that render.
+A project renders unless it is archived or tombstoned.  A section renders
+only when it is not tombstoned and its parent project renders.  Used to
+decide whether a shadow entity's absence from org is EXPECTED (its parent
+is hidden) rather than a user deletion."
+  (let ((projs (make-hash-table :test 'equal))
+        (secs (make-hash-table :test 'equal)))
+    (dolist (p (plist-get shadow :projects))
+      (let ((id (plist-get p :id)))
+        (when (and id (not (plist-get p :deletedAt))
+                   (not (equal (plist-get p :status) "archived")))
+          (puthash id t projs))))
+    (dolist (s (plist-get shadow :sections))
+      (let ((id (plist-get s :id)) (pid (plist-get s :projectId)))
+        (when (and id (not (plist-get s :deletedAt)) pid (gethash pid projs))
+          (puthash id t secs))))
+    (cons projs secs)))
+
+(defun mindwtr-sync--rendered-absent-p (se kind live)
+  "Non-nil if shadow entity SE of KIND is EXPECTED to be absent from org.
+True when SE is archived, or its parent container does not render, or (for a
+standalone task) its status maps to no list.  Such an entity must not be
+tombstoned for being missing from the buffer; it is echoed verbatim instead.
+LIVE is (PROJECTS . SECTIONS) from `mindwtr-sync--live-container-ids'."
+  (or (equal (plist-get se :status) "archived")
+      (pcase kind
+        ('task
+         (let ((sid (plist-get se :sectionId)) (pid (plist-get se :projectId)))
+           (cond (sid (not (gethash sid (cdr live))))
+                 (pid (not (gethash pid (car live))))
+                 (t (null (mindwtr-model-status->list (plist-get se :status)))))))
+        ('section
+         (let ((pid (plist-get se :projectId)))
+           (not (and pid (gethash pid (car live))))))
+        (_ nil))))
+
 (defun mindwtr-sync-build-candidate (local shadow device-id now)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW."
-  (let ((cand (list :settings (plist-get shadow :settings))))
+  (let ((cand (list :settings (plist-get shadow :settings)))
+        (live (mindwtr-sync--live-container-ids shadow)))
     (dolist (key mindwtr-sync--entity-keys)
       (let* ((shadow-idx (mindwtr-shadow-index shadow key))
+             (kind (mindwtr-sync--key->kind key))
              (seen (make-hash-table :test 'equal))
              out)
         (dolist (le (plist-get local key))
@@ -105,20 +144,21 @@ the wire)."
           (let ((id (plist-get se :id)))
             (unless (or (gethash id seen)
                         (plist-get se :deletedAt)
-                        (equal (plist-get se :status) "archived"))
+                        (mindwtr-sync--rendered-absent-p se kind live))
               (let ((tomb (copy-sequence se)))
                 (setq tomb (plist-put tomb :deletedAt now))
                 (setq tomb (plist-put tomb :rev (1+ (or (plist-get se :rev) 0))))
                 (setq tomb (plist-put tomb :revBy device-id))
                 (push (mindwtr-sync--strip-device-local tomb) out)))))
-        ;; Archived shadow entities absent from org are echoed verbatim (not
-        ;; tombstoned): the app owns archived state and org never renders it,
-        ;; so a missing org heading is not a user deletion.
+        ;; Shadow entities whose absence from org is EXPECTED -- archived, or
+        ;; their parent container is hidden, or (for a standalone task) their
+        ;; status maps to no list -- are echoed verbatim (not tombstoned): a
+        ;; missing org heading there is not a user deletion.
         (dolist (se (plist-get shadow key))
           (let ((id (plist-get se :id)))
             (when (and (not (gethash id seen))
                        (not (plist-get se :deletedAt))
-                       (equal (plist-get se :status) "archived"))
+                       (mindwtr-sync--rendered-absent-p se kind live))
               (push (mindwtr-sync--strip-device-local (copy-sequence se)) out))))
         (setq cand (plist-put cand key (nreverse out)))))
     cand))
@@ -192,11 +232,13 @@ the report's restore action rebuild the entity in the buffer."
   "Return (:created C :updated U :deleted D) for LOCAL parse vs SHADOW.
 A create is a local entity not in the shadow (including a new heading that
 has no id yet); an update is a local entity whose signature differs from
-its shadow twin; a delete is a non-archived live shadow entity absent from
-LOCAL."
-  (let ((created 0) (updated 0) (deleted 0))
+its shadow twin; a delete is a live shadow entity absent from LOCAL whose
+absence is not explained by archival or a hidden parent."
+  (let ((created 0) (updated 0) (deleted 0)
+        (live (mindwtr-sync--live-container-ids shadow)))
     (dolist (key mindwtr-sync--entity-keys)
       (let ((idx (mindwtr-shadow-index shadow key))
+            (kind (mindwtr-sync--key->kind key))
             (seen (make-hash-table :test 'equal)))
         (dolist (le (plist-get local key))
           (let* ((id (plist-get le :id))
@@ -209,7 +251,7 @@ LOCAL."
           (let ((id (plist-get se :id)))
             (unless (or (gethash id seen)
                         (plist-get se :deletedAt)
-                        (equal (plist-get se :status) "archived"))
+                        (mindwtr-sync--rendered-absent-p se kind live))
               (setq deleted (1+ deleted)))))))
     (list :created created :updated updated :deleted deleted)))
 

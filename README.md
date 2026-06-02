@@ -193,3 +193,25 @@ edited).
 - A one-time importer from an existing `org-gtd` file into the schema.
 - Recurrence-object fidelity beyond serialized round-trip.
 - A retry/backoff loop for transient `429`/`5xx` server errors.
+
+## Behavior notes
+
+### Archived projects preserve their tasks
+
+When a project is archived, Mindwtr moves the project's incomplete tasks to
+Done and keeps them inside the (now hidden) project. mindwtr-emacs hides an
+archived project's entire subtree from the org file — the project, its
+sections, and its tasks are not rendered — and **preserves those entities on
+the server**: they are echoed back verbatim on each sync (never tombstoned)
+rather than having their status rewritten. An entity whose absence from org is
+expected — because it is archived, its parent container does not render, or
+(for a standalone task) its status maps to no list — is therefore never
+mistaken for a user deletion. This is decided by
+`mindwtr-sync--rendered-absent-p`.
+
+**TODO / to verify manually:** the end-to-end behavior of archiving a project
+that has live/done child tasks against a real server has not yet been
+exercised. Confirm that the children are preserved (not deleted) across a sync,
+and that they reappear correctly if the project is un-archived. The path is
+guarded by `mindwtr-sync--rendered-absent-p` and covered by unit tests, but has
+not been run against the live server.

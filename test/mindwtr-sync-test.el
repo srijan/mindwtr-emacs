@@ -336,6 +336,65 @@ shadow-saves without raw-byte corruption or a coding-system prompt."
     ;; and stats does not count it as a delete
     (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 0))))
 
+(ert-deftest mindwtr-sync-task-under-archived-project-not-tombstoned ()
+  "A live task whose parent project is archived is echoed verbatim, never
+tombstoned -- archiving a project must not delete the tasks it keeps."
+  (let* ((shadow '(:tasks ((:id "t1" :title "kept" :status "done" :projectId "p1" :rev 3))
+                   :projects ((:id "p1" :title "P" :status "archived" :rev 2))
+                   :sections nil :areas nil :settings nil))
+         ;; org renders neither p1 (archived) nor t1 (parent archived), so local is empty
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get cand :tasks))))
+    (should t1)                                              ; echoed, not dropped
+    (should-not (string= (or (plist-get t1 :deletedAt) "") "NOW")) ; not freshly tombstoned
+    (should (string= (plist-get t1 :status) "done"))          ; status UNCHANGED (option a)
+    (should (= (plist-get t1 :rev) 3))                        ; rev UNCHANGED (verbatim echo)
+    (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 0))))
+
+(ert-deftest mindwtr-sync-task-under-archived-section-not-tombstoned ()
+  "A live task under a section whose project is archived is also protected."
+  (let* ((shadow '(:tasks ((:id "t1" :title "kept" :status "next" :sectionId "s1" :rev 1))
+                   :projects ((:id "p1" :title "P" :status "archived" :rev 1))
+                   :sections ((:id "s1" :title "S" :projectId "p1" :rev 1))
+                   :areas nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get cand :tasks)))
+         (s1 (seq-find (lambda (e) (equal (plist-get e :id) "s1")) (plist-get cand :sections))))
+    (should t1)
+    (should-not (string= (or (plist-get t1 :deletedAt) "") "NOW"))
+    (should s1)                                               ; the section itself also protected
+    (should-not (string= (or (plist-get s1 :deletedAt) "") "NOW"))
+    (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 0))))
+
+(ert-deftest mindwtr-sync-standalone-unmapped-status-not-tombstoned ()
+  "A standalone task whose status maps to no list (would render nowhere) is
+not tombstoned for being absent from org."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "someFutureStatus" :rev 1))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get cand :tasks))))
+    (should t1)
+    (should-not (string= (or (plist-get t1 :deletedAt) "") "NOW"))))
+
+(ert-deftest mindwtr-sync-normal-deletion-still-tombstoned ()
+  "Regression guard: a live task with a LIVE parent, absent from org, is still
+tombstoned -- the guard must not suppress genuine deletions."
+  (let* ((shadow '(:tasks ((:id "t1" :title "gone" :status "next" :projectId "p1" :rev 1))
+                   :projects ((:id "p1" :title "P" :status "active" :rev 1))
+                   :sections nil :areas nil :settings nil))
+         ;; org still has the live project p1 but the user removed task t1
+         (local '(:tasks nil
+                  :projects (( :id "p1" :mw-kind project :title "P" :status "active"))
+                  :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get cand :tasks))))
+    (should t1)
+    (should (string= (plist-get t1 :deletedAt) "NOW"))        ; genuinely tombstoned
+    (should (= (plist-get (mindwtr-sync--stats local shadow) :deleted) 1))))
+
 (ert-deftest mindwtr-sync-once-end-to-end ()
   "A local edit is PUT, merged result is reconciled, shadow updated."
   (let* ((dir (make-temp-file "mw-e2e" t))
