@@ -126,3 +126,22 @@ with fast-access keys and the done-state separator."
   (should (string= (mindwtr-model-project-status->list "waiting") "projects"))
   (should (string= (mindwtr-model-project-status->list "someday") "someday-projects"))
   (should (null (mindwtr-model-project-status->list "archived"))))
+
+(ert-deftest mindwtr-model-keyword->status-safe-returns-nil-on-mismatch ()
+  ;; valid combos resolve like the erroring form
+  (should (string= (mindwtr-model-keyword->status-safe 'task "NEXT") "next"))
+  (should (string= (mindwtr-model-keyword->status-safe 'project "ACTIVE") "active"))
+  ;; type-invalid combos return nil instead of erroring
+  (should (null (mindwtr-model-keyword->status-safe 'project "NEXT")))
+  (should (null (mindwtr-model-keyword->status-safe 'task "ACTIVE"))))
+
+(ert-deftest mindwtr-model-status-choices-are-type-scoped-with-fast-keys ()
+  (let ((task (mindwtr-model-status-choices 'task))
+        (proj (mindwtr-model-status-choices 'project)))
+    ;; tasks expose i/n/w/s/r + d/x, never ACTIVE
+    (should (equal task '(("INBOX" . ?i) ("NEXT" . ?n) ("WAIT" . ?w)
+                          ("SOMEDAY" . ?s) ("REF" . ?r) ("DONE" . ?d) ("ARCH" . ?x))))
+    ;; projects expose a/s/w + x, never INBOX/NEXT/REF/DONE
+    (should (equal proj '(("ACTIVE" . ?a) ("SOMEDAY" . ?s) ("WAIT" . ?w) ("ARCH" . ?x))))
+    (should-not (assoc "ACTIVE" task))
+    (should-not (assoc "NEXT" proj))))

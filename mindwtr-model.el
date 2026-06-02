@@ -101,6 +101,30 @@ when it must not be rendered (e.g. `archived')."
   (or (car (rassoc keyword (mindwtr-model--status-alist kind)))
       (error "Invalid %s keyword: %s" kind keyword)))
 
+(defun mindwtr-model-keyword->status-safe (kind keyword)
+  "Like `mindwtr-model-keyword->status' but return nil for a type-invalid KEYWORD.
+Used by the parser backstop so an org-recognized keyword that is wrong for
+KIND (e.g. NEXT on a project) does not abort the sync."
+  (car (rassoc keyword (mindwtr-model--status-alist kind))))
+
+(defconst mindwtr-model--keyword-fast-keys
+  (let (alist)
+    (dolist (kw (cdar mindwtr-model-todo-keywords))
+      (when (string-match "\\`\\([A-Z]+\\)(\\(.\\))\\'" kw)
+        (push (cons (match-string 1 kw) (string-to-char (match-string 2 kw))) alist)))
+    (nreverse alist))
+  "Alist KEYWORD -> fast-access char, parsed from `mindwtr-model-todo-keywords'.
+The `|' separator entry has no `(key)' and is skipped.")
+
+(defun mindwtr-model-status-choices (kind)
+  "Return ((KEYWORD . CHAR) ...) of valid TODO keywords for entity KIND.
+Ordered by the kind's status alist (active states first, then done states);
+each keyword is paired with its fast-access char from the shared sequence."
+  (mapcar (lambda (pair)
+            (let ((kw (cdr pair)))
+              (cons kw (cdr (assoc kw mindwtr-model--keyword-fast-keys)))))
+          (mindwtr-model--status-alist kind)))
+
 (defconst mindwtr-model--priority-cookies
   '(("urgent" . ?A) ("high" . ?B) ("medium" . ?C) ("low" . ?D)))
 
