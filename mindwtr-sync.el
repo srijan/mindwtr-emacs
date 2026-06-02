@@ -58,7 +58,11 @@ the wire)."
         (unless (equal (mindwtr-sync--field-canonical k lv)
                        (mindwtr-sync--field-canonical k sv))
           (if (mindwtr-sync--empty-p lv)
-              (setq out (mindwtr-sync--plist-remove out k))
+              ;; `:status' is mandatory for task/project; an empty local value
+              ;; means the parser could not determine it (a type-invalid or
+              ;; missing keyword), never an intentional clear -- so keep SV.
+              (unless (eq k :status)
+                (setq out (mindwtr-sync--plist-remove out k)))
             (setq out (plist-put out k lv))))))
     out))
 
@@ -107,6 +111,16 @@ LIVE is (PROJECTS . SECTIONS) from `mindwtr-sync--live-container-ids'."
            (not (and pid (gethash pid (car live))))))
         (_ nil))))
 
+(defun mindwtr-sync--ensure-status (entity kind)
+  "Default a missing status on a newly created ENTITY of KIND.
+A type-invalid or missing keyword left the parser omitting :status; for a
+brand-new entity there is no shadow status to inherit, so fall back to the
+kind's default (task -> inbox, project -> active) so validation does not abort."
+  (if (or (not (memq kind '(task project))) (plist-get entity :status))
+      entity
+    (plist-put (copy-sequence entity)
+               :status (if (eq kind 'task) "inbox" "active"))))
+
 (defun mindwtr-sync-build-candidate (local shadow device-id now)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW."
   (let ((cand (list :settings (plist-get shadow :settings)))
@@ -128,7 +142,8 @@ LIVE is (PROJECTS . SECTIONS) from `mindwtr-sync--live-container-ids'."
                     ;; ids and truncate sub-minute timestamps on every sync.
                     ('unchanged (copy-sequence se))
                     ('create
-                     (let ((m (mindwtr-sync--merge-content le se)))
+                     (let ((m (mindwtr-sync--ensure-status
+                               (mindwtr-sync--merge-content le se) kind)))
                        (setq m (plist-put m :rev 1))
                        (setq m (plist-put m :createdAt now))
                        (setq m (plist-put m :updatedAt now))

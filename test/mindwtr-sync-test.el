@@ -427,3 +427,24 @@ tombstoned -- the guard must not suppress genuine deletions."
             (let ((task (car (plist-get (mindwtr-shadow-load) :tasks))))
               (should (string= (plist-get task :title) "do it")))))
       (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-merge-never-clears-status ()
+  "When the local parse omits :status (type-invalid keyword), merge keeps the
+shadow's status instead of clearing the mandatory field."
+  (let* ((se '(:id "t1" :title "Task" :status "waiting" :rev 3))
+         (le '(:id "t1" :title "Task"))            ; status omitted by the backstop
+         (m (mindwtr-sync--merge-content le se)))
+    (should (string= (plist-get m :status) "waiting"))))
+
+(ert-deftest mindwtr-sync-build-candidate-defaults-new-entity-status ()
+  "A brand-new local task with no status (parser omitted it) gets the type
+default so validation does not abort."
+  (let* ((local '(:tasks ((:title "Fresh") )    ; no :id, no :status
+                  :projects nil :sections nil :areas nil))
+         (shadow '(:tasks nil :projects nil :sections nil :areas nil :settings nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev1" "2026-06-02T00:00:00Z"))
+         (task (car (plist-get cand :tasks))))
+    (should (string= (plist-get task :status) "inbox"))
+    ;; the candidate validates (no invalid nil status)
+    (should (mindwtr-model-validate-appdata
+             (mindwtr-sync--strip-internal-keys cand)))))
