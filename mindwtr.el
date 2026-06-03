@@ -172,6 +172,18 @@ cycles never run concurrently."
                       buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
             (mindwtr--reset-backoff)
             (cond
+             ;; The sync succeeded but writing the rebuilt buffer to disk
+             ;; failed: the shadow/etag have advanced, so the on-disk file is
+             ;; now stale and the unsaved-edits gate would stand down every
+             ;; future tick silently.  Reuse the persistent error-state
+             ;; machinery to make that divergence visible and recoverable --
+             ;; it surfaces a standing message, itself stands down auto-sync,
+             ;; and is cleared only by a manual `mindwtr-sync' (which
+             ;; save-then-syncs and recovers).  (KTD-5)
+             ((plist-get res :save-failed)
+              (setq mindwtr--error-state
+                    "mindwtr: synced, but saving the file failed — disk is stale vs server (M-x mindwtr-sync to retry)")
+              (message "%s" mindwtr--error-state))
              ((plist-get res :noop) (message "mindwtr: up to date"))
              (t (message "mindwtr: sync ok%s"
                          (if (plist-get res :conflicts)
@@ -196,15 +208,27 @@ cycles never run concurrently."
          (mindwtr--reset-backoff)
          (message "mindwtr: %s" (error-message-string err)))))))
 
+(defun mindwtr--buffer-has-unsaved-edits-p ()
+  "Non-nil when the synced file is open in a buffer with unsaved edits.
+Nil when `mindwtr-file' is unset or the file is not open in any buffer (no
+buffer means no in-progress edits, so an automatic sync is free to run and
+rebuild).  Uses `find-buffer-visiting' for truename/symlink-safe matching,
+consistent with the `file-equal-p' guard in `mindwtr--maybe-debounced-sync'."
+  (when mindwtr-file
+    (let ((buf (find-buffer-visiting mindwtr-file)))
+      (and buf (buffer-modified-p buf)))))
+
 (defun mindwtr--auto-sync ()
   "Entry point for automatic triggers (save/focus/periodic).
-A no-op while a cycle is in progress, while a backoff retry is armed, or
-after sync has given up -- so backoff fully owns the retry cadence and
-overlapping triggers never pile on.  A manual `mindwtr-sync' is the escape
-hatch that resets this state."
+A no-op while a cycle is in progress, while a backoff retry is armed, after
+sync has given up, or while the synced buffer has unsaved edits -- so a
+background rebuild never erases the user's in-progress work, backoff fully
+owns the retry cadence, and overlapping triggers never pile on.  A manual
+`mindwtr-sync' is the escape hatch that resets this state and saves first."
   (unless (or mindwtr--sync-in-progress
               (timerp mindwtr--retry-timer)
-              mindwtr--error-state)
+              mindwtr--error-state
+              (mindwtr--buffer-has-unsaved-edits-p))
     (mindwtr--sync-attempt)))
 
 ;;;###autoload

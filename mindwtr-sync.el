@@ -366,11 +366,23 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                 (write-region (point-min) (point-max) bf)
                 (setq backup-file bf)))
             (mindwtr-reconcile-buffer merged)
-            (mindwtr-shadow-save merged)
-            (mindwtr-shadow-set-etag (plist-get got :etag))
-            (mindwtr-report-show stats conflicts skew backup-file (current-buffer) parse-warnings)
-            (list :ok t :conflicts conflicts :stats stats :skew skew
-                  :warnings parse-warnings)))))))
+            ;; Return the buffer to clean on disk after the rebuild (an
+            ;; erase+insert always marks it modified, so this always writes on
+            ;; a full cycle -- never on the :noop branch above).  This closes
+            ;; the loop that keeps the unsaved-edits gate from self-wedging.
+            ;; Content-protected (KTD-7) and condition-case-guarded inside the
+            ;; helper: a write failure here must NOT throw (post-PUT; the
+            ;; server already committed).  Instead it is reported via
+            ;; :save-failed so the caller can raise a visible, recoverable
+            ;; error state rather than stall the gate silently (KTD-5).  A
+            ;; non-file (temp-buffer) save returns :skipped, which is not a
+            ;; failure.
+            (let ((save-failed (null (mindwtr-sync--save-buffer-quietly t))))
+              (mindwtr-shadow-save merged)
+              (mindwtr-shadow-set-etag (plist-get got :etag))
+              (mindwtr-report-show stats conflicts skew backup-file (current-buffer) parse-warnings)
+              (list :ok t :conflicts conflicts :stats stats :skew skew
+                    :warnings parse-warnings :save-failed save-failed))))))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here

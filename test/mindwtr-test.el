@@ -1,6 +1,13 @@
 ;;; mindwtr-test.el --- -*- lexical-binding: t; -*-
 (require 'ert)
+(require 'cl-lib)
 (require 'mindwtr)
+
+(defun mindwtr-test--kill-file-buffer (f)
+  "Kill the buffer visiting F without a modified-buffer prompt."
+  (when (get-file-buffer f)
+    (with-current-buffer (get-file-buffer f) (set-buffer-modified-p nil))
+    (kill-buffer (get-file-buffer f))))
 
 (ert-deftest mindwtr-mode-sets-todo-keywords ()
   (with-temp-buffer
@@ -159,5 +166,151 @@ persistent error."
           (should (= mindwtr--retry-attempts 0))
           (should-not mindwtr--error-state))
       (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f)
+      (delete-directory dir t))))
+
+;;; U3: gate auto-sync on unsaved buffer edits -------------------------------
+
+(ert-deftest mindwtr-auto-sync-stands-down-on-unsaved-edits ()
+  "With the synced file open and modified, an automatic trigger does not
+launch a sync cycle (a rebuild would erase the in-progress edit)."
+  (let* ((f (make-temp-file "mw-gate" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (called nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (insert "edit\n")
+          (should (buffer-modified-p))
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                     (lambda () (setq called t))))
+            (mindwtr--auto-sync))
+          (should-not called))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-auto-sync-runs-when-buffer-clean ()
+  "With the synced file open and clean, an automatic trigger runs."
+  (let* ((f (make-temp-file "mw-gate2" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (called nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (should-not (buffer-modified-p))
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                     (lambda () (setq called t))))
+            (mindwtr--auto-sync))
+          (should called))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-auto-sync-runs-when-file-not-open ()
+  "When the synced file is not open in any buffer, an automatic trigger runs
+freely -- there are no in-memory edits to disturb."
+  (let* ((f (make-temp-file "mw-gate3" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (called nil))
+    (unwind-protect
+        (progn
+          (should-not (find-buffer-visiting f))
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                     (lambda () (setq called t))))
+            (mindwtr--auto-sync))
+          (should called))
+      (delete-file f))))
+
+(ert-deftest mindwtr-auto-sync-existing-guards-still-short-circuit ()
+  "The pre-existing guards (in-progress / armed retry / error-state) skip the
+cycle regardless of buffer state -- the new gate is additive, not a
+replacement."
+  (let* ((f (make-temp-file "mw-gate4" nil ".org"))
+         (mindwtr-file f))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          ;; clean buffer (the gate would allow), but each existing guard set
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                     (lambda () (error "should not run"))))
+            (let ((mindwtr--sync-in-progress t)
+                  (mindwtr--retry-timer nil) (mindwtr--error-state nil))
+              (should-not (mindwtr--auto-sync)))
+            (let ((mindwtr--sync-in-progress nil)
+                  (mindwtr--retry-timer (run-with-idle-timer 9999 nil #'ignore))
+                  (mindwtr--error-state nil))
+              (unwind-protect (should-not (mindwtr--auto-sync))
+                (cancel-timer mindwtr--retry-timer)))
+            (let ((mindwtr--sync-in-progress nil)
+                  (mindwtr--retry-timer nil) (mindwtr--error-state "dead"))
+              (should-not (mindwtr--auto-sync)))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-buffer-has-unsaved-edits-truth-table ()
+  "nil when mindwtr-file unset; nil when not open; nil when open+clean; t when
+open+modified."
+  (let ((f (make-temp-file "mw-tt" nil ".org")))
+    (unwind-protect
+        (progn
+          (let ((mindwtr-file nil))
+            (should-not (mindwtr--buffer-has-unsaved-edits-p)))
+          (let ((mindwtr-file f))
+            (should-not (mindwtr--buffer-has-unsaved-edits-p))       ; not open
+            (with-current-buffer (find-file-noselect f)
+              (should-not (mindwtr--buffer-has-unsaved-edits-p))     ; open + clean
+              (insert "x\n")
+              (should (mindwtr--buffer-has-unsaved-edits-p)))))      ; open + modified
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+;;; U2: sync-attempt raises a persistent error on a failed buffer save -------
+
+(ert-deftest mindwtr-sync-attempt-flags-error-state-on-save-failure ()
+  "A successful sync whose buffer save fails raises mindwtr--error-state, which
+then stands down auto-sync until a manual sync clears it."
+  (let* ((dir (make-temp-file "mw-sf2" t))
+         (f (make-temp-file "mw-sf2-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-server-url "https://mw.example/")
+         (mindwtr-auth-token "x")
+         (mindwtr-file f)
+         (mindwtr--error-state nil)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file f
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (mindwtr--sync-attempt))
+          (should mindwtr--error-state)
+          ;; the error-state now stands a passive trigger down
+          (let ((called nil))
+            (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                       (lambda () (setq called t))))
+              (mindwtr--auto-sync)
+              (should-not called))))
+      (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))

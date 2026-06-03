@@ -608,3 +608,166 @@ ordinary `C-x C-s'."
             (should ran)))
       (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
       (delete-file f))))
+
+;;; U2: auto-save after a content-changing reconcile -------------------------
+
+(defun mindwtr-test--kill-file-buffer (f)
+  "Kill the buffer visiting F without a modified-buffer prompt."
+  (when (get-file-buffer f)
+    (with-current-buffer (get-file-buffer f) (set-buffer-modified-p nil))
+    (kill-buffer (get-file-buffer f))))
+
+(ert-deftest mindwtr-sync-once-saves-file-after-reconcile ()
+  "A full reconcile cycle on a file-visiting buffer leaves the buffer clean
+and the file on disk holding the merged content.  (Also exercises the
+buffer-chars-modified-tick guard end-to-end: the save is downstream of the
+guard, so the cycle completes without a \"buffer changed during sync\" error.)"
+  (let* ((dir (make-temp-file "mw-save" t))
+         (f (make-temp-file "mw-save-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+            (should (plist-get res :ok))
+            (should-not (plist-get res :save-failed))
+            (should-not (buffer-modified-p))
+            (should (string-match-p
+                     "do it"
+                     (with-temp-buffer (insert-file-contents f) (buffer-string))))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-noop-does-not-write-file ()
+  "On the :noop (HEAD-match) branch the engine never writes the file, even
+when the buffer is modified -- it does not save edits it did not cause."
+  (let* ((dir (make-temp-file "mw-noop-save" t))
+         (f (make-temp-file "mw-noop-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              (m (error "mindwtr: unexpected %s on a no-op sync" m))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          (save-buffer)                       ; clean baseline on disk
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          ;; A cosmetic, unsaved edit (a comment line -- not an entity heading)
+          ;; leaves the buffer modified but the entity state unchanged.
+          (goto-char (point-max))
+          (insert "# scratch note\n")
+          (should (buffer-modified-p))
+          (let* ((disk-before (with-temp-buffer (insert-file-contents f) (buffer-string)))
+                 (res (mindwtr-sync-once (current-buffer) "NOW"))
+                 (disk-after (with-temp-buffer (insert-file-contents f) (buffer-string))))
+            (should (plist-get res :noop))
+            (should (string= disk-before disk-after))   ; file NOT rewritten
+            (should (buffer-modified-p))))               ; buffer left dirty
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-engine-save-suppresses-debounce-echo ()
+  "The engine's post-reconcile save does not arm a debounce echo, even with
+mindwtr--maybe-debounced-sync live on after-save-hook."
+  (let* ((dir (make-temp-file "mw-echo2" t))
+         (f (make-temp-file "mw-echo2-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-file f)
+         (mindwtr--debounce-timer nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (let ((after-save-hook (cons #'mindwtr--maybe-debounced-sync after-save-hook)))
+            (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z"))
+          (should-not mindwtr--debounce-timer))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-save-failure-is-isolated ()
+  "When the post-reconcile save signals, sync-once still returns :ok, advances
+shadow/etag, leaves the buffer modified, and flags :save-failed -- the server
+write already committed, so a disk-write hiccup must not fail the sync."
+  (let* ((dir (make-temp-file "mw-sf" t))
+         (f (make-temp-file "mw-sf-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (plist-get res :ok))
+              (should (plist-get res :save-failed))
+              (should (buffer-modified-p))
+              (should (string= (mindwtr-shadow-get-etag) "v2"))
+              (let ((task (car (plist-get (mindwtr-shadow-load) :tasks))))
+                (should (string= (plist-get task :title) "do it"))))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
