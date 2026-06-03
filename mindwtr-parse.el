@@ -242,12 +242,15 @@ type was inferred from context).  When omitted it is read from the
 
 (defun mindwtr-parse--ancestor-list-role ()
   "Return the :MW_LIST: role of the nearest container ancestor of point, or nil.
-The first container ancestor wins; a container with no :MW_LIST: yields nil."
+The first container ancestor wins (its empty :MW_LIST: maps to nil, like \"no
+container\"); point may sit anywhere within an entry.  Mirrors the single-var
+walk of `mindwtr-parse--ancestor-id'."
   (save-excursion
-    (let (done role)
-      (while (and (not done) (org-up-heading-safe))
+    (org-back-to-heading t)
+    (let (role)
+      (while (and (not role) (org-up-heading-safe))
         (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "container")
-          (setq done t role (mindwtr-parse--prop "MW_LIST"))))
+          (setq role (or (mindwtr-parse--prop "MW_LIST") ""))))
       (and role (not (string-empty-p role)) role))))
 
 (defun mindwtr-parse--infer-kind ()

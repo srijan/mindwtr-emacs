@@ -377,6 +377,28 @@ left unparsed so the quarantine guard (U2) can preserve it."
       (should (null (mindwtr-parse--infer-kind))))
     (should (null (plist-get (mindwtr-parse-buffer) :tasks)))))
 
+(ert-deftest mindwtr-parse-infer-kind-covers-every-entity-role ()
+  "Drift guard: every container role that holds ENTITIES must infer a kind, so
+adding a render-layer role without teaching `mindwtr-parse--infer-kind' fails
+loudly here instead of silently quarantining everything under the new bucket.
+Exceptions: `someday' (a parent whose children are themselves containers) infers
+nil, and the reconcile quarantine role `sync-failures' (not a model list-role)
+must stay un-inferable so its children keep round-tripping through quarantine."
+  (let ((parent-only '("someday")))
+    (dolist (role (append mindwtr-model-list-roles '("sync-failures")))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t))
+          (insert (format "* C\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: %s\n:END:\n"
+                          role)
+                  "** H\n:PROPERTIES:\n:ID: x\n:END:\n")
+          (org-mode)
+          (goto-char (point-min))
+          (org-next-visible-heading 1)   ; container
+          (org-next-visible-heading 1)   ; child H
+          (if (or (member role parent-only) (string= role "sync-failures"))
+              (should (null (mindwtr-parse--infer-kind)))
+            (should (mindwtr-parse--infer-kind))))))))
+
 (ert-deftest mindwtr-parse-explicit-mw-type-not-overridden-by-inference ()
   "Inference is a pure fallback: an explicit MW_TYPE always wins, even when the
 context would imply a different kind."
