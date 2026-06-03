@@ -314,3 +314,118 @@ then stands down auto-sync until a manual sync clears it."
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
+
+;;; U4: manual mindwtr-sync is save-then-sync --------------------------------
+
+(ert-deftest mindwtr-sync-saves-buffer-before-syncing ()
+  "A manual sync on a dirty buffer saves it first, so the buffer is clean by
+the time the cycle runs."
+  (let* ((f (make-temp-file "mw-mansave" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--retry-attempts 0) (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (clean-when-attempted nil) (attempted nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (insert "edit\n")
+          (should (buffer-modified-p))
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt)
+                     (lambda ()
+                       (setq attempted t
+                             clean-when-attempted
+                             (not (buffer-modified-p (get-file-buffer f)))))))
+            (mindwtr-sync))
+          (should attempted)
+          (should clean-when-attempted)
+          (should-not (buffer-modified-p)))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-sync-manual-presave-suppresses-debounce ()
+  "The manual pre-save is echo-suppressed: it arms no debounce timer."
+  (let* ((f (make-temp-file "mw-manecho" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--debounce-timer nil)
+         (mindwtr--retry-attempts 0) (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (insert "edit\n")
+          (let ((after-save-hook (cons #'mindwtr--maybe-debounced-sync after-save-hook)))
+            (cl-letf (((symbol-function 'mindwtr--sync-attempt) #'ignore))
+              (mindwtr-sync)))
+          (should-not mindwtr--debounce-timer))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-sync-clean-buffer-no-redundant-save ()
+  "A manual sync on an already-clean buffer performs no save and proceeds."
+  (let* ((f (make-temp-file "mw-manclean" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--retry-attempts 0) (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (saved nil) (attempted nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (should-not (buffer-modified-p))
+          (cl-letf (((symbol-function 'mindwtr-sync--save-buffer-quietly)
+                     (lambda (&rest _) (setq saved t)))
+                    ((symbol-function 'mindwtr--sync-attempt)
+                     (lambda () (setq attempted t))))
+            (mindwtr-sync))
+          (should-not saved)
+          (should attempted))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+(ert-deftest mindwtr-sync-manual-still-resets-backoff ()
+  "Manual sync remains the backoff escape hatch: it clears retry state."
+  (let* ((f (make-temp-file "mw-manbk" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--retry-attempts 4)
+         (mindwtr--retry-timer (run-with-idle-timer 9999 nil #'ignore))
+         (mindwtr--error-state "stale"))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (cl-letf (((symbol-function 'mindwtr--sync-attempt) #'ignore))
+            (mindwtr-sync))
+          (should (= mindwtr--retry-attempts 0))
+          (should-not mindwtr--error-state)
+          (should-not mindwtr--retry-timer))
+      (when (timerp mindwtr--retry-timer) (cancel-timer mindwtr--retry-timer))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
+;;; U5: bootstrap routes its save through the quiet helper -------------------
+
+(ert-deftest mindwtr-bootstrap-saves-and-suppresses-echo ()
+  "Bootstrap leaves the file saved (buffer unmodified) and arms no debounce
+echo, even with mindwtr--maybe-debounced-sync live on after-save-hook."
+  (let* ((dir (make-temp-file "mw-boot" t))
+         (mindwtr-shadow-directory dir)
+         (f (expand-file-name "mw-boot.org" dir))   ; does not exist yet
+         (mindwtr-file f)
+         (mindwtr-server-url "https://mw.example/")
+         (mindwtr-auth-token "x")
+         (mindwtr--debounce-timer nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("GET" (list :status 200 :headers '(("ETag" . "v1"))
+                           :body (concat "{\"tasks\":[],\"projects\":[],"
+                                         "\"sections\":[],\"areas\":["
+                                         "{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],"
+                                         "\"settings\":{}}")))
+              (m (error "mindwtr: unexpected %s on bootstrap" m))))))
+    (unwind-protect
+        (let ((after-save-hook (cons #'mindwtr--maybe-debounced-sync after-save-hook)))
+          (mindwtr-bootstrap)
+          (should (file-exists-p f))
+          (with-current-buffer (find-file-noselect f)
+            (should-not (buffer-modified-p)))
+          (should-not mindwtr--debounce-timer))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (mindwtr-test--kill-file-buffer f)
+      (when (file-exists-p f) (delete-file f))
+      (delete-directory dir t))))

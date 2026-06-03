@@ -234,9 +234,21 @@ owns the retry cadence, and overlapping triggers never pile on.  A manual
 ;;;###autoload
 (defun mindwtr-sync ()
   "Run one synchronization cycle now.
-A manual sync clears any pending backoff and starts a fresh attempt."
+A manual sync clears any pending backoff, saves the synced buffer first when
+it has unsaved edits, then starts a fresh attempt.  An explicit sync never
+refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
+\"save = commit point\" means a manual sync always leaves the buffer clean."
   (interactive)
   (mindwtr--reset-backoff)
+  ;; Save-then-sync.  Echo-suppressed (the cycle is about to run, so the
+  ;; pre-save must not separately arm the debounce) but WITHOUT content
+  ;; protection: a manual sync is an ordinary user save, so the user's
+  ;; before-save-hooks run, exactly as a real `C-x C-s' would (KTD-7).
+  (when mindwtr-file
+    (let ((buf (find-buffer-visiting mindwtr-file)))
+      (when (and buf (buffer-modified-p buf))
+        (with-current-buffer buf
+          (mindwtr-sync--save-buffer-quietly)))))
   (mindwtr--sync-attempt))
 
 ;;;###autoload
@@ -252,7 +264,10 @@ A manual sync clears any pending backoff and starts a fresh attempt."
         (erase-buffer)
         (mindwtr-mode)
         (mindwtr-reconcile-buffer appdata)
-        (save-buffer))
+        ;; Quiet-save (content-protected, like the engine save) so this
+        ;; deliberate overwrite does not echo a stray HEAD-only sync ~5s
+        ;; later when `mindwtr-auto-sync-mode' is on.
+        (mindwtr-sync--save-buffer-quietly t))
       (mindwtr-shadow-save appdata)
       (mindwtr-shadow-set-etag (plist-get got :etag))
       (message "mindwtr: bootstrapped from server"))))
