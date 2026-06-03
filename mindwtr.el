@@ -17,6 +17,7 @@
 (require 'mindwtr-shadow)
 (require 'mindwtr-reconcile)
 (require 'mindwtr-commands)
+(require 'mindwtr-capture)
 
 (defgroup mindwtr nil "Sync org with Mindwtr Cloud." :group 'org)
 

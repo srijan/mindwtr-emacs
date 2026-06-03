@@ -103,12 +103,25 @@ are left in place (they have no independent bucket to relocate to).
 task under a project heading makes it a project task; lifting it out makes it
 standalone.
 
-**Graceful degradation.** If a type-invalid keyword reaches the file through a
-raw text edit, org-capture, or editing outside `mindwtr-mode`, the parser does
-not abort the sync. It retains the entity's previous status, or assigns a
-type-appropriate default for a brand-new entity (task → `inbox`, project →
-`active`), and emits a warning. A stray keyword degrades gracefully instead of
-breaking the sync cycle.
+**Graceful degradation.** Content that reaches the file through a raw text edit,
+org-capture, or editing outside `mindwtr-mode` is never silently lost:
+
+- **A type-invalid keyword** (e.g. `NEXT` on a project) does not abort the sync.
+  The parser retains the entity's previous status, or assigns a type-appropriate
+  default for a brand-new entity (task → `inbox`, project → `active`), and emits
+  a warning.
+- **A heading missing its `:MW_TYPE:`** (the common org-capture / raw-edit case)
+  has its type **inferred from outline context** — under `* Inbox`, `* Single
+  Actions`, `* Someday`'s single-action list, or `* Reference` it becomes a
+  **task**; directly under `* Projects` a **project**; under a project or section
+  a **task**; under `* Areas of Focus` an **area** — so it round-trips like any
+  typed entity (and the sync mints its `MW_ID`).
+- **A heading that fits nowhere** (no recognized container ancestor, so its type
+  cannot be inferred) is **not deleted**. It is preserved verbatim under a
+  `* Sync Failures` heading after each sync, annotated with what to fix — add a
+  `:MW_TYPE:` or move it under a list container, then sync again. A pre-sync
+  backup of the whole file is also written to `backups/` under the data
+  directory on every sync as a final safety net.
 
 **Fallback.** Off a Mindwtr task or project heading these keys fall back to
 standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
@@ -128,6 +141,24 @@ standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
      set to `nil` to disable), gated on a cheap `HEAD` ETag check so it only
      does work when the remote actually changed.
    - **On frame focus** — when Emacs regains focus (throttled to 30s).
+
+### Capture
+
+`mindwtr-capture-template` is an `org-capture` template function that drops a new
+task into the `* Inbox` bucket, stamped with `:MW_TYPE: task` and a freshly
+minted `:MW_ID:`. Register it once:
+
+```elisp
+(add-to-list 'org-capture-templates
+  `("m" "Mindwtr inbox" entry
+    (file+headline mindwtr-file "Inbox")
+    (function mindwtr-capture-template)))
+```
+
+`C-c c m` then captures straight into the inbox. The stamping is belt-and-
+suspenders: even a hand-written inbox heading is recognized as a task by context
+inference and gets an `MW_ID` on the next sync (see **Graceful degradation**), so
+the template is ergonomics, not a correctness requirement.
 
 ### Customization summary
 
@@ -257,7 +288,107 @@ edited).
 - File-byte attachment transfer (upload/download of attachment contents).
 - A one-time importer from an existing `org-gtd` file into the schema.
 - Recurrence-object fidelity beyond serialized round-trip.
-- A retry/backoff loop for transient `429`/`5xx` server errors.
+- **`org-protocol` capture** — a browser-triggered front door on top of the
+  shipped `org-capture` template (see [Capture](#capture)). (Emacs-native
+  editing track.)
+- **Clarify workflow** — a guided triage flow over `* Inbox` items to replace
+  org-gtd's clarify/organize wizard: set type-valid status (`mindwtr-set-status`),
+  add contexts/area, optionally refile under a project (`org-refile`), and move
+  to the next inbox item. Built on the existing type-aware commands rather than a
+  new state machine. (Emacs-native editing track.)
+- **org-edna local automation (spike)** — evaluate using `org-edna` inside
+  `mindwtr-mode` for desk-only task automation. Mechanically it composes (edna
+  fires on `org-todo`, which `mindwtr-set-status` calls). Constraints to design
+  around: edna's `TRIGGER`/`BLOCKER` properties are non-`MW_` drawer keys, so
+  they are **preserved but never synced** — any cascade is Emacs-only and must
+  produce a *synced end-state* to stay coherent across surfaces. Skip cascades
+  that duplicate server semantics (project completion → tasks Done is already
+  handled by server-side archive; projects have no `DONE`, only `ARCH`). The
+  promising case is sequential next-action triggering as a local stand-in for
+  `MW_SEQUENTIAL` until that field is read-write. Deliverable: a documented list
+  of safe vs. unsafe edna patterns, not a blanket enablement.
+- **Incremental reconciliation (preserve buffer state)** — today
+  `mindwtr-reconcile-buffer` rebuilds the whole file (`erase-buffer` + `insert`)
+  on every sync and only restores point to the current entity's heading. That
+  discards fold/visibility state, scroll position (`window-start`), and the exact
+  cursor column — a sync mid-edit visibly resets the buffer. Goal: rewrite only
+  the entities that actually changed, leaving untouched headings byte-identical
+  so their folds and overlays survive. The building blocks already exist:
+  `mindwtr-reconcile--id-markers` (locate an entity), `--rebuild-entry` (in-place
+  per-entity rewrite, used by the restore action), `--collect-org-only`
+  (preserve unknown drawers), and `mindwtr-signature` (change detection). The
+  reconcile loop would diff each merged entity's signature against the buffer's
+  parsed copy and only `--rebuild-entry` the changed ones, then handle structural
+  deltas (new entities, deletions, and **bucket relocation on status change** —
+  the tricky case, since a moved subtree must keep its fold state across the
+  move). Note org folds are overlays/invisibility, not text, so even an in-place
+  entry rewrite needs an explicit save/restore of visibility around it. Cheaper
+  stopgap if full incremental is deferred: snapshot folded headings (by `MW_ID`)
+  + global cycle state + `window-start` before the existing full rebuild and
+  reapply them after — less correct on moves, but restores the user-visible
+  state.
+- **Configurable bucket→file routing** — today `mindwtr-render-appdata` emits all
+  six buckets into one string written to the single `mindwtr-file`. Let the user
+  route buckets to separate files (e.g. `Inbox` → `inbox.org`, `Reference` →
+  `reference.org`, the rest in a main file) or keep everything in one file. The
+  server model is a single AppData, so this is purely a *local presentation*
+  split — the **bucket is the routing unit**; a project subtree stays whole in
+  whichever file holds the `Projects` bucket, since containment is encoded by
+  outline nesting and cannot span files. Design notes:
+  - **Config shape**: an alist mapping bucket/role → file path, plus a default
+    file for unmapped buckets. The default config routes everything to
+    `mindwtr-file`, so current single-file behavior is preserved.
+  - **Render** emits per-file strings instead of one concatenation.
+  - **Parse** reads all configured files and merges into one AppData (merge by
+    globally-unique `MW_ID`; each file contributes its buckets).
+  - **Reconcile** runs per-file — this compounds with the incremental
+    reconciliation item above (whole-buffer rebuild × N files is worse).
+  - **Shadow / change detection** must span the set of files, not one buffer.
+  - **`auto-mode-alist` / `mindwtr-mode` / auto-sync save trigger** must cover
+    every routed file, not just `mindwtr-file`.
+- **Surface mobile-captured inbox items after sync** — the sync report shows a
+  *created* count but does not take the user to the new entities. Closes the core
+  loop (capture/triage on mobile, work on the desk): a post-sync command or
+  automatic jump/highlight of newly-arrived `INBOX` tasks so mobile captures are
+  felt on the desk side without hunting. (Sync & conflict reconciliation track.)
+- **Verify (and fix) the pre-sync buffer backup** — the restore path and report
+  reference a "pre-sync buffer backup" (`mindwtr-report--backup-file`,
+  mindwtr-report.el:17) and the shadow keeps `shadow.bak.json`
+  (mindwtr-shadow.el:31), but it is unconfirmed that the *buffer* file is actually
+  snapshotted before reconcile. If the report points users to a backup that is
+  never created, the promised safety net is missing. Verify; write the buffer
+  backup before each reconcile if absent. (Sync & conflict reconciliation track.)
+- **Show incoming remote changes, not just overrides** — the sync report lists
+  conflicts (edits the server overrode) but not the benign remote edits the merge
+  brings *in*. Add a "remote changes since last sync" summary so the user sees
+  what mobile changed without diffing manually. (Sync & conflict reconciliation
+  track.)
+- **Ship the agenda / engage views in the package** — any agenda view (engage =
+  today + `NEXT` + `WAIT` + `INBOX`) is currently hand-rolled in user config.
+  Since mindwtr owns its keyword set, ship a tested `org-agenda-custom-commands`
+  block / a `mindwtr-engage` command so users don't reconstruct it. (Emacs-native
+  editing track.)
+- **Refile-target wiring** — the clarify flow and re-parenting both lean on
+  `org-refile`, but nothing sets `org-refile-targets` to mindwtr projects, so
+  `C-c C-w` won't offer the right destinations out of the box. Small; a
+  prerequisite that makes the clarify workflow land cleanly. (Emacs-native editing
+  track.)
+- **`mindwtr-lint` / pre-sync validation command** — an on-demand command that
+  flags type-invalid keywords, orphaned tasks, and malformed drawers *before*
+  sync, turning the existing graceful-degradation warnings into something the user
+  can run deliberately. Supports the dropped-entities metric. (Emacs-native
+  editing / fidelity tracks.)
+- **Property-based round-trip fuzzing** — round-trip fidelity is the headline
+  invariant but is tested on hand-written fixtures. Add a generator that produces
+  random valid AppData (varied statuses, nesting, unicode titles, checklist/drawer
+  combinations) and asserts parse→render→parse stability, hardening the guarantee
+  against unconsidered cases. Highest-leverage test investment, since the
+  invariant *is* the product. (Fidelity engine track.)
+- **Aggregate counter for dropped / invalid entities** — STRATEGY notes there is
+  "no aggregate counter yet" for invalid-keyword warnings and sync failures; they
+  are watched one run at a time. Add a small persisted tally (per sync, appended
+  to a log) so the metric is trackable over time instead of glance-and-forget.
+  (Fidelity engine track.)
 
 ## Behavior notes
 

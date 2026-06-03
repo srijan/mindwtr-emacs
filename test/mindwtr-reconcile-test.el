@@ -635,3 +635,133 @@ emptied the user's file."
       (should-error (mindwtr-reconcile-buffer merged))
       ;; buffer content is unchanged -- nothing was erased
       (should (string= (buffer-string) before)))))
+
+;;; Quarantine guard -- untyped/un-inferable headings (U2) -------------------
+
+(defun mindwtr-reconcile-test--count (s)
+  "Count literal occurrences of S in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((n 0)) (while (search-forward s nil t) (setq n (1+ n))) n)))
+
+(defconst mindwtr-reconcile-test--empty
+  '(:tasks nil :projects nil :sections nil :areas nil :settings nil)
+  "Merged appdata with no entities (renders only the canonical containers).")
+
+(ert-deftest mindwtr-reconcile-quarantines-untyped-orphan ()
+  "A top-level heading with no MW_TYPE and no inferable context is preserved
+under a * Sync Failures container instead of being erased (R2)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray thought\n:PROPERTIES:\n:ID: xyz\n:END:\nremember this body\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (save-excursion (goto-char (point-min)) (search-forward "Stray thought" nil t)))
+    (should (save-excursion (goto-char (point-min)) (search-forward "remember this body" nil t)))))
+
+(ert-deftest mindwtr-reconcile-quarantine-carries-annotation ()
+  "Each quarantined heading carries a reason note so it is actionable (R2)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray\n:PROPERTIES:\n:ID: xyz\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (should (save-excursion (goto-char (point-min))
+                            (search-forward "couldn't determine type" nil t)))))
+
+(ert-deftest mindwtr-reconcile-quarantine-is-idempotent ()
+  "Two reconciles with the same persistent orphan yield ONE container and ONE
+copy of the orphan -- no nesting, no duplication (R3)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray thought\n:PROPERTIES:\n:ID: xyz\n:END:\nbody\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (= 1 (mindwtr-reconcile-test--count "Stray thought")))))
+
+(ert-deftest mindwtr-reconcile-does-not-quarantine-inferable-heading ()
+  "An untyped heading under a recognized container is inferable, so it is NOT
+quarantined; the merged data renders it in its bucket and no container appears."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Captured\n:PROPERTIES:\n:ID: x\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer
+     '(:tasks ((:id "t1" :title "Captured" :status "inbox" :rev 1
+                :createdAt "2026-06-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
+       :projects nil :sections nil :areas nil :settings nil))
+    (should (= 0 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (save-excursion (goto-char (point-min)) (search-forward "Captured" nil t)))))
+
+(ert-deftest mindwtr-reconcile-clean-buffer-has-no-quarantine ()
+  "A buffer of only typed entities reconciles with no * Sync Failures heading (R4)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer
+     '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1" :contexts ("@x")
+                :rev 5 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
+       :projects nil :sections nil
+       :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+    (should (= 0 (mindwtr-reconcile-test--count "Sync Failures")))))
+
+(ert-deftest mindwtr-reconcile-collect-orphans-reads-current-buffer ()
+  "Orphan collection reads the live buffer (so it runs before erase -- R7)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray\n:PROPERTIES:\n:ID: x\n:END:\nbody text\n")
+      (org-mode))
+    (let ((orphans (mindwtr-reconcile--collect-orphans)))
+      (should (= 1 (length orphans)))
+      (should (string-match-p "Stray" (car orphans)))
+      (should (string-match-p "body text" (car orphans))))))
+
+(ert-deftest mindwtr-reconcile-collect-orphans-unwraps-existing-quarantine ()
+  "An existing * Sync Failures container is unwrapped: its children are
+re-collected and the wrapper itself is discarded (R3, no-nesting)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Sync Failures\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: sync-failures\n:END:\n"
+              "** Stray child\n:PROPERTIES:\n:ID: x\n:END:\nbody\n")
+      (org-mode))
+    (let ((orphans (mindwtr-reconcile--collect-orphans)))
+      (should (= 1 (length orphans)))
+      (should (string-match-p "Stray child" (car orphans)))
+      (should-not (string-match-p "Sync Failures" (car orphans))))))
+
+(ert-deftest mindwtr-reconcile-quarantine-excludes-typed-descendants ()
+  "A typed (real) entity nested under an untyped orphan is NOT swallowed into
+the quarantine text -- it round-trips via the server and renders in its bucket
+exactly once, with no duplicate MW_ID."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray note\n:PROPERTIES:\n:ID: xyz\n:END:\nnote body\n"
+              "** NEXT Real task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer
+     '(:tasks ((:id "t1" :title "Real task" :status "next" :rev 1
+                :createdAt "2026-06-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
+       :projects nil :sections nil :areas nil :settings nil))
+    ;; the orphan parent is preserved under quarantine...
+    (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (save-excursion (goto-char (point-min)) (search-forward "Stray note" nil t)))
+    ;; ...but the typed task is NOT duplicated: it appears once (its bucket only)
+    (should (= 1 (mindwtr-reconcile-test--count ":MW_ID: t1")))
+    (should (= 1 (mindwtr-reconcile-test--count "Real task")))))
+
+(ert-deftest mindwtr-reconcile-quarantines-blank-mw-type-orphan ()
+  "A stray heading whose :MW_TYPE: value is blank (neither a real kind nor
+inferable) is quarantined, not silently erased."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Stray\n:PROPERTIES:\n:MW_TYPE:\n:END:\nbody\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (save-excursion (goto-char (point-min)) (search-forward "Stray" nil t)))))

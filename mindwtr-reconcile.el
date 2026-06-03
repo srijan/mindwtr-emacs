@@ -247,11 +247,95 @@ visual state is touched (fold overlays, `window-start'), never content, so
                   (set-window-start win (line-beginning-position))))))))
     (error nil)))
 
+;; Quarantine guard.  `mindwtr-reconcile-buffer' rebuilds the whole file from
+;; the merged server data, so a heading the parser does not turn into an entity
+;; (no :MW_TYPE: and no inferable kind -- e.g. a stray top-level note) would be
+;; silently erased.  Before the rebuild we collect those orphan subtrees and,
+;; after the rebuild, re-emit them verbatim under a `* Sync Failures' container
+;; instead of dropping them.
+
+(defconst mindwtr-reconcile--quarantine-role "sync-failures"
+  "The :MW_LIST: role of the * Sync Failures quarantine container.
+Deliberately NOT a member of `mindwtr-model-list-roles' / the inference table,
+so its children stay un-inferable and are re-collected (then re-emitted) on
+every sync -- which is what keeps the container from nesting or growing.")
+
+(defconst mindwtr-reconcile--quarantine-note
+  "# mindwtr: couldn't determine type from context -- add a :MW_TYPE: or move this under a list container, then sync again.\n"
+  "Annotation prefixed to each quarantined heading.  Regenerated every sync:
+it lives in the container body, not in any orphan subtree, so it never
+accumulates.")
+
+(defun mindwtr-reconcile--orphan-heading-p ()
+  "Non-nil if the heading at point is content reconcile would otherwise erase:
+no (non-blank) :MW_TYPE: and no kind inferable from context.  A typed entity, a
+container, and an inferable heading all return nil."
+  (and (null (mindwtr-parse--mw-type))
+       (null (mindwtr-parse--infer-kind))))
+
+(defun mindwtr-reconcile--collect-orphans ()
+  "Return raw strings for headings reconcile would otherwise erase.
+Walks every heading in the current buffer (before any erase -- R7).  An orphan
+heading (`--orphan-heading-p') is captured as just its own heading + body, NOT
+its whole subtree: a typed or inferable DESCENDANT is a real entity that
+`mindwtr-parse-buffer' independently parses, syncs, and re-renders in its
+canonical bucket, so swallowing it into the quarantine text would duplicate it
+and its MW_ID.  The walk therefore always descends; an untyped descendant is
+visited and captured on its own.  An existing `* Sync Failures' container is a
+recognized container (not an orphan), so the walk descends into it and
+re-collects its children individually -- discarding the wrapper, which keeps
+quarantine idempotent (regenerated fresh on re-emit, never nested)."
+  (save-excursion
+    (goto-char (point-min))
+    (let (orphans)
+      (when (or (org-at-heading-p) (outline-next-heading))
+        (while (not (eobp))
+          (when (mindwtr-reconcile--orphan-heading-p)
+            (let ((beg (point))
+                  (end (save-excursion (outline-next-heading) (point))))
+              (push (buffer-substring-no-properties beg end) orphans)))
+          (outline-next-heading)))
+      (nreverse orphans))))
+
+(defun mindwtr-reconcile--reroot-subtree (text target)
+  "Shift every heading in subtree TEXT so its top heading sits at level TARGET.
+Relative depths within the subtree are preserved.  Only heading lines (`^\\*+ ')
+are touched, so body content is left byte-identical."
+  (let* ((top (and (string-match "\\`\\(\\*+\\) " text)
+                   (length (match-string 1 text))))
+         (delta (and top (- target top))))
+    (if (or (null delta) (= delta 0)) text
+      (replace-regexp-in-string
+       "^\\*+ "
+       (lambda (stars+sp)
+         (concat (make-string (max 1 (+ (1- (length stars+sp)) delta)) ?*) " "))
+       text))))
+
+(defun mindwtr-reconcile--emit-quarantine (orphans)
+  "Append a `* Sync Failures' container holding ORPHANS at point-max.
+ORPHANS is the list of raw subtree strings from `--collect-orphans'.  A no-op
+when ORPHANS is empty, so a clean sync produces no quarantine heading (R4).
+Each orphan is re-rooted to level 2 under the level-1 container and prefixed
+with `mindwtr-reconcile--quarantine-note'."
+  (when orphans
+    (goto-char (point-max))
+    (unless (bolp) (insert "\n"))
+    (insert (format "* %s\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: %s\n:END:\n"
+                    "Sync Failures" mindwtr-reconcile--quarantine-role))
+    (dolist (o orphans)
+      (insert mindwtr-reconcile--quarantine-note)
+      (let ((s (mindwtr-reconcile--reroot-subtree o 2)))
+        (insert s)
+        (unless (string-suffix-p "\n" s) (insert "\n"))))))
+
 (defun mindwtr-reconcile-buffer (merged)
   "Rebuild the current buffer to the canonical GTD-list layout of MERGED.
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
 point is restored to the entity it was on, and user-visible view state
-\(folds) is snapshotted before the rebuild and reapplied after."
+\(folds) is snapshotted before the rebuild and reapplied after.  Headings the
+parser cannot place (no :MW_TYPE:, no inferable kind) are collected before the
+rebuild and re-emitted under a `* Sync Failures' container so they are never
+silently erased."
   ;; Snapshot view state FIRST: `mindwtr-parse-ensure-keywords' may re-init
   ;; org-mode (when the buffer's TODO keywords aren't registered), which resets
   ;; all fold state and `org-cycle-global-status'.  Capturing before that runs
@@ -267,6 +351,8 @@ point is restored to the entity it was on, and user-visible view state
     (mindwtr-parse-ensure-keywords)
     (let* ((org-only (mindwtr-reconcile--collect-org-only))
            (at-id (mindwtr-reconcile--id-at-point))
+           ;; Collect orphans from the LIVE buffer, before the erase below (R7).
+           (orphans (mindwtr-reconcile--collect-orphans))
            ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
            ;; status from the server), the buffer is left intact rather than
            ;; wiped between erase and insert.
@@ -274,6 +360,9 @@ point is restored to the entity it was on, and user-visible view state
       (let ((inhibit-message t))
         (erase-buffer)
         (insert rendered))
+      ;; Re-emit orphans before view restore, so fold/scroll restore runs over a
+      ;; buffer that already includes the quarantined headings.
+      (mindwtr-reconcile--emit-quarantine orphans)
       (goto-char (point-min))
       (mindwtr-reconcile--goto-id at-id)
       (mindwtr-reconcile--restore-view view))))

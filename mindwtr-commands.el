@@ -65,14 +65,10 @@ Only standalone tasks and projects relocate; archived statuses have no role."
     (_ nil)))
 
 (defun mindwtr-commands--parent-list-role ()
-  "Return the MW_LIST role of the nearest container ancestor of point, or nil."
-  (save-excursion
-    (org-back-to-heading t)
-    (let (role)
-      (while (and (not role) (org-up-heading-safe))
-        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "container")
-          (setq role (mindwtr-parse--prop "MW_LIST"))))
-      role)))
+  "Return the MW_LIST role of the nearest container ancestor of point, or nil.
+Thin alias over the parser's own walk (the lower layer commands already depends
+on) so the two stay in lockstep."
+  (mindwtr-parse--ancestor-list-role))
 
 (defun mindwtr-commands--container-marker (role)
   "Return a marker at the container heading whose MW_LIST is ROLE, or nil."
