@@ -160,3 +160,26 @@ keywords are registered regardless of the user's global `org-todo-keywords'."
     (should (< (string-match "PersB" text) (string-match "PersA" text)))
     (should (< (string-match "PersA" text) (string-match "WorkProj" text)))
     (should (< (string-match "WorkProj" text) (string-match "Floating" text)))))
+
+(ert-deftest mindwtr-render--mw->org-text-conversions ()
+  "Markdown link syntax in a description converts to org links."
+  ;; labelled link
+  (should (string= (mindwtr-render--mw->org-text "see [the docs](https://example.com)")
+                   "see [[https://example.com][the docs]]"))
+  ;; label == url collapses to the canonical label-less org form
+  (should (string= (mindwtr-render--mw->org-text "see [https://example.com](https://example.com)")
+                   "see [[https://example.com]]"))
+  ;; multiple links on one line
+  (should (string= (mindwtr-render--mw->org-text "[x](a) and [y](b)")
+                   "[[a][x]] and [[b][y]]"))
+  ;; no links: passthrough (and nil-safe)
+  (should (string= (mindwtr-render--mw->org-text "plain prose, no links") "plain prose, no links"))
+  (should (null (mindwtr-render--mw->org-text nil))))
+
+(ert-deftest mindwtr-render-description-links-converted ()
+  "A task's markdown description renders org links into the buffer body."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :description "Check [the site](https://example.com) later."
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "Check \\[\\[https://example.com\\]\\[the site\\]\\] later\\." text))))
