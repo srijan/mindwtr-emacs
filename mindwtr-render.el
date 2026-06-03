@@ -54,16 +54,18 @@ to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
 (defun mindwtr-render--mw->org-text (text)
   "Convert mindwtr (markdown) link syntax in TEXT to org link syntax.
 `[label](url)' becomes `[[url][label]]'; when the label equals the url (the
-form a label-less org link round-trips through) it collapses back to the
-canonical `[[url]]' so the org buffer stays byte-stable across a sync.  Text
-with no markdown links is returned unchanged; non-link markdown is untouched."
+form a label-less org link round-trips through) -- or the label is empty --
+it collapses back to the canonical `[[url]]' so the org buffer stays
+byte-stable across a sync.  The url group tolerates one level of balanced
+parens so URLs like `https://x/Foo_(bar)' survive intact.  Text with no
+markdown links is returned unchanged; non-link markdown is untouched."
   (when text
     (replace-regexp-in-string
-     "\\[\\([^]]*\\)\\](\\([^)]*\\))"
+     "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
      (lambda (m)
        (let ((label (match-string 1 m))
              (url (match-string 2 m)))
-         (if (string= label url)
+         (if (or (string= label url) (string-empty-p label))
              (format "[[%s]]" url)
            (format "[[%s][%s]]" url label))))
      text t t)))
