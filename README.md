@@ -323,10 +323,10 @@ edited).
   the tricky case, since a moved subtree must keep its fold state across the
   move). Note org folds are overlays/invisibility, not text, so even an in-place
   entry rewrite needs an explicit save/restore of visibility around it. Cheaper
-  stopgap if full incremental is deferred: snapshot folded headings (by `MW_ID`)
-  + global cycle state + `window-start` before the existing full rebuild and
-  reapply them after — less correct on moves, but restores the user-visible
-  state.
+  stopgap if full incremental is deferred: snapshot folded headings (keyed by
+  `MW_ID` for entities / `MW_LIST` for containers) + `window-start` before the
+  existing full rebuild and reapply them precisely per heading after — less
+  correct on moves, but restores the user-visible state.
 - **Configurable bucket→file routing** — today `mindwtr-render-appdata` emits all
   six buckets into one string written to the single `mindwtr-file`. Let the user
   route buckets to separate files (e.g. `Inbox` → `inbox.org`, `Reference` →
