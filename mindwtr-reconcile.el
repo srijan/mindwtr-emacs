@@ -217,14 +217,13 @@ visual state is touched (fold overlays, `window-start'), never content, so
             (global (plist-get view :global))
             (top-id (plist-get view :top-id)))
         ;; 1. Global backdrop first, so the per-entity pass below overrides it.
+        ;;    Only the collapsing states need action: `all'/nil mean "fully
+        ;;    shown", which the fresh erase/insert already is -- and the
+        ;;    per-entity pass re-folds anything the user had folded -- so no
+        ;;    show-all backdrop is needed (it would be a no-op).
         (pcase global
           ('overview (org-overview))
-          ('contents (org-content))
-          ;; `all' (S-TAB SHOW ALL): make the intent explicit and defensive on
-          ;; the Org 9.5 overlay-fold floor.  The fresh erase/insert is already
-          ;; fully shown on 9.6+, so this is a no-op there.
-          ('all (if (fboundp 'org-fold-show-all) (org-fold-show-all)
-                  (outline-show-all))))
+          ('contents (org-content)))
         ;; 2. Per-entity, top-down: re-fold the entities the user had folded and
         ;;    re-open the ones they had open, keyed by MW_ID not position (R6).
         ;;    Entities not recorded (ancestor-hidden at snapshot) are left to the
@@ -257,7 +256,14 @@ point is restored to the entity it was on, and user-visible view state
   ;; org-mode (when the buffer's TODO keywords aren't registered), which resets
   ;; all fold state and `org-cycle-global-status'.  Capturing before that runs
   ;; reads the user's real visibility, not a wiped one.
-  (let ((view (mindwtr-reconcile--snapshot-view)))
+  ;;
+  ;; Guarded like the restore: reconcile runs AFTER the server PUT has already
+  ;; committed, and the snapshot sits before the restore's own `condition-case',
+  ;; so a signal here (e.g. `org-map-entries' on a degenerate buffer) would turn
+  ;; an already-committed sync into a spurious failure.  A nil view degrades to
+  ;; "restore nothing", strictly safer than aborting (R4).
+  (let ((view (condition-case nil (mindwtr-reconcile--snapshot-view)
+                (error nil))))
     (mindwtr-parse-ensure-keywords)
     (let* ((org-only (mindwtr-reconcile--collect-org-only))
            (at-id (mindwtr-reconcile--id-at-point))

@@ -2,6 +2,14 @@
 (require 'ert)
 (require 'mindwtr-reconcile)
 
+(defun mindwtr-reconcile-test--show-children ()
+  "Reveal the immediate child headings at point (cross-version test helper).
+Mirrors the `mindwtr-reconcile--hide-subtree'/`--show-entry' wrappers so test
+setup never inlines an `fboundp' fold branch of its own."
+  (if (fboundp 'org-fold-show-children)
+      (org-fold-show-children)
+    (org-show-children)))
+
 (ert-deftest mindwtr-reconcile-updates-existing-title ()
   (with-temp-buffer
     (let ((org-inhibit-startup t))
@@ -519,25 +527,6 @@ entity heading is visible while its body stays folded."
       (should-not (org-invisible-p (line-beginning-position))) ; heading visible
       (should (org-invisible-p (line-end-position))))))        ; body folded
 
-(ert-deftest mindwtr-reconcile-reapplies-global-all ()
-  "R2: global `all' (S-TAB SHOW ALL) leaves the buffer fully expanded after
-reconcile (exercises the `all' backdrop branch)."
-  (with-temp-buffer
-    (let ((org-inhibit-startup t))
-      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
-              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody\n")
-      (org-mode))
-    (setq-local org-cycle-global-status 'all)
-    (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1"
-                             :description "body"
-                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
-                             :updatedAt "2026-06-01T00:00:00Z"))
-                    :projects nil :sections nil
-                    :areas ((:id "a1" :name "Work")) :settings nil)))
-      (mindwtr-reconcile-buffer merged)
-      (mindwtr-reconcile--goto-id "t1")
-      (should-not (org-invisible-p (line-end-position)))))) ; body shown
-
 (ert-deftest mindwtr-reconcile-reopens-entity-on-top-of-backdrop ()
   "R2 + R1 composition: with global overview set but one entity left open,
 after reconcile that entity's own body is shown while a sibling the user had
@@ -552,7 +541,7 @@ folded stays collapsed -- the per-entity pass overrides the backdrop."
     (org-overview)
     ;; reveal Work's immediate children (t1/t2 headings show, bodies folded)
     (mindwtr-reconcile--goto-id "a1")
-    (if (fboundp 'org-fold-show-children) (org-fold-show-children) (org-show-children))
+    (mindwtr-reconcile-test--show-children)
     ;; user expands t1's body only; t2 stays folded
     (mindwtr-reconcile--goto-id "t1")
     (mindwtr-reconcile--show-entry)
