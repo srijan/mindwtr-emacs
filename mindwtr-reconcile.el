@@ -147,6 +147,29 @@ when point is on a heading with neither property."
           (setq id (mindwtr-parse--prop "MW_ID")))
         (or id own-list)))))
 
+(defun mindwtr-reconcile--anchor-heading-pos ()
+  "Return the buffer position of the heading `--goto-id (--id-at-point)' lands on.
+The scroll anchor recenters on the heading point is restored to, so the
+snapshot must measure that same heading's screen line.  This resolves it by the
+SAME (or MW_ID MW_LIST) walk-up as `mindwtr-reconcile--id-at-point': the
+heading bearing the nearest enclosing MW_ID (self or ancestor), or -- when no
+MW_ID is found -- the heading point is on if it carries an MW_LIST (a
+container).  Nil when point is on a heading with neither property (then
+`--id-at-point' is nil too and `--goto-id' is a no-op, so there is no row to
+anchor)."
+  (save-excursion
+    (when (ignore-errors (org-back-to-heading t) t)
+      (let ((own-list (mindwtr-parse--prop "MW_LIST"))
+            (start-pos (line-beginning-position))
+            (id (mindwtr-parse--prop "MW_ID")))
+        (if id
+            start-pos
+          (let (anc-pos)
+            (while (and (not id) (org-up-heading-safe))
+              (setq id (mindwtr-parse--prop "MW_ID"))
+              (when id (setq anc-pos (line-beginning-position))))
+            (or anc-pos (and own-list start-pos))))))))
+
 (defun mindwtr-reconcile--goto-id (id)
   "Move point to the heading whose MW_ID or MW_LIST equals ID, if present.
 Entity ids (UUIDs) and container roles share no values, so one search handles
@@ -213,10 +236,22 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
              hidden: `open' (body shown), `contents' (body hidden but a child
              heading still visible), `folded' (body and any children hidden).
   :top-id -- the MW_ID or MW_LIST at/after the live window's `window-start',
-             as a scroll anchor; nil when there is no live window."
+             as a fallback scroll anchor; nil when there is no live window.
+             Used when :anchor-line is nil (the point anchor was off-screen),
+             since it is truthful to the top of the viewport regardless of
+             where point sits.
+  :anchor-line -- the screen-line offset (per `count-screen-lines', measured
+             against WIN) from `window-start' to the heading the point anchor
+             (`mindwtr-reconcile--id-at-point') will be restored to, captured
+             ONLY when that heading is within the live window's visible region.
+             The preferred scroll anchor: restore reproduces it with `recenter'
+             so the heading returns to its exact prior row, immune to drawer
+             reflow at/below it.  Nil when there is no live window, the point
+             anchor resolves to no heading, or that heading was off-screen --
+             in which case restore falls back to :top-id."
   (let ((folds (make-hash-table :test 'equal))
         (win (get-buffer-window (current-buffer)))
-        top-id)
+        top-id anchor-line)
     (org-map-entries
      (lambda ()
        (let ((key (or (mindwtr-parse--prop "MW_ID")
@@ -232,9 +267,20 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
         (goto-char (window-start win))
         (when (re-search-forward
                "^[ \t]*:MW_\\(?:ID\\|LIST\\):[ \t]*\\(.+?\\)[ \t]*$" nil t)
-          (setq top-id (match-string-no-properties 1)))))
+          (setq top-id (match-string-no-properties 1))))
+      ;; :anchor-line -- locate the heading `--goto-id (--id-at-point)' will
+      ;; land point on after the rebuild, resolved by the SAME (or MW_ID
+      ;; MW_LIST) walk-up `--id-at-point' uses, so capture and reapply target
+      ;; the same row.  Record its screen line only if it is on-screen now.
+      (let ((heading-pos (mindwtr-reconcile--anchor-heading-pos)))
+        (when (and heading-pos
+                   (<= (window-start win) heading-pos)
+                   (< heading-pos (window-end win)))
+          (setq anchor-line
+                (count-screen-lines (window-start win) heading-pos nil win)))))
     (list :folds folds
-          :top-id top-id)))
+          :top-id top-id
+          :anchor-line anchor-line)))
 
 (defun mindwtr-reconcile--restore-view (view)
   "Reapply the view state captured by `mindwtr-reconcile--snapshot-view'.
@@ -245,7 +291,9 @@ visual state is touched (fold overlays, `window-start'), never content, so
 `buffer-modified-p' is left exactly as the rebuild left it (R5)."
   (condition-case nil
       (let ((folds (plist-get view :folds))
-            (top-id (plist-get view :top-id)))
+            (top-id (plist-get view :top-id))
+            (anchor-line (plist-get view :anchor-line))
+            (win (get-buffer-window (current-buffer))))
         ;; 1. Re-fold, top-down, keyed by MW_ID/MW_LIST not position (R6).  The
         ;;    rebuilt buffer is fully expanded, so we only ever HIDE -- never an
         ;;    `org-overview'/`org-content' backdrop, which would collapse more
@@ -254,26 +302,49 @@ visual state is touched (fold overlays, `window-start'), never content, so
         ;;    its descendants first, so their (now invisible) headings are
         ;;    skipped; a `contents' ancestor hides only its own body via
         ;;    `--hide-entry', leaving children visible for their own records.
+        ;;
+        ;;    Wrapped in `save-excursion' so point stays on the `at-id' heading
+        ;;    that `mindwtr-reconcile-buffer' put it on just before calling here
+        ;;    -- the recenter step below anchors on that point.
         (when folds
-          (org-map-entries
-           (lambda ()
-             (let* ((key (or (mindwtr-parse--prop "MW_ID")
-                             (mindwtr-parse--prop "MW_LIST")))
-                    (st (and key (gethash key folds))))
-               (when (not (org-invisible-p (line-beginning-position)))
-                 (pcase st
-                   ('folded (mindwtr-reconcile--hide-subtree))
-                   ('contents (mindwtr-reconcile--hide-entry))))))))
-        ;; 2. Scroll: anchor the window to the recorded top entity if it still
-        ;;    resolves and there is a live window.
-        (when top-id
-          (let ((win (get-buffer-window (current-buffer))))
-            (when win
-              (save-excursion
-                ;; `--goto-id' returns non-nil (and leaves point on the heading)
-                ;; only when the anchor entity still exists after the rebuild.
-                (when (mindwtr-reconcile--goto-id top-id)
-                  (set-window-start win (line-beginning-position))))))))
+          (save-excursion
+            (org-map-entries
+             (lambda ()
+               (let* ((key (or (mindwtr-parse--prop "MW_ID")
+                               (mindwtr-parse--prop "MW_LIST")))
+                      (st (and key (gethash key folds))))
+                 (when (not (org-invisible-p (line-beginning-position)))
+                   (pcase st
+                     ('folded (mindwtr-reconcile--hide-subtree))
+                     ('contents (mindwtr-reconcile--hide-entry)))))))))
+        ;; 2. Scroll (LAST, after folds so screen geometry matches the snapshot).
+        ;;    Preferred: point is on the `at-id' heading, whose screen line was
+        ;;    captured pre-rebuild -- `recenter' returns it to that exact row,
+        ;;    immune to drawer reflow at/below it.  `recenter'/`set-window-start'
+        ;;    act on the selected window and `win' is often NOT selected on a
+        ;;    background sync, so the recenter runs inside `with-selected-window'.
+        ;;    Fallback (anchor heading was off-screen, so :anchor-line is nil):
+        ;;    re-anchor `window-start' to :top-id, truthful to the prior viewport
+        ;;    top.  No live window, or neither anchor resolves -> no-op.
+        (when win
+          (cond
+           (anchor-line
+            ;; Point is on the `at-id' heading (preserved by the fold loop's
+            ;; `save-excursion').  Selecting WIN resets buffer point to WIN's
+            ;; OWN stored window-point -- stale on a background sync, since
+            ;; reconcile set buffer point while WIN was unselected -- so
+            ;; re-assert the heading position before recentering on it.
+            (let ((pt (point)))
+              (with-selected-window win
+                (goto-char pt)
+                (recenter anchor-line))))
+           (top-id
+            (save-excursion
+              ;; `--goto-id' returns non-nil (and leaves point on the heading)
+              ;; only when the anchor entity still exists after the rebuild.
+              (when (mindwtr-reconcile--goto-id top-id)
+                (set-window-start win (line-beginning-position)))))))
+        nil)
     (error nil)))
 
 ;; Quarantine guard.  `mindwtr-reconcile-buffer' rebuilds the whole file from
@@ -393,7 +464,15 @@ silently erased."
       ;; buffer that already includes the quarantined headings.
       (mindwtr-reconcile--emit-quarantine orphans)
       (goto-char (point-min))
-      (mindwtr-reconcile--goto-id at-id)
+      ;; Position point on the anchor entity for the scroll restore.  If it no
+      ;; longer resolves -- the entity the cursor was on was deleted by THIS
+      ;; sync -- `--goto-id' leaves point at `point-min'.  The snapshot recorded
+      ;; an `:anchor-line' for it (it was on-screen pre-rebuild), so drop that
+      ;; field: recentering on the stranded point-min would yank the viewport to
+      ;; the buffer top.  Restore then falls back to the viewport-truthful
+      ;; `:top-id' window-start anchor instead.
+      (unless (mindwtr-reconcile--goto-id at-id)
+        (setq view (and view (plist-put view :anchor-line nil))))
       (mindwtr-reconcile--restore-view view))))
 
 (defun mindwtr-reconcile--find-parsed (id)

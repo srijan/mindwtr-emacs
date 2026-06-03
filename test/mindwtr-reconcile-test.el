@@ -565,14 +565,16 @@ heading restored from its own recorded state."
       (should (org-invisible-p (line-end-position)))))) ; still folded
 
 (ert-deftest mindwtr-reconcile-no-window-skips-scroll-anchor ()
-  "R3: with no live window the scroll anchor (:top-id) is nil and reconcile
-restores without attempting (or erroring on) a window scroll."
+  "R3: with no live window both scroll anchors (:top-id and :anchor-line) are
+nil and reconcile restores without attempting (or erroring on) a window scroll."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
               "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
       (org-mode))
-    (should (null (plist-get (mindwtr-reconcile--snapshot-view) :top-id)))
+    (let ((snap (mindwtr-reconcile--snapshot-view)))
+      (should (null (plist-get snap :top-id)))
+      (should (null (plist-get snap :anchor-line))))
     (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1"
                              :rev 1 :createdAt "2026-01-01T00:00:00Z"
                              :updatedAt "2026-06-01T00:00:00Z"))
@@ -595,7 +597,7 @@ rather than being swallowed at the start."
     (let ((view (list :folds (let ((h (make-hash-table :test 'equal)))
                                (puthash "ghost" 'folded h)
                                (puthash "single-actions" 'folded h) h)
-                      :top-id "ghost")))
+                      :top-id "ghost" :anchor-line nil)))
       (should (null (mindwtr-reconcile--restore-view view))) ; no throw
       (goto-char (point-min))
       (should-not (org-invisible-p (line-beginning-position))) ; container line shown
@@ -613,11 +615,155 @@ rather than being swallowed at the start."
     (set-buffer-modified-p nil)
     (let ((view (list :folds (let ((h (make-hash-table :test 'equal)))
                                (puthash "t1" 'folded h) h)
-                      :top-id nil)))
+                      :top-id nil :anchor-line nil)))
       (mindwtr-reconcile--restore-view view)
       (mindwtr-reconcile--goto-id "t1")
       (should (org-invisible-p (line-end-position))) ; the fold was applied
       (should-not (buffer-modified-p)))))            ; but the flag is untouched
+
+(ert-deftest mindwtr-reconcile-windowed-recenter-anchors-heading-row ()
+  "R1/R2: the recenter branch returns point's heading to the recorded screen row
+in a live window.  `count-screen-lines' (snapshot) and `recenter' (restore) use
+the same 0-based row index, so a captured N round-trips to N.  Validated at the
+`--restore-view' level -- deterministic in -Q batch (a displayed buffer yields a
+live window and `recenter' moves `window-start' predictably, verified below).
+Full reconcile-buffer recenter is verified manually per the plan's batch-window
+determinism note."
+  (let ((buf (generate-new-buffer " *mw-recenter*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buf)
+          (with-current-buffer buf
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (dotimes (i 8)
+                (insert (format (concat "** NEXT t%d\n:PROPERTIES:\n:MW_TYPE: task\n"
+                                        ":MW_ID: id%d\n:END:\nbody %d\n")
+                                i i i)))
+              (org-mode))
+            (let ((win (get-buffer-window buf)))
+              (skip-unless (window-live-p win))
+              (set-window-start win (point-min))
+              ;; point on the at-id heading, as reconcile-buffer leaves it
+              (mindwtr-reconcile--goto-id "id3")
+              ;; anchor-line non-nil -> recenter branch (no :top-id needed)
+              (should (null (mindwtr-reconcile--restore-view (list :anchor-line 4))))
+              (should (= 4 (count-screen-lines (window-start win)
+                                               (line-beginning-position) nil win))))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-reconcile-recenter-uses-buffer-point-not-stale-window-point ()
+  "R1 regression: a background sync fires while the buffer's window is NOT the
+selected window.  Selecting it resets buffer point to that window's OWN stored
+window-point -- stale, since reconcile set buffer point while the window was
+unselected -- so restore must re-assert the `at-id' heading before recentering.
+Without that, `recenter' would center on the stale point, not the heading."
+  (let ((buf (generate-new-buffer " *mw-recenter-bg*")))
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer buf
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (dotimes (i 8)
+                (insert (format (concat "** NEXT t%d\n:PROPERTIES:\n:MW_TYPE: task\n"
+                                        ":MW_ID: id%d\n:END:\nbody %d\n")
+                                i i i)))
+              (org-mode)))
+          ;; Display buf in a window that is NOT the selected one.
+          (let ((win (split-window (selected-window))))
+            (set-window-buffer win buf)
+            (skip-unless (and (window-live-p win) (not (eq win (selected-window)))))
+            (with-current-buffer buf
+              (set-window-start win (point-min))
+              (set-window-point win (point-min)) ; stale window-point at the top
+              ;; reconcile sets BUFFER point to the at-id heading (window unselected)
+              (mindwtr-reconcile--goto-id "id3")
+              (should (null (mindwtr-reconcile--restore-view (list :anchor-line 4))))
+              ;; the id3 heading -- not the stale top -- sits at row 4
+              (with-selected-window win
+                (should (= 4 (count-screen-lines (window-start win)
+                                                 (line-beginning-position) nil win)))))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-reconcile-windowed-offscreen-anchor-uses-top-id ()
+  "R2b: when point's anchor heading is above `window-start' (a background sync
+fired after the user scrolled away), snapshot records :anchor-line nil and a
+non-nil :top-id, and restore anchors the window via the :top-id
+`set-window-start' fallback -- it does NOT recenter on the off-screen point."
+  (let ((buf (generate-new-buffer " *mw-offscreen*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buf)
+          (with-current-buffer buf
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (dotimes (i 8)
+                (insert (format (concat "** NEXT t%d\n:PROPERTIES:\n:MW_TYPE: task\n"
+                                        ":MW_ID: id%d\n:END:\nbody %d\n")
+                                i i i)))
+              (org-mode))
+            (let ((win (get-buffer-window buf)))
+              (skip-unless (window-live-p win))
+              ;; scroll so id5's BODY is the viewport top: :top-id resolves to the
+              ;; next heading forward (id6), distinct from the initial start, so a
+              ;; successful fallback visibly moves `window-start'.
+              (mindwtr-reconcile--goto-id "id5")
+              (forward-line 5)            ; onto id5's body line
+              (set-window-start win (line-beginning-position))
+              ;; point sits on id1, far above window-start -> off-screen anchor
+              (mindwtr-reconcile--goto-id "id1")
+              (let ((snap (mindwtr-reconcile--snapshot-view)))
+                (should (null (plist-get snap :anchor-line)))  ; off-screen: no recenter
+                (should (equal "id6" (plist-get snap :top-id))) ; viewport-top heading
+                (should (null (mindwtr-reconcile--restore-view snap)))
+                (save-excursion
+                  (mindwtr-reconcile--goto-id "id6")
+                  ;; window-start was moved by the :top-id fallback onto id6's line
+                  (should (= (window-start win) (line-beginning-position))))))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-reconcile-deleted-anchor-does-not-jump-to-top ()
+  "R1/R2b regression: when the entity the cursor is on is deleted by THIS sync,
+`--goto-id at-id' fails and strands point at `point-min'.  The snapshot recorded
+an :anchor-line for it (on-screen pre-rebuild), so `mindwtr-reconcile-buffer'
+must drop that field, letting restore fall back to the :top-id window-start
+anchor instead of recentering on the stranded point-min -- which would yank the
+viewport to the buffer top, the very jump this change exists to prevent."
+  (let ((buf (generate-new-buffer " *mw-deleted-anchor*")))
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer buf
+            (let ((org-inhibit-startup t))
+              (insert "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+                      "** NEXT t1\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody1\n"
+                      "** NEXT t2\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\nbody2\n"
+                      "** NEXT t3\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t3\n:END:\nbody3\n")
+              (org-mode)))
+          (set-window-buffer (selected-window) buf)
+          (let ((win (get-buffer-window buf)))
+            (skip-unless (window-live-p win))
+            (with-current-buffer buf
+              ;; viewport top is t2 (survives the sync); cursor is on t3 (deleted)
+              (mindwtr-reconcile--goto-id "t2")
+              (set-window-start win (line-beginning-position))
+              (mindwtr-reconcile--goto-id "t3")
+              (let ((snap (mindwtr-reconcile--snapshot-view)))
+                (should (plist-get snap :anchor-line))       ; t3 on-screen -> recorded
+                (should (equal "t2" (plist-get snap :top-id)))) ; viewport-top anchor
+              (mindwtr-reconcile-buffer
+               '(:tasks ((:id "t1" :title "t1" :status "next" :areaId "a1"
+                          :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                          :updatedAt "2026-06-01T00:00:00Z")
+                         (:id "t2" :title "t2" :status "next" :areaId "a1"
+                          :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                          :updatedAt "2026-06-01T00:00:00Z"))
+                 :projects nil :sections nil
+                 :areas ((:id "a1" :name "Work")) :settings nil))
+              ;; t3 is gone, and the viewport did NOT collapse to the buffer top
+              ;; (the surviving :top-id t2 renders well below point-min).
+              (should (/= (window-start win) (point-min)))
+              (should-not (mindwtr-reconcile--goto-id "t3")))))
+      (kill-buffer buf))))
 
 (ert-deftest mindwtr-reconcile-expanded-buffer-survives-repeated-sync ()
   "Regression (#22): a fully expanded buffer must NOT collapse after a sync,
