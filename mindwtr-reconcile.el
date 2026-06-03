@@ -150,22 +150,133 @@ rebuild can carry it across."
       (when (re-search-forward re nil t)
         (org-back-to-heading t)))))
 
+;; Cross-version fold operations.  The `org-fold-*' namespace only exists in
+;; Org 9.6+ (Emacs 29); the project floor is Emacs 28.1 / Org 9.5, where the
+;; legacy `outline-*' functions are the equivalents.  These are the only spots
+;; that touch the 9.6+ namespace -- snapshot/detection uses `org-invisible-p',
+;; which behaves consistently across 9.5-9.8.
+
+(defun mindwtr-reconcile--hide-subtree ()
+  "Fold the subtree at point (cross-version)."
+  (if (fboundp 'org-fold-hide-subtree)
+      (org-fold-hide-subtree)
+    (outline-hide-subtree)))
+
+(defun mindwtr-reconcile--show-entry ()
+  "Reveal this entry's own body (cross-version), leaving descendants alone."
+  (if (fboundp 'org-fold-show-entry)
+      (org-fold-show-entry)
+    (outline-show-entry)))
+
+(defun mindwtr-reconcile--snapshot-view ()
+  "Capture user-visible view state before a full rebuild, as a plist.
+Every field is optional; absent fields are simply not restored.  Uses only
+cross-version-safe calls (`org-invisible-p', `org-cycle-global-status',
+`window-start') so it cannot raise `void-function' on Org 9.5 -- it runs
+before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
+
+  :folds  -- hash MW_ID -> `folded' or `open', recorded ONLY for entity
+             headings whose own heading line is currently visible.  A heading
+             hidden because an ancestor is collapsed is NOT recorded: its
+             visibility is governed by that ancestor / the global backdrop, not
+             by an explicit per-entity decision.  This three-way distinction
+             (folded / open / unrecorded) is what lets restore reapply an
+             `org-overview' backdrop AND still reopen the specific entities the
+             user had expanded, without punching ancestor-folded children open.
+  :global -- the buffer-local `org-cycle-global-status' (S-TAB level).
+  :top-id -- the MW_ID at/after the live window's `window-start', as a scroll
+             anchor; nil when there is no live window."
+  (let ((folds (make-hash-table :test 'equal))
+        (win (get-buffer-window (current-buffer)))
+        top-id)
+    (org-map-entries
+     (lambda ()
+       (let ((id (mindwtr-parse--prop "MW_ID")))
+         (when (and id (not (org-invisible-p (line-beginning-position))))
+           (puthash id
+                    (if (org-invisible-p (line-end-position)) 'folded 'open)
+                    folds)))))
+    (when win
+      (save-excursion
+        (goto-char (window-start win))
+        (when (re-search-forward "^[ \t]*:MW_ID:[ \t]*\\(.+?\\)[ \t]*$" nil t)
+          (setq top-id (match-string-no-properties 1)))))
+    (list :folds folds
+          :global (bound-and-true-p org-cycle-global-status)
+          :top-id top-id)))
+
+(defun mindwtr-reconcile--restore-view (view)
+  "Reapply the view state captured by `mindwtr-reconcile--snapshot-view'.
+VIEW is the snapshot plist.  Wrapped in `condition-case' so a fold/redisplay
+hiccup can never abort a sync: reconcile runs after the server PUT has already
+committed, so a throw here would surface as a spurious sync failure (R4).  Only
+visual state is touched (fold overlays, `window-start'), never content, so
+`buffer-modified-p' is left exactly as the rebuild left it (R5)."
+  (condition-case nil
+      (let ((folds (plist-get view :folds))
+            (global (plist-get view :global))
+            (top-id (plist-get view :top-id)))
+        ;; 1. Global backdrop first, so the per-entity pass below overrides it.
+        ;;    Only the collapsing states need action: `all'/nil mean "fully
+        ;;    shown", which the fresh erase/insert already is -- and the
+        ;;    per-entity pass re-folds anything the user had folded -- so no
+        ;;    show-all backdrop is needed (it would be a no-op).
+        (pcase global
+          ('overview (org-overview))
+          ('contents (org-content)))
+        ;; 2. Per-entity, top-down: re-fold the entities the user had folded and
+        ;;    re-open the ones they had open, keyed by MW_ID not position (R6).
+        ;;    Entities not recorded (ancestor-hidden at snapshot) are left to the
+        ;;    backdrop -- so an `org-overview' backdrop keeps them collapsed.
+        (when folds
+          (org-map-entries
+           (lambda ()
+             (let* ((id (mindwtr-parse--prop "MW_ID"))
+                    (st (and id (gethash id folds))))
+               (cond ((eq st 'folded) (mindwtr-reconcile--hide-subtree))
+                     ((eq st 'open) (mindwtr-reconcile--show-entry)))))))
+        ;; 3. Scroll: anchor the window to the recorded top entity if it still
+        ;;    resolves and there is a live window.
+        (when top-id
+          (let ((win (get-buffer-window (current-buffer))))
+            (when win
+              (save-excursion
+                ;; `--goto-id' returns non-nil (and leaves point on the heading)
+                ;; only when the anchor entity still exists after the rebuild.
+                (when (mindwtr-reconcile--goto-id top-id)
+                  (set-window-start win (line-beginning-position))))))))
+    (error nil)))
+
 (defun mindwtr-reconcile-buffer (merged)
   "Rebuild the current buffer to the canonical GTD-list layout of MERGED.
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
-and point is restored to the entity it was on."
-  (mindwtr-parse-ensure-keywords)
-  (let* ((org-only (mindwtr-reconcile--collect-org-only))
-         (at-id (mindwtr-reconcile--id-at-point))
-         ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
-         ;; status from the server), the buffer is left intact rather than
-         ;; wiped between erase and insert.
-         (rendered (mindwtr-render-appdata merged org-only)))
-    (let ((inhibit-message t))
-      (erase-buffer)
-      (insert rendered))
-    (goto-char (point-min))
-    (mindwtr-reconcile--goto-id at-id)))
+point is restored to the entity it was on, and user-visible view state
+\(folds) is snapshotted before the rebuild and reapplied after."
+  ;; Snapshot view state FIRST: `mindwtr-parse-ensure-keywords' may re-init
+  ;; org-mode (when the buffer's TODO keywords aren't registered), which resets
+  ;; all fold state and `org-cycle-global-status'.  Capturing before that runs
+  ;; reads the user's real visibility, not a wiped one.
+  ;;
+  ;; Guarded like the restore: reconcile runs AFTER the server PUT has already
+  ;; committed, and the snapshot sits before the restore's own `condition-case',
+  ;; so a signal here (e.g. `org-map-entries' on a degenerate buffer) would turn
+  ;; an already-committed sync into a spurious failure.  A nil view degrades to
+  ;; "restore nothing", strictly safer than aborting (R4).
+  (let ((view (condition-case nil (mindwtr-reconcile--snapshot-view)
+                (error nil))))
+    (mindwtr-parse-ensure-keywords)
+    (let* ((org-only (mindwtr-reconcile--collect-org-only))
+           (at-id (mindwtr-reconcile--id-at-point))
+           ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
+           ;; status from the server), the buffer is left intact rather than
+           ;; wiped between erase and insert.
+           (rendered (mindwtr-render-appdata merged org-only)))
+      (let ((inhibit-message t))
+        (erase-buffer)
+        (insert rendered))
+      (goto-char (point-min))
+      (mindwtr-reconcile--goto-id at-id)
+      (mindwtr-reconcile--restore-view view))))
 
 (defun mindwtr-reconcile--find-parsed (id)
   "Parse the buffer and return the entity whose id is ID, or nil."
