@@ -1,7 +1,7 @@
 ---
 title: "fix: stop silent deletion of untyped headings on sync (capture-safe ingest)"
 type: fix
-status: planned
+status: completed
 date: 2026-06-02
 issue: https://github.com/srijan/mindwtr-emacs/issues/2
 depth: standard
