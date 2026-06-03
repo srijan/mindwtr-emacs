@@ -27,5 +27,9 @@ org-capture normalizes the heading level to the `* Inbox' target."
           (mindwtr-model-status->keyword 'task "inbox")
           (mindwtr-util-uuid)))
 
+(defun mindwtr-capture-template-with-link ()
+  "Like `mindwtr-capture-template' but appends the org-capture annotation (%a)."
+  (concat (mindwtr-capture-template) "%a\n%i\n"))
+
 (provide 'mindwtr-capture)
 ;;; mindwtr-capture.el ends here
