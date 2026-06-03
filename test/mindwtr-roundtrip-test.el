@@ -151,5 +151,31 @@ with areaId via MW_AREA and projectId via nesting."
               (should got)
               (should (string= (mindwtr-signature got) (mindwtr-signature orig))))))))))
 
+(ert-deftest mindwtr-roundtrip-description-links-stable ()
+  "Org links in a description survive render->parse->render unchanged.
+A labelled link, a label-less link, and link-free text all round-trip:
+parse converts org->markdown for the server, render converts it back, and the
+org buffer text is byte-stable across the trip."
+  (dolist (desc '("Check [[https://example.com][the site]] later."
+                  "Raw url [[https://example.com]] inline."
+                  "See [[https://en.wikipedia.org/wiki/Foo_(bar)][docs]] now."
+                  "Just prose, no links at all."))
+    (let* ((mw-task (list :id "t1" :mw-kind 'task :title "x" :status "next"
+                          ;; description stored mindwtr-side is markdown
+                          :description (mindwtr-parse--org->mw-text desc)
+                          :mw-extra-props nil))
+           ;; Render injects org link syntax into the buffer body.
+           (text (mindwtr-roundtrip--render-wrapped mw-task)))
+      ;; The org text is byte-identical after the trip: the original org link
+      ;; (parens URL included) reappears verbatim in the rendered buffer.
+      (should (string-match-p (regexp-quote desc) text))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (let* ((ad (mindwtr-parse-buffer))
+               (parsed (car (plist-get ad :tasks))))
+          ;; parse re-derives the same markdown description.
+          (should (string= (plist-get parsed :description)
+                           (plist-get mw-task :description))))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here

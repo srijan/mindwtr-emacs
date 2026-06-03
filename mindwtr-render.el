@@ -51,6 +51,25 @@ to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
         (concat " :" (mapconcat #'identity all ":") ":")
       "")))
 
+(defun mindwtr-render--mw->org-text (text)
+  "Convert mindwtr (markdown) link syntax in TEXT to org link syntax.
+`[label](url)' becomes `[[url][label]]'; when the label equals the url (the
+form a label-less org link round-trips through) -- or the label is empty --
+it collapses back to the canonical `[[url]]' so the org buffer stays
+byte-stable across a sync.  The url group tolerates one level of balanced
+parens so URLs like `https://x/Foo_(bar)' survive intact.  Text with no
+markdown links is returned unchanged; non-link markdown is untouched."
+  (when text
+    (replace-regexp-in-string
+     "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
+     (lambda (m)
+       (let ((label (match-string 1 m))
+             (url (match-string 2 m)))
+         (if (or (string= label url) (string-empty-p label))
+             (format "[[%s]]" url)
+           (format "[[%s][%s]]" url label))))
+     text t t)))
+
 (defun mindwtr-render--checklist (task)
   "Render TASK checklist items as org checkboxes."
   (mapconcat (lambda (it)
@@ -158,7 +177,8 @@ Returns a string ending with a newline."
     (when (eq kind 'task)
       (let ((desc (plist-get entity :description))
             (cl (mindwtr-render--checklist entity)))
-        (when (and desc (> (length desc) 0)) (push desc lines))
+        (when (and desc (> (length desc) 0))
+          (push (mindwtr-render--mw->org-text desc) lines))
         (when (> (length cl) 0) (push cl lines))))
     (concat (mapconcat #'identity (nreverse lines) "\n") "\n")))
 

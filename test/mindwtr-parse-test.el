@@ -430,3 +430,57 @@ context would imply a different kind."
       (should (= (length (plist-get ad :sections)) 1))
       (should (string= (plist-get sec :title) "Weird"))
       (should (null (plist-get ad :tasks))))))
+
+(ert-deftest mindwtr-parse--org->mw-text-conversions ()
+  "Org link syntax in a description converts to markdown for the server."
+  ;; labelled link
+  (should (string= (mindwtr-parse--org->mw-text "see [[https://example.com][the docs]]")
+                   "see [the docs](https://example.com)"))
+  ;; plain (label-less) link becomes [url](url)
+  (should (string= (mindwtr-parse--org->mw-text "see [[https://example.com]]")
+                   "see [https://example.com](https://example.com)"))
+  ;; multiple links on one line
+  (should (string= (mindwtr-parse--org->mw-text "[[a][x]] and [[b][y]]")
+                   "[x](a) and [y](b)"))
+  ;; no links: passthrough (and nil-safe)
+  (should (string= (mindwtr-parse--org->mw-text "plain prose, no links") "plain prose, no links"))
+  (should (null (mindwtr-parse--org->mw-text nil))))
+
+(ert-deftest mindwtr-parse--org->mw-text-empty-label ()
+  "An empty org label `[[url][]]' falls back to the url, not an empty md label."
+  (should (string= (mindwtr-parse--org->mw-text "see [[https://example.com][]] now")
+                   "see [https://example.com](https://example.com) now")))
+
+(ert-deftest mindwtr-parse--org->mw-text-bracket-in-url-unsupported ()
+  "A literal `]' inside an org link url is an inherent org limitation.
+Org link syntax can't represent a bare `]' in the path, so the link is
+matched only up to the first `]'.  This pins the current (documented)
+behavior so it stays intentional rather than silently changing."
+  ;; `[[https://x/a]b]]' is not a link the regex can match (the inner `]'
+  ;; breaks the `]]'/`][' close), so the whole token passes through verbatim.
+  (should (string= (mindwtr-parse--org->mw-text "[[https://x/a]b]]")
+                   "[[https://x/a]b]]"))
+  ;; A `]' inside a label likewise breaks the close, so the token is left
+  ;; verbatim rather than producing a corrupted markdown link.
+  (should (string= (mindwtr-parse--org->mw-text "[[https://x][a]b]]")
+                   "[[https://x][a]b]]")))
+
+(ert-deftest mindwtr-parse-description-links-converted ()
+  "A task body with an org link parses to a markdown description."
+  (mindwtr-parse-test--with
+      "* Inbox
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: inbox
+:END:
+** TODO Read this :@home:
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+Check [[https://example.com][the site]] later.
+"
+    (org-next-visible-heading 1)
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :description)
+                       "Check [the site](https://example.com) later.")))))

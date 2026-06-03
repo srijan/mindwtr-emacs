@@ -235,6 +235,7 @@ Field mapping:
 | Tags starting with `@` | `contexts` |
 | Other tags | hashtags (`#tag`) |
 | Body prose (minus planning/drawers/checklist) | `description` |
+| Org links `[[url][label]]` / `[[url]]` in the body | markdown links `[label](url)` / `[url](url)` in `description` (converted both ways) |
 | `- [ ]` / `- [X]` lines | `checklist` items |
 | `SCHEDULED:` | `startTime` |
 | `DEADLINE:` | `dueDate` |

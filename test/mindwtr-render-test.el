@@ -160,3 +160,53 @@ keywords are registered regardless of the user's global `org-todo-keywords'."
     (should (< (string-match "PersB" text) (string-match "PersA" text)))
     (should (< (string-match "PersA" text) (string-match "WorkProj" text)))
     (should (< (string-match "WorkProj" text) (string-match "Floating" text)))))
+
+(ert-deftest mindwtr-render--mw->org-text-conversions ()
+  "Markdown link syntax in a description converts to org links."
+  ;; labelled link
+  (should (string= (mindwtr-render--mw->org-text "see [the docs](https://example.com)")
+                   "see [[https://example.com][the docs]]"))
+  ;; label == url collapses to the canonical label-less org form
+  (should (string= (mindwtr-render--mw->org-text "see [https://example.com](https://example.com)")
+                   "see [[https://example.com]]"))
+  ;; multiple links on one line
+  (should (string= (mindwtr-render--mw->org-text "[x](a) and [y](b)")
+                   "[[a][x]] and [[b][y]]"))
+  ;; no links: passthrough (and nil-safe)
+  (should (string= (mindwtr-render--mw->org-text "plain prose, no links") "plain prose, no links"))
+  (should (null (mindwtr-render--mw->org-text nil))))
+
+(ert-deftest mindwtr-render--mw->org-text-parens-in-url ()
+  "A url containing balanced parens survives the conversion intact.
+Regression: a naive `[^)]*' url group truncates at the first inner `)',
+corrupting the link and breaking round-trip byte-stability."
+  ;; single parens-bearing url with a label
+  (should (string= (mindwtr-render--mw->org-text
+                    "[Foo](https://en.wikipedia.org/wiki/Foo_(bar))")
+                   "[[https://en.wikipedia.org/wiki/Foo_(bar)][Foo]]"))
+  ;; still converts multiple links on one line, parens or not
+  (should (string= (mindwtr-render--mw->org-text
+                    "[a](http://x/y_(z)) and [b](http://q)")
+                   "[[http://x/y_(z)][a]] and [[http://q][b]]"))
+  ;; a label that legitimately contains `)' is not regressed
+  (should (string= (mindwtr-render--mw->org-text "[a(b)c](http://x)")
+                   "[[http://x][a(b)c]]"))
+  ;; parens url whose label equals the url still collapses to label-less form
+  (should (string= (mindwtr-render--mw->org-text
+                    "[http://x/(y)](http://x/(y))")
+                   "[[http://x/(y)]]")))
+
+(ert-deftest mindwtr-render--mw->org-text-empty-label ()
+  "An empty markdown label `[](url)' collapses to the canonical `[[url]]'.
+Rendering `[[url][]]' would produce invalid org, so an empty label is
+treated like label==url."
+  (should (string= (mindwtr-render--mw->org-text "see [](https://example.com) now")
+                   "see [[https://example.com]] now")))
+
+(ert-deftest mindwtr-render-description-links-converted ()
+  "A task's markdown description renders org links into the buffer body."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :description "Check [the site](https://example.com) later."
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "Check \\[\\[https://example.com\\]\\[the site\\]\\] later\\." text))))

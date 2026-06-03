@@ -89,6 +89,26 @@ neither a real kind nor an orphan."
       (when (re-search-forward regexp end t)
         (mindwtr-util-org->iso (match-string 1))))))
 
+(defun mindwtr-parse--org->mw-text (text)
+  "Convert org link syntax in TEXT to mindwtr (markdown) link syntax.
+`[[url][label]]' becomes `[label](url)' and a label-less `[[url]]' becomes
+`[url](url)'.  An empty label (`[[url][]]') falls back to the url, yielding
+`[url](url)'.  Text with no org links is returned unchanged.  Only links are
+converted; other org markup (bold, italic, ...) is left verbatim.
+A literal `]' inside an org link url or label is not supported: org link
+syntax cannot unambiguously represent a bare `]' inside its path, so such a
+link is matched only up to the first `]' (an inherent org limitation)."
+  (when text
+    (replace-regexp-in-string
+     "\\[\\[\\([^]]*\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
+     (lambda (m)
+       (let ((url (match-string 1 m))
+             (label (match-string 2 m)))
+         (format "[%s](%s)"
+                 (if (and label (not (string-empty-p label))) label url)
+                 url)))
+     text t t)))
+
 (defun mindwtr-parse--body ()
   "Return (description . checklist) for the entry at point.
 Description is the prose body minus planning, drawers, and checklist items."
@@ -111,7 +131,8 @@ Description is the prose body minus planning, drawers, and checklist items."
                       :isCompleted (if (string= (match-string 1 ln) "X") t :false))
                 checklist))
          (t (push ln prose))))
-      (cons (string-trim (mapconcat #'identity (nreverse prose) "\n"))
+      (cons (mindwtr-parse--org->mw-text
+             (string-trim (mapconcat #'identity (nreverse prose) "\n")))
             (nreverse checklist)))))
 
 (defun mindwtr-parse--extra-props ()
