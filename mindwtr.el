@@ -234,12 +234,16 @@ A manual sync clears any pending backoff and starts a fresh attempt."
       (message "mindwtr: bootstrapped from server"))))
 
 (defun mindwtr--maybe-debounced-sync ()
-  "Schedule a debounced auto-sync after saving the mindwtr file."
-  (when (and mindwtr-file buffer-file-name
-             (file-equal-p buffer-file-name mindwtr-file))
-    (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
-    (setq mindwtr--debounce-timer
-          (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync))))
+  "Schedule a debounced auto-sync after saving the mindwtr file.
+A save the engine itself performed (`mindwtr--inhibit-save-sync' bound)
+is ignored outright: it leaves any pending debounce timer untouched, so
+the engine's own writes never echo a stray HEAD-only sync ~5s later."
+  (unless mindwtr--inhibit-save-sync
+    (when (and mindwtr-file buffer-file-name
+               (file-equal-p buffer-file-name mindwtr-file))
+      (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
+      (setq mindwtr--debounce-timer
+            (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync)))))
 
 ;;;###autoload
 (define-minor-mode mindwtr-auto-sync-mode

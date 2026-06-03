@@ -1,6 +1,8 @@
 ;;; mindwtr-sync-test.el --- -*- lexical-binding: t; -*-
 (require 'ert)
+(require 'cl-lib)
 (require 'mindwtr-sync)
+(require 'mindwtr)
 
 (ert-deftest mindwtr-sync-build-candidate-create ()
   "A task absent from the shadow becomes a create: rev 1, gets id+createdAt."
@@ -493,3 +495,116 @@ default so validation does not abort."
       (when (get-buffer "*Mindwtr Sync Report*")
         (kill-buffer "*Mindwtr Sync Report*"))
       (delete-directory dir t))))
+
+;;; U1: echo-suppression infrastructure --------------------------------------
+
+(ert-deftest mindwtr-quiet-save-writes-and-cleans-file-buffer ()
+  "On a file-visiting modified buffer the helper writes to disk and leaves the
+buffer unmodified, returning t."
+  (let ((f (make-temp-file "mw-qs" nil ".org")))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (insert "hello quiet save\n")
+          (should (buffer-modified-p))
+          (should (eq (mindwtr-sync--save-buffer-quietly) t))
+          (should-not (buffer-modified-p))
+          (should (string= (with-temp-buffer (insert-file-contents f) (buffer-string))
+                           "hello quiet save\n")))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-quiet-save-noop-on-non-file-buffer ()
+  "A buffer not visiting a file is a no-op returning :skipped, never an error."
+  (with-temp-buffer
+    (insert "x")
+    (should (eq (mindwtr-sync--save-buffer-quietly) :skipped))))
+
+(ert-deftest mindwtr-quiet-save-catches-save-failure ()
+  "When the underlying save-buffer signals, the helper returns nil, does not
+throw, and the buffer is left modified."
+  (let ((f (make-temp-file "mw-qs-fail" nil ".org")))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (insert "unsaved\n")
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (should (null (mindwtr-sync--save-buffer-quietly))))
+          (should (buffer-modified-p)))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-quiet-save-suppresses-debounce-echo ()
+  "During the quiet save -- with the debounce live on after-save-hook -- no
+debounce timer is armed; the engine's own save does not echo."
+  (let ((f (make-temp-file "mw-qs-echo" nil ".org"))
+        (mindwtr--debounce-timer nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((mindwtr-file f)
+                (after-save-hook (cons #'mindwtr--maybe-debounced-sync after-save-hook)))
+            (insert "content\n")
+            (mindwtr-sync--save-buffer-quietly)
+            (should-not mindwtr--debounce-timer)))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-debounce-arms-when-flag-nil ()
+  "mindwtr--maybe-debounced-sync arms a timer for the mindwtr file when the
+inhibit flag is nil (existing behavior preserved)."
+  (let ((f (make-temp-file "mw-deb" nil ".org"))
+        (mindwtr--debounce-timer nil)
+        (mindwtr--inhibit-save-sync nil))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((mindwtr-file f))
+            (mindwtr--maybe-debounced-sync)
+            (should (timerp mindwtr--debounce-timer))))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-debounce-stands-down-when-flag-set ()
+  "With mindwtr--inhibit-save-sync bound t the scheduler arms nothing and
+leaves an existing debounce timer untouched."
+  (let* ((f (make-temp-file "mw-deb2" nil ".org"))
+         (sentinel (run-with-idle-timer 9999 nil #'ignore))
+         (mindwtr--debounce-timer sentinel)
+         (mindwtr--inhibit-save-sync t))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((mindwtr-file f))
+            (mindwtr--maybe-debounced-sync)
+            (should (eq mindwtr--debounce-timer sentinel))))
+      (cancel-timer sentinel)
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-quiet-save-protect-content-suppresses-before-save-hook ()
+  "PROTECT-CONTENT non-nil suppresses a content-mutating before-save-hook."
+  (let ((f (make-temp-file "mw-bsh-on" nil ".org")))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          ;; let* so the lambda closes over THIS `ran', not a free var.
+          (let* ((ran nil)
+                 (before-save-hook (list (lambda () (setq ran t)))))
+            (insert "body\n")
+            (mindwtr-sync--save-buffer-quietly t)
+            (should-not ran)))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))
+
+(ert-deftest mindwtr-quiet-save-without-protect-runs-before-save-hook ()
+  "Without PROTECT-CONTENT the user's before-save-hook runs, matching an
+ordinary `C-x C-s'."
+  (let ((f (make-temp-file "mw-bsh-off" nil ".org")))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          ;; let* so the lambda closes over THIS `ran', not a free var.
+          (let* ((ran nil)
+                 (before-save-hook (list (lambda () (setq ran t)))))
+            (insert "body\n")
+            (mindwtr-sync--save-buffer-quietly)
+            (should ran)))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f))))

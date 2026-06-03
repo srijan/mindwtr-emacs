@@ -10,6 +10,43 @@
 
 (defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas))
 
+(defvar mindwtr--inhibit-save-sync nil
+  "Non-nil while the engine writes the synced buffer itself.
+Dynamically `let'-bound `t' (never `setq'-reset, so it auto-unwinds on any
+exit) around an internal `save-buffer' so the `after-save-hook' debounce
+\(`mindwtr--maybe-debounced-sync') does not re-arm a stray HEAD-only sync
+~5s later for a save the engine performed.  Declared here -- the lower
+layer that `mindwtr.el' requires -- so both files see it and `make compile'
+stays clean under `error-on-warn'.  Mirrors the `mindwtr--sync-in-progress'
+guard discipline.")
+
+(defun mindwtr-sync--save-buffer-quietly (&optional protect-content)
+  "Save the current buffer to disk without re-arming the auto-sync debounce.
+Return `:skipped' when the buffer visits no file (a no-op), `t' on a
+successful save, and nil when the underlying `save-buffer' signals -- the
+error is caught, never thrown, because this also runs in the post-PUT
+region where a throw would masquerade as a sync failure (AGENTS.md
+invariant).  `save-buffer' itself no-ops when the buffer is unmodified.
+
+Binds `mindwtr--inhibit-save-sync' to `t' so the `after-save-hook'
+debounce stands down for this engine-driven save; other after-save
+handlers (recentf, etc.) still run.  With PROTECT-CONTENT non-nil also
+suppresses `before-save-hook' so a content-mutating hook (formatters,
+trailing-whitespace cleanup) cannot churn engine-canonical reconciled
+content out from under the just-passed concurrency guard."
+  (if (not (buffer-file-name))
+      :skipped
+    (let ((mindwtr--inhibit-save-sync t))
+      (condition-case err
+          (progn
+            (if protect-content
+                (let ((before-save-hook nil)) (save-buffer))
+              (save-buffer))
+            t)
+        (error
+         (message "mindwtr: buffer save failed: %s" (error-message-string err))
+         nil)))))
+
 (defun mindwtr-sync--strip-device-local (entity)
   "Return ENTITY without device-local fields."
   (let (out (i 0))
