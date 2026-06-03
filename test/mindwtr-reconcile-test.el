@@ -469,6 +469,123 @@ ancestor-skip limitation: only the ancestor's record drives restoration)."
       (mindwtr-reconcile--goto-id "p1")
       (should (org-invisible-p (line-end-position)))))) ; ancestor still folded
 
+;;; View-state preservation -- global cycle state + scroll anchor (U2)
+
+(ert-deftest mindwtr-reconcile-reapplies-global-overview ()
+  "R2: the global S-TAB overview state is reapplied after the rebuild.
+Establishes overview by setting BOTH `org-cycle-global-status' (what the
+snapshot reads) AND calling `org-overview' (the actual fold backdrop) --
+`org-overview' alone does not set the variable, so a test using only it
+would prove nothing.  Asserts the backdrop via `org-invisible-p'."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT deep task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (setq-local org-cycle-global-status 'overview)
+    (org-overview)
+    (let ((merged '(:tasks ((:id "t1" :title "deep task" :status "next" :areaId "a1"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      ;; a top-level container heading stays visible
+      (goto-char (point-min))
+      (should (re-search-forward "^\\* Single Actions" nil t))
+      (should-not (org-invisible-p (line-beginning-position)))
+      ;; the deep entity heading is collapsed under the reapplied backdrop
+      (mindwtr-reconcile--goto-id "t1")
+      (should (org-invisible-p (line-beginning-position))))))
+
+(ert-deftest mindwtr-reconcile-reopens-entity-on-top-of-backdrop ()
+  "R2 + R1 composition: with global overview set but one entity left open,
+after reconcile that entity's own body is shown while a sibling the user had
+folded stays collapsed -- the per-entity pass overrides the backdrop."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t1\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody one\n"
+              "** NEXT t2\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\nbody two\n")
+      (org-mode))
+    (setq-local org-cycle-global-status 'overview)
+    (org-overview)
+    ;; reveal Work's immediate children (t1/t2 headings show, bodies folded)
+    (mindwtr-reconcile--goto-id "a1")
+    (if (fboundp 'org-fold-show-children) (org-fold-show-children) (org-show-children))
+    ;; user expands t1's body only; t2 stays folded
+    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-reconcile--show-entry)
+    (let ((merged '(:tasks ((:id "t1" :title "t1" :status "next" :areaId "a1"
+                             :description "body one"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z")
+                            (:id "t2" :title "t2" :status "next" :areaId "a1"
+                             :description "body two"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (mindwtr-reconcile--goto-id "t1")
+      (should-not (org-invisible-p (line-end-position))) ; reopened
+      (mindwtr-reconcile--goto-id "t2")
+      (should (org-invisible-p (line-end-position)))))) ; still folded
+
+(ert-deftest mindwtr-reconcile-no-window-skips-scroll-anchor ()
+  "R3: with no live window the scroll anchor (:top-id) is nil and reconcile
+restores without attempting (or erroring on) a window scroll."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (should (null (plist-get (mindwtr-reconcile--snapshot-view) :top-id)))
+    (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged) ; must not signal
+      (goto-char (point-min))
+      (should (search-forward "* Single Actions" nil t)))))
+
+(ert-deftest mindwtr-reconcile-restore-view-tolerates-unresolved-anchor ()
+  "R4: restoring a snapshot whose :top-id and folded ids no longer resolve
+after the rebuild does not throw, and the global backdrop is still applied
+\(proves restore ran to completion rather than being swallowed at the start)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let ((view (list :folds (let ((h (make-hash-table :test 'equal)))
+                               (puthash "ghost" 'folded h) h)
+                      :global 'overview
+                      :top-id "ghost")))
+      (should (null (mindwtr-reconcile--restore-view view))) ; no throw
+      (goto-char (point-min))
+      (should-not (org-invisible-p (line-beginning-position))) ; container visible
+      (mindwtr-reconcile--goto-id "t1")
+      (should (org-invisible-p (line-beginning-position)))))) ; backdrop applied
+
+(ert-deftest mindwtr-reconcile-restore-view-preserves-modified-flag ()
+  "R5: restore touches only visual state (fold overlays), so it must not flip
+`buffer-modified-p' -- folding an entry happens, yet the buffer stays clean."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody\n")
+      (org-mode))
+    (set-buffer-modified-p nil)
+    (let ((view (list :folds (let ((h (make-hash-table :test 'equal)))
+                               (puthash "t1" 'folded h) h)
+                      :global nil :top-id nil)))
+      (mindwtr-reconcile--restore-view view)
+      (mindwtr-reconcile--goto-id "t1")
+      (should (org-invisible-p (line-end-position))) ; the fold was applied
+      (should-not (buffer-modified-p)))))            ; but the flag is untouched
+
 (ert-deftest mindwtr-reconcile-render-error-leaves-buffer-intact ()
   "If rendering the merged appdata errors, the buffer is NOT wiped.
 Regression: erase-buffer ran before insert, so a bad server status

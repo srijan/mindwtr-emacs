@@ -175,41 +175,73 @@ cross-version-safe calls (`org-invisible-p', `org-cycle-global-status',
 `window-start') so it cannot raise `void-function' on Org 9.5 -- it runs
 before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
 
-  :folded -- hash MW_ID -> t for entity headings whose own body is folded."
-  (let ((folded (make-hash-table :test 'equal)))
+  :folds  -- hash MW_ID -> `folded' or `open', recorded ONLY for entity
+             headings whose own heading line is currently visible.  A heading
+             hidden because an ancestor is collapsed is NOT recorded: its
+             visibility is governed by that ancestor / the global backdrop, not
+             by an explicit per-entity decision.  This three-way distinction
+             (folded / open / unrecorded) is what lets restore reapply an
+             `org-overview' backdrop AND still reopen the specific entities the
+             user had expanded, without punching ancestor-folded children open.
+  :global -- the buffer-local `org-cycle-global-status' (S-TAB level).
+  :top-id -- the MW_ID at/after the live window's `window-start', as a scroll
+             anchor; nil when there is no live window."
+  (let ((folds (make-hash-table :test 'equal))
+        (win (get-buffer-window (current-buffer)))
+        top-id)
     (org-map-entries
      (lambda ()
        (let ((id (mindwtr-parse--prop "MW_ID")))
-         (when id
-           ;; Skip a heading hidden only because an ancestor is folded (its
-           ;; heading line is itself invisible) -- the ancestor's own record
-           ;; covers it.  Record it as folded only when the heading line is
-           ;; visible but its body (end of the heading line) is hidden.
-           (when (and (not (org-invisible-p (line-beginning-position)))
-                      (org-invisible-p (line-end-position)))
-             (puthash id t folded))))))
-    (list :folded folded)))
+         (when (and id (not (org-invisible-p (line-beginning-position))))
+           (puthash id
+                    (if (org-invisible-p (line-end-position)) 'folded 'open)
+                    folds)))))
+    (when win
+      (save-excursion
+        (goto-char (window-start win))
+        (when (re-search-forward "^[ \t]*:MW_ID:[ \t]*\\(.+?\\)[ \t]*$" nil t)
+          (setq top-id (match-string-no-properties 1)))))
+    (list :folds folds
+          :global (bound-and-true-p org-cycle-global-status)
+          :top-id top-id)))
 
 (defun mindwtr-reconcile--restore-view (view)
   "Reapply the view state captured by `mindwtr-reconcile--snapshot-view'.
 VIEW is the snapshot plist.  Wrapped in `condition-case' so a fold/redisplay
 hiccup can never abort a sync: reconcile runs after the server PUT has already
 committed, so a throw here would surface as a spurious sync failure (R4).  Only
-visual state is touched (fold overlays), never content, so `buffer-modified-p'
-is left exactly as the rebuild left it (R5)."
+visual state is touched (fold overlays, `window-start'), never content, so
+`buffer-modified-p' is left exactly as the rebuild left it (R5)."
   (condition-case nil
-      (let ((folded (plist-get view :folded)))
-        ;; Per-entity fold state, top-down: explicitly set every MW_ID
-        ;; heading's own visibility so a heading the user had open is shown
-        ;; and one they had folded is re-folded, keyed by id not position (R6).
-        (when folded
+      (let ((folds (plist-get view :folds))
+            (global (plist-get view :global))
+            (top-id (plist-get view :top-id)))
+        ;; 1. Global backdrop first, so the per-entity pass below overrides it.
+        (pcase global
+          ('overview (org-overview))
+          ('contents (org-content)))
+        ;; 2. Per-entity, top-down: re-fold the entities the user had folded and
+        ;;    re-open the ones they had open, keyed by MW_ID not position (R6).
+        ;;    Entities not recorded (ancestor-hidden at snapshot) are left to the
+        ;;    backdrop -- so an `org-overview' backdrop keeps them collapsed.
+        (when folds
           (org-map-entries
            (lambda ()
-             (let ((id (mindwtr-parse--prop "MW_ID")))
-               (when id
-                 (if (gethash id folded)
-                     (mindwtr-reconcile--hide-subtree)
-                   (mindwtr-reconcile--show-entry))))))))
+             (let* ((id (mindwtr-parse--prop "MW_ID"))
+                    (st (and id (gethash id folds))))
+               (cond ((eq st 'folded) (mindwtr-reconcile--hide-subtree))
+                     ((eq st 'open) (mindwtr-reconcile--show-entry)))))))
+        ;; 3. Scroll: anchor the window to the recorded top entity if it still
+        ;;    resolves and there is a live window.
+        (when top-id
+          (let ((win (get-buffer-window (current-buffer))))
+            (when win
+              (save-excursion
+                (goto-char (point-min))
+                (when (re-search-forward
+                       (format ":MW_ID: *%s *$" (regexp-quote top-id)) nil t)
+                  (org-back-to-heading t)
+                  (set-window-start win (line-beginning-position))))))))
     (error nil)))
 
 (defun mindwtr-reconcile-buffer (merged)
