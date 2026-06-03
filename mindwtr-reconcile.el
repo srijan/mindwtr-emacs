@@ -268,30 +268,33 @@ accumulates.")
 
 (defun mindwtr-reconcile--orphan-heading-p ()
   "Non-nil if the heading at point is content reconcile would otherwise erase:
-no :MW_TYPE: and no kind inferable from context.  A typed entity, a container,
-and an inferable heading all return nil."
-  (and (null (mindwtr-parse--prop "MW_TYPE"))
+no (non-blank) :MW_TYPE: and no kind inferable from context.  A typed entity, a
+container, and an inferable heading all return nil."
+  (and (null (mindwtr-parse--mw-type))
        (null (mindwtr-parse--infer-kind))))
 
 (defun mindwtr-reconcile--collect-orphans ()
-  "Return raw subtree strings for headings reconcile would otherwise erase.
-Walks the current buffer (before any erase -- R7) collecting each orphan
-heading's whole subtree.  An existing `* Sync Failures' container is
-unwrapped: it is a recognized container, so the walk descends into it and
-collects its orphan children individually while discarding the wrapper --
-which is what makes quarantine idempotent (the wrapper is regenerated fresh
-on re-emit, never nested)."
+  "Return raw strings for headings reconcile would otherwise erase.
+Walks every heading in the current buffer (before any erase -- R7).  An orphan
+heading (`--orphan-heading-p') is captured as just its own heading + body, NOT
+its whole subtree: a typed or inferable DESCENDANT is a real entity that
+`mindwtr-parse-buffer' independently parses, syncs, and re-renders in its
+canonical bucket, so swallowing it into the quarantine text would duplicate it
+and its MW_ID.  The walk therefore always descends; an untyped descendant is
+visited and captured on its own.  An existing `* Sync Failures' container is a
+recognized container (not an orphan), so the walk descends into it and
+re-collects its children individually -- discarding the wrapper, which keeps
+quarantine idempotent (regenerated fresh on re-emit, never nested)."
   (save-excursion
     (goto-char (point-min))
     (let (orphans)
       (when (or (org-at-heading-p) (outline-next-heading))
         (while (not (eobp))
-          (if (mindwtr-reconcile--orphan-heading-p)
-              (let ((beg (point))
-                    (end (save-excursion (org-end-of-subtree t t) (point))))
-                (push (buffer-substring-no-properties beg end) orphans)
-                (goto-char end))
-            (outline-next-heading))))
+          (when (mindwtr-reconcile--orphan-heading-p)
+            (let ((beg (point))
+                  (end (save-excursion (outline-next-heading) (point))))
+              (push (buffer-substring-no-properties beg end) orphans)))
+          (outline-next-heading)))
       (nreverse orphans))))
 
 (defun mindwtr-reconcile--reroot-subtree (text target)

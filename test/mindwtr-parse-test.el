@@ -377,6 +377,22 @@ left unparsed so the quarantine guard (U2) can preserve it."
       (should (null (mindwtr-parse--infer-kind))))
     (should (null (plist-get (mindwtr-parse-buffer) :tasks)))))
 
+(ert-deftest mindwtr-parse-blank-mw-type-treated-as-absent ()
+  "A heading with a blank :MW_TYPE: value (a raw edit that left it empty) is
+treated as untyped -- inferred from context, not interned to the empty symbol
+and silently dropped."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Half-typed\n:PROPERTIES:\n:MW_TYPE:\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (task (car (plist-get ad :tasks))))
+      (should (= (length (plist-get ad :tasks)) 1))
+      (should (string= (plist-get task :title) "Half-typed"))
+      (should (string= (plist-get task :status) "inbox"))
+      (should (string= (plist-get task :id) "t1")))))
+
 (ert-deftest mindwtr-parse-infer-kind-covers-every-entity-role ()
   "Drift guard: every container role that holds ENTITIES must infer a kind, so
 adding a render-layer role without teaching `mindwtr-parse--infer-kind' fails

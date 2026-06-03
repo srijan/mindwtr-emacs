@@ -63,6 +63,15 @@ SCHEDULED and DEADLINE on separate lines) precedes the drawer."
   "Return raw value of property KEY for this entry, or nil."
   (cdr (assoc key (mindwtr-parse--drawer-alist))))
 
+(defun mindwtr-parse--mw-type ()
+  "Return this heading's :MW_TYPE: value, or nil when absent OR blank.
+A blank value (a raw edit that left `:MW_TYPE:' with nothing after it) is
+treated as absent so the heading routes through context inference / quarantine
+rather than interning to the empty symbol and being silently dropped as
+neither a real kind nor an orphan."
+  (let ((v (mindwtr-parse--prop "MW_TYPE")))
+    (and v (not (string-empty-p v)) v)))
+
 (defun mindwtr-parse--split-tags (tags)
   "Split org TAGS list into (contexts . hashtags) per the @-convention."
   (let (contexts hashtags)
@@ -286,7 +295,7 @@ container's :MW_LIST: plus project/section ancestry:
        ;; raw edit, mobile), fall back to inferring the kind from outline
        ;; context so the heading still round-trips instead of being silently
        ;; dropped (and then erased by reconcile).
-       (let* ((mt (mindwtr-parse--prop "MW_TYPE"))
+       (let* ((mt (mindwtr-parse--mw-type))
               (kind (cond ((null mt) (mindwtr-parse--infer-kind))
                           ((string= mt "container") nil)
                           (t (intern mt)))))
