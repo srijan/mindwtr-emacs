@@ -679,6 +679,43 @@ user left open stays open.  No drift in either direction (the degrade loop)."
         (should-not (org-invisible-p (line-beginning-position)))
         (should-not (org-invisible-p (line-end-position)))))))
 
+;;; Point restoration -- entities and containers
+
+(ert-deftest mindwtr-reconcile-id-at-point-falls-back-to-container-role ()
+  "`--id-at-point' returns the MW_ID for an entity but the MW_LIST role when
+point is on a container heading (no MW_ID), so the cursor location is a stable
+key in both cases."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE p\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+      (org-mode))
+    ;; on the container heading -> its role
+    (goto-char (point-min))
+    (should (string= (mindwtr-reconcile--id-at-point) "projects"))
+    ;; on the entity heading -> its id
+    (mindwtr-reconcile--goto-id "p1")
+    (should (string= (mindwtr-reconcile--id-at-point) "p1"))))
+
+(ert-deftest mindwtr-reconcile-restores-point-on-container ()
+  "Regression: with the cursor parked on a container heading (no MW_ID), the
+rebuild keeps point on that container instead of dropping it to point-min."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t)) (org-mode))
+    (let ((merged '(:tasks ((:id "t1" :title "captured" :status "inbox"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil :areas nil :settings nil)))
+      ;; Render the canonical layout, then park point on the Projects container.
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (re-search-forward "^\\* Projects" nil t))
+      (beginning-of-line)
+      (mindwtr-reconcile-buffer merged)
+      ;; point landed back on the Projects container, not at point-min
+      (should (org-at-heading-p))
+      (should (string= (mindwtr-parse--prop "MW_LIST") "projects")))))
+
 (ert-deftest mindwtr-reconcile-render-error-leaves-buffer-intact ()
   "If rendering the merged appdata errors, the buffer is NOT wiped.
 Regression: erase-buffer ran before insert, so a bad server status

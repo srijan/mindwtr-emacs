@@ -134,19 +134,26 @@ rebuild can carry it across."
     h))
 
 (defun mindwtr-reconcile--id-at-point ()
-  "Return the MW_ID of the entity heading containing point, or nil."
+  "Return a stable location key for the heading containing point.
+The MW_ID of the nearest entity at or above point; failing that the MW_LIST
+role of the heading point is on, so a cursor parked on a container (e.g.
+`* Projects', which has no MW_ID) is also preserved across the rebuild.  Nil
+when point is on a heading with neither property."
   (save-excursion
     (when (ignore-errors (org-back-to-heading t) t)
-      (let ((id (mindwtr-parse--prop "MW_ID")))
+      (let ((own-list (mindwtr-parse--prop "MW_LIST"))
+            (id (mindwtr-parse--prop "MW_ID")))
         (while (and (not id) (org-up-heading-safe))
           (setq id (mindwtr-parse--prop "MW_ID")))
-        id))))
+        (or id own-list)))))
 
 (defun mindwtr-reconcile--goto-id (id)
-  "Move point to the heading whose MW_ID is ID, if present."
+  "Move point to the heading whose MW_ID or MW_LIST equals ID, if present.
+Entity ids (UUIDs) and container roles share no values, so one search handles
+both -- letting point and scroll anchors target containers, not just entities."
   (when id
     (goto-char (point-min))
-    (let ((re (format ":MW_ID: *%s *$" (regexp-quote id))))
+    (let ((re (format ":MW_\\(?:ID\\|LIST\\): *%s *$" (regexp-quote id))))
       (when (re-search-forward re nil t)
         (org-back-to-heading t)))))
 
@@ -205,8 +212,8 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
              state is moot.  The three states are distinguished by what is
              hidden: `open' (body shown), `contents' (body hidden but a child
              heading still visible), `folded' (body and any children hidden).
-  :top-id -- the MW_ID at/after the live window's `window-start', as a scroll
-             anchor; nil when there is no live window."
+  :top-id -- the MW_ID or MW_LIST at/after the live window's `window-start',
+             as a scroll anchor; nil when there is no live window."
   (let ((folds (make-hash-table :test 'equal))
         (win (get-buffer-window (current-buffer)))
         top-id)
@@ -223,7 +230,8 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
     (when win
       (save-excursion
         (goto-char (window-start win))
-        (when (re-search-forward "^[ \t]*:MW_ID:[ \t]*\\(.+?\\)[ \t]*$" nil t)
+        (when (re-search-forward
+               "^[ \t]*:MW_\\(?:ID\\|LIST\\):[ \t]*\\(.+?\\)[ \t]*$" nil t)
           (setq top-id (match-string-no-properties 1)))))
     (list :folds folds
           :top-id top-id)))
