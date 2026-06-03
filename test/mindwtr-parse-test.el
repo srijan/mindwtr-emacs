@@ -274,3 +274,121 @@ keyword into the title; it parses with no :status and warns."
               "** ACTIVE Build the deck\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
     (mindwtr-parse-buffer)
     (should (null (mindwtr-parse-warnings)))))
+
+;;; MW_TYPE inference from outline context (U1) ------------------------------
+
+(ert-deftest mindwtr-parse-infers-task-under-inbox ()
+  "A heading lacking MW_TYPE under the Inbox container is parsed as a task.
+Captures the org-capture-inbox case: an INBOX heading with only an org :ID:."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Test new issue from emacs\n"
+              ":PROPERTIES:\n:ID:       56E8C571-D8CA-47CB-B699-07A195EA4193\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (task (car (plist-get ad :tasks))))
+      ;; Placement in :tasks is the kind signal -- `mindwtr-parse-buffer'
+      ;; strips the internal :mw-kind from its output.
+      (should (= (length (plist-get ad :tasks)) 1))
+      (should (string= (plist-get task :title) "Test new issue from emacs"))
+      (should (string= (plist-get task :status) "inbox"))
+      ;; No MW_ID yet -- the sync engine mints one (R5).
+      (should (null (plist-get task :id))))))
+
+(ert-deftest mindwtr-parse-infers-project-directly-under-projects ()
+  "A heading lacking MW_TYPE directly under the Projects container is a project."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE Launch the thing\n:PROPERTIES:\n:ID: abc\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects))))
+      (should (= (length (plist-get ad :projects)) 1))
+      (should (string= (plist-get proj :title) "Launch the thing"))
+      (should (string= (plist-get proj :status) "active"))
+      (should (null (plist-get ad :tasks))))))
+
+(ert-deftest mindwtr-parse-infers-task-under-typed-project ()
+  "A heading lacking MW_TYPE under a typed project is a task, not a project."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE Big Project\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+              "*** NEXT Do the thing\n:PROPERTIES:\n:ID: def\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (task (car (plist-get ad :tasks))))
+      (should (= (length (plist-get ad :tasks)) 1))
+      (should (string= (plist-get task :projectId) "p1"))
+      (should (string= (plist-get task :status) "next")))))
+
+(ert-deftest mindwtr-parse-infers-task-under-section ()
+  "A heading lacking MW_TYPE under a section is a task with that sectionId."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE Big Project\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+              "*** Planning\n:PROPERTIES:\n:MW_TYPE: section\n:MW_ID: s1\n:END:\n"
+              "**** NEXT Sketch it\n:PROPERTIES:\n:ID: ghi\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (task (car (plist-get ad :tasks))))
+      (should (= (length (plist-get ad :tasks)) 1))
+      (should (string= (plist-get task :sectionId) "s1"))
+      (should (null (plist-get task :projectId))))))
+
+(ert-deftest mindwtr-parse-infers-area-under-areas ()
+  "A heading lacking MW_TYPE under Areas of Focus is an area."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Health\n:PROPERTIES:\n:ID: jkl\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (area (car (plist-get ad :areas))))
+      (should (= (length (plist-get ad :areas)) 1))
+      (should (string= (plist-get area :name) "Health")))))
+
+(ert-deftest mindwtr-parse-inferred-heading-keeps-org-id-as-extra-prop ()
+  "An adopted heading's org :ID: is preserved as an unknown property, not as
+the entity id (R5: MW_ID stays the sync identity)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Captured\n:PROPERTIES:\n:ID: 56E8C571\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (task (car (plist-get ad :tasks))))
+      (should (null (plist-get task :id)))
+      (should (string= (plist-get (plist-get task :mw-extra-props) "ID" #'equal)
+                       "56E8C571")))))
+
+(ert-deftest mindwtr-parse-infer-kind-nil-without-container-context ()
+  "A heading with no recognized container ancestor cannot be inferred -- it is
+left unparsed so the quarantine guard (U2) can preserve it."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Some random note\n:PROPERTIES:\n:ID: xyz\n:END:\nbody text\n")
+      (org-mode)
+      (goto-char (point-min))
+      (org-next-visible-heading 1)
+      (should (null (mindwtr-parse--infer-kind))))
+    (should (null (plist-get (mindwtr-parse-buffer) :tasks)))))
+
+(ert-deftest mindwtr-parse-explicit-mw-type-not-overridden-by-inference ()
+  "Inference is a pure fallback: an explicit MW_TYPE always wins, even when the
+context would imply a different kind."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      ;; A section explicitly typed, sitting under Inbox (which would infer task).
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** Weird\n:PROPERTIES:\n:MW_TYPE: section\n:MW_ID: s9\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (sec (car (plist-get ad :sections))))
+      ;; Placement in :sections (not :tasks) proves the explicit MW_TYPE won.
+      (should (= (length (plist-get ad :sections)) 1))
+      (should (string= (plist-get sec :title) "Weird"))
+      (should (null (plist-get ad :tasks))))))

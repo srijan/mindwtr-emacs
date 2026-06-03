@@ -149,13 +149,19 @@ Warns on a duplicate name (keeps the first id)."
   (and entity-area-name mindwtr-parse--area-names
        (gethash entity-area-name mindwtr-parse--area-names)))
 
-(defun mindwtr-parse-heading ()
-  "Parse the org heading at point into a Mindwtr entity content plist."
+(defun mindwtr-parse-heading (&optional kind)
+  "Parse the org heading at point into a Mindwtr entity content plist.
+KIND, when given, is the entity kind symbol to use (e.g. for a heading whose
+type was inferred from context).  When omitted it is read from the
+:MW_TYPE: property, falling back to `mindwtr-parse--infer-kind'."
   (save-excursion (mindwtr-parse-ensure-keywords))
   (org-back-to-heading t)
-  (let* ((kind (intern (or (mindwtr-parse--prop "MW_TYPE")
-                           (error "Heading has no MW_TYPE: %s"
-                                  (org-get-heading t t t t)))))
+  (let* ((kind (or kind
+                   (let ((mt (mindwtr-parse--prop "MW_TYPE")))
+                     (and mt (intern mt)))
+                   (mindwtr-parse--infer-kind)
+                   (error "Heading has no MW_TYPE and type could not be inferred: %s"
+                          (org-get-heading t t t t))))
          (id (mindwtr-parse--prop "MW_ID"))
          (title (org-get-heading t t t t))
          (todo (org-get-todo-state))
@@ -234,6 +240,36 @@ Warns on a duplicate name (keeps the first id)."
           (setq found (mindwtr-parse--prop "MW_ID"))))
       found)))
 
+(defun mindwtr-parse--ancestor-list-role ()
+  "Return the :MW_LIST: role of the nearest container ancestor of point, or nil.
+The first container ancestor wins; a container with no :MW_LIST: yields nil."
+  (save-excursion
+    (let (done role)
+      (while (and (not done) (org-up-heading-safe))
+        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "container")
+          (setq done t role (mindwtr-parse--prop "MW_LIST"))))
+      (and role (not (string-empty-p role)) role))))
+
+(defun mindwtr-parse--infer-kind ()
+  "Infer an entity kind for a heading lacking :MW_TYPE: from its outline context.
+Returns `task', `project', or `area', or nil when the position implies no
+mindwtr entity (no recognized container ancestor -- e.g. a stray top-level
+heading, or one parked under `* Sync Failures').  Keyed on the nearest
+container's :MW_LIST: plus project/section ancestry:
+
+  inbox / single-actions / someday-single-actions / reference -> task
+  projects / someday-projects, under a project or section       -> task
+  projects / someday-projects, direct child of the container    -> project
+  areas                                                         -> area"
+  (pcase (mindwtr-parse--ancestor-list-role)
+    ((or "inbox" "single-actions" "someday-single-actions" "reference") 'task)
+    ((or "projects" "someday-projects")
+     (if (or (mindwtr-parse--ancestor-id 'section)
+             (mindwtr-parse--ancestor-id 'project))
+         'task 'project))
+    ("areas" 'area)
+    (_ nil)))
+
 (defun mindwtr-parse-buffer ()
   "Parse the current org buffer into a content appdata plist."
   (setq mindwtr-parse--warnings nil)
@@ -242,10 +278,18 @@ Warns on a duplicate name (keeps the first id)."
         tasks projects sections areas)
     (org-map-entries
      (lambda ()
-       (let ((kind (mindwtr-parse--prop "MW_TYPE")))
-         (when (and kind (not (string= kind "container")))
-           (let ((e (mindwtr-parse-heading)))
-             (pcase (intern kind)
+       ;; A heading's kind comes from its :MW_TYPE: property; a `container'
+       ;; is structural, not an entity.  When :MW_TYPE: is absent (org-capture,
+       ;; raw edit, mobile), fall back to inferring the kind from outline
+       ;; context so the heading still round-trips instead of being silently
+       ;; dropped (and then erased by reconcile).
+       (let* ((mt (mindwtr-parse--prop "MW_TYPE"))
+              (kind (cond ((null mt) (mindwtr-parse--infer-kind))
+                          ((string= mt "container") nil)
+                          (t (intern mt)))))
+         (when kind
+           (let ((e (mindwtr-parse-heading kind)))
+             (pcase kind
                ('area (push (mindwtr-parse--strip-internal e) areas))
                ('project (push (mindwtr-parse--strip-internal e) projects))
                ('section
