@@ -1,0 +1,105 @@
+---
+title: "Synchronous HTTP spins a nested event loop: guard against timer re-entrancy mid-sync"
+date: 2026-06-03
+category: design-patterns
+module: mindwtr
+problem_type: design_pattern
+component: tooling
+severity: high
+applies_when:
+  - "Using url-retrieve-synchronously or any blocking HTTP call in a timer or hook"
+  - "Adding a trigger path (hook, timer, focus event) that calls into the sync engine"
+  - "Implementing debounce, periodic, or retry timers around synchronous I/O"
+  - "Reasoning about concurrency in single-threaded Emacs Lisp with blocking network calls"
+tags: [re-entrancy, nested-event-loop, synchronous-http, timers, backoff]
+---
+
+# Synchronous HTTP spins a nested event loop: guard against timer re-entrancy mid-sync
+
+## Context
+Emacs is single-threaded but **processes pending events while blocking on synchronous I/O**. When
+`url-retrieve-synchronously` (the fallback in `mindwtr-api--default-http`, `mindwtr-api.el:54`)
+blocks on the network, Emacs enters a nested event loop and runs any due timers — the periodic
+sync timer, the save-debounce timer, the backoff retry timer. Without a guard, such a timer
+re-enters the sync engine and launches a **second concurrent cycle** while a GET/PUT is in flight:
+duplicate PUTs (two `:rev` bumps for one edit), racing backoff counters, and a corrupted `:tick`
+check. The `plz.el` transport behaves identically — `:then 'sync` still processes events while
+blocked, so this is not transport-specific.
+
+## Guidance
+A three-part pattern, all in `mindwtr.el`:
+
+**1. In-flight flag as a `defvar` (so it can be `let`-bound):**
+
+```elisp
+;; mindwtr.el:64
+(defvar mindwtr--sync-in-progress nil
+  "Non-nil while a sync cycle is running.
+Emacs' synchronous HTTP spins a nested event loop that runs pending timers, so a
+periodic/debounce/retry timer can fire mid-sync; this guard stops a re-entrant
+trigger from launching a second concurrent cycle.")
+```
+
+**2. Bind the flag with `let` — automatic reset on every exit path** (`mindwtr.el:166-197`):
+
+```elisp
+(defun mindwtr--sync-attempt ()
+  (if mindwtr--sync-in-progress
+      nil                                  ; re-entrant call: silent no-op
+    (let ((mindwtr--sync-in-progress t)    ; dynamic binding auto-resets on any exit
+          (buf (mindwtr--prepare)))
+      (condition-case err
+          (let ((res (mindwtr-sync-once buf ...)))
+            (mindwtr--reset-backoff) ...)
+        (mindwtr-api-error ...)
+        (error ...)))))
+```
+
+Because `defvar` makes the variable special, the `let` uses dynamic scope and Emacs unwinds the
+binding on **any** non-local exit — including a signal propagating past `condition-case`. This is
+the Elisp equivalent of `unwind-protect` for the flag; no explicit reset is needed.
+
+**3. Every automatic trigger checks the flag (and backoff state) first** (`mindwtr.el:199-208`):
+
+```elisp
+(defun mindwtr--auto-sync ()
+  (unless (or mindwtr--sync-in-progress
+              (timerp mindwtr--retry-timer)   ; a retry is already queued
+              mindwtr--error-state)
+    (mindwtr--sync-attempt)))
+```
+
+A re-entrant timer fires `mindwtr--auto-sync`, sees the flag set, and returns immediately. The
+**armed retry timer itself** is the "deferred retry" signal — no separate boolean — so overlapping
+periodic/debounce triggers don't disturb the backoff cadence. Manual sync (`mindwtr-sync`,
+`mindwtr.el:211`) bypasses the gate and calls `mindwtr--reset-backoff` first, so a user request
+always runs regardless of backoff/error state.
+
+## Why This Matters
+A 2-second response on a 5-second periodic timer reliably spawns a second cycle before the first
+finishes: a duplicate PUT, a second `:rev` bump for one change. The backoff retry timer is the
+worst case — it fires exactly when the network is degraded and responses are slow, so
+re-entrancy is most likely precisely when its consequences (duplicate writes during conflict
+conditions) are most damaging.
+
+## When to Apply
+- Calling the sync engine from a new hook/timer: route through `mindwtr--auto-sync`, not directly,
+  so the guard is checked.
+- A new timer-driven side-effect that isn't safe to run concurrently with itself: apply the same
+  `defvar` + `let` pattern.
+- **Do not** add an explicit `(setq mindwtr--sync-in-progress nil)` anywhere — the `let` binding
+  handles reset; an explicit clear before the cycle ends would defeat the guard.
+- No `unwind-protect` is needed for the flag: `defvar` + `let` already gives unwind semantics
+  regardless of the file's `lexical-binding` setting.
+
+## Examples
+Re-entrant timer during an in-flight PUT:
+1. `mindwtr--sync-attempt` is running; `mindwtr--sync-in-progress` is `t`.
+2. The network blocks; Emacs runs the due periodic timer → `mindwtr--auto-sync`.
+3. It sees the flag set and returns — no second cycle, no duplicate PUT, backoff untouched.
+
+## Related
+- `mindwtr.el:64` flag, `:166` attempt, `:199` auto-sync gate, `:211` manual override.
+- `mindwtr-api.el:28-70` — both transport paths are synchronous.
+- `test/mindwtr-test.el` — `mindwtr-auto-sync-defers-while-in-progress`. Commit `638c4a6`.
+- The same synchronous transport's buffer ownership is [[url-el-synchronous-buffer-leak]].

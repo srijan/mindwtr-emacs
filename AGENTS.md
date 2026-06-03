@@ -44,8 +44,13 @@ JSON snapshot lets changes be detected without re-fetching.
 
 ## Building & testing
 
-- `make test` — run the ERT suite (batch). `make compile` — byte-compile. `make smoke` —
-  smoke tests. Remove stale `*.elc` before batch ERT runs if results look off (`rm -f *.elc`).
+- `make test` — the **offline** correctness gate: ERT unit tests, no server needed. This plus
+  `make compile` (byte-compile) is the ship gate; run them before every commit.
+- `make smoke` / `make smoke-write` — **online** integration tests that require a live
+  `MINDWTR_URL` (and credentials); they exit early with a connection error when no server is
+  reachable, so they're manual/staging-only, not a CI gate. Always exercise at least one
+  non-ASCII title through smoke — a symmetric encoder bug passes equality-based round-trip tests.
+- Remove stale `*.elc` before batch ERT runs if results look off (`rm -f *.elc`).
 
 ## Documented solutions
 
