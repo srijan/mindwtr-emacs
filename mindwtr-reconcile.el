@@ -150,22 +150,91 @@ rebuild can carry it across."
       (when (re-search-forward re nil t)
         (org-back-to-heading t)))))
 
+;; Cross-version fold operations.  The `org-fold-*' namespace only exists in
+;; Org 9.6+ (Emacs 29); the project floor is Emacs 28.1 / Org 9.5, where the
+;; legacy `outline-*' functions are the equivalents.  These are the only spots
+;; that touch the 9.6+ namespace -- snapshot/detection uses `org-invisible-p',
+;; which behaves consistently across 9.5-9.8.
+
+(defun mindwtr-reconcile--hide-subtree ()
+  "Fold the subtree at point (cross-version)."
+  (if (fboundp 'org-fold-hide-subtree)
+      (org-fold-hide-subtree)
+    (outline-hide-subtree)))
+
+(defun mindwtr-reconcile--show-entry ()
+  "Reveal this entry's own body (cross-version), leaving descendants alone."
+  (if (fboundp 'org-fold-show-entry)
+      (org-fold-show-entry)
+    (outline-show-entry)))
+
+(defun mindwtr-reconcile--snapshot-view ()
+  "Capture user-visible view state before a full rebuild, as a plist.
+Every field is optional; absent fields are simply not restored.  Uses only
+cross-version-safe calls (`org-invisible-p', `org-cycle-global-status',
+`window-start') so it cannot raise `void-function' on Org 9.5 -- it runs
+before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
+
+  :folded -- hash MW_ID -> t for entity headings whose own body is folded."
+  (let ((folded (make-hash-table :test 'equal)))
+    (org-map-entries
+     (lambda ()
+       (let ((id (mindwtr-parse--prop "MW_ID")))
+         (when id
+           ;; Skip a heading hidden only because an ancestor is folded (its
+           ;; heading line is itself invisible) -- the ancestor's own record
+           ;; covers it.  Record it as folded only when the heading line is
+           ;; visible but its body (end of the heading line) is hidden.
+           (when (and (not (org-invisible-p (line-beginning-position)))
+                      (org-invisible-p (line-end-position)))
+             (puthash id t folded))))))
+    (list :folded folded)))
+
+(defun mindwtr-reconcile--restore-view (view)
+  "Reapply the view state captured by `mindwtr-reconcile--snapshot-view'.
+VIEW is the snapshot plist.  Wrapped in `condition-case' so a fold/redisplay
+hiccup can never abort a sync: reconcile runs after the server PUT has already
+committed, so a throw here would surface as a spurious sync failure (R4).  Only
+visual state is touched (fold overlays), never content, so `buffer-modified-p'
+is left exactly as the rebuild left it (R5)."
+  (condition-case nil
+      (let ((folded (plist-get view :folded)))
+        ;; Per-entity fold state, top-down: explicitly set every MW_ID
+        ;; heading's own visibility so a heading the user had open is shown
+        ;; and one they had folded is re-folded, keyed by id not position (R6).
+        (when folded
+          (org-map-entries
+           (lambda ()
+             (let ((id (mindwtr-parse--prop "MW_ID")))
+               (when id
+                 (if (gethash id folded)
+                     (mindwtr-reconcile--hide-subtree)
+                   (mindwtr-reconcile--show-entry))))))))
+    (error nil)))
+
 (defun mindwtr-reconcile-buffer (merged)
   "Rebuild the current buffer to the canonical GTD-list layout of MERGED.
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
-and point is restored to the entity it was on."
-  (mindwtr-parse-ensure-keywords)
-  (let* ((org-only (mindwtr-reconcile--collect-org-only))
-         (at-id (mindwtr-reconcile--id-at-point))
-         ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
-         ;; status from the server), the buffer is left intact rather than
-         ;; wiped between erase and insert.
-         (rendered (mindwtr-render-appdata merged org-only)))
-    (let ((inhibit-message t))
-      (erase-buffer)
-      (insert rendered))
-    (goto-char (point-min))
-    (mindwtr-reconcile--goto-id at-id)))
+point is restored to the entity it was on, and user-visible view state
+\(folds) is snapshotted before the rebuild and reapplied after."
+  ;; Snapshot view state FIRST: `mindwtr-parse-ensure-keywords' may re-init
+  ;; org-mode (when the buffer's TODO keywords aren't registered), which resets
+  ;; all fold state and `org-cycle-global-status'.  Capturing before that runs
+  ;; reads the user's real visibility, not a wiped one.
+  (let ((view (mindwtr-reconcile--snapshot-view)))
+    (mindwtr-parse-ensure-keywords)
+    (let* ((org-only (mindwtr-reconcile--collect-org-only))
+           (at-id (mindwtr-reconcile--id-at-point))
+           ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
+           ;; status from the server), the buffer is left intact rather than
+           ;; wiped between erase and insert.
+           (rendered (mindwtr-render-appdata merged org-only)))
+      (let ((inhibit-message t))
+        (erase-buffer)
+        (insert rendered))
+      (goto-char (point-min))
+      (mindwtr-reconcile--goto-id at-id)
+      (mindwtr-reconcile--restore-view view))))
 
 (defun mindwtr-reconcile--find-parsed (id)
   "Parse the buffer and return the entity whose id is ID, or nil."

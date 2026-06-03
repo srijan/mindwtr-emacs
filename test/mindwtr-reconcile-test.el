@@ -345,6 +345,130 @@ so it must report `partial' (honest) rather than falsely claim success."
       (goto-char (point-min))
       (should (search-forward "[#D]" nil t)))))
 
+;;; View-state preservation across reconcile -- fold state (U1)
+
+(ert-deftest mindwtr-reconcile-keeps-folded-heading-folded ()
+  "R1: a folded entity heading stays folded after a reconcile that changes
+an unrelated entity.  Detection asserts via `org-invisible-p' so the test
+runs identically on Org 9.5 and 9.8."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT task one\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "body of one\n"
+              "** NEXT task two\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-reconcile--hide-subtree)
+    (should (org-invisible-p (line-end-position))) ; sanity: folded before
+    (let ((merged '(:tasks ((:id "t1" :title "task one" :status "next" :areaId "a1"
+                             :description "body of one"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z")
+                            (:id "t2" :title "task two RENAMED" :status "next" :areaId "a1"
+                             :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (goto-char (point-min))
+      (should (search-forward "task two RENAMED" nil t)) ; the unrelated change landed
+      (mindwtr-reconcile--goto-id "t1")
+      (should (org-invisible-p (line-end-position)))))) ; still folded after
+
+(ert-deftest mindwtr-reconcile-keeps-unfolded-heading-unfolded ()
+  "R1: an unfolded heading is still unfolded after reconcile (no over-folding)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT task one\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "body of one\n")
+      (org-mode))
+    ;; leave everything unfolded
+    (let ((merged '(:tasks ((:id "t1" :title "task one" :status "next" :areaId "a1"
+                             :description "body of one"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (mindwtr-reconcile--goto-id "t1")
+      (should-not (org-invisible-p (line-end-position))))))
+
+(ert-deftest mindwtr-reconcile-fold-follows-status-relocation ()
+  "R6: a folded task that changes bucket (loose next -> under a project) is
+folded again in its new location, because fold state is keyed by MW_ID."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT relocate me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "some body\n")
+      (org-mode))
+    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-reconcile--hide-subtree)
+    (should (org-invisible-p (line-end-position)))
+    (let ((merged '(:tasks ((:id "t1" :title "relocate me" :status "next" :projectId "p1"
+                             :description "some body"
+                             :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"
+                                :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                                :updatedAt "2026-06-01T00:00:00Z"))
+                    :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (mindwtr-reconcile--goto-id "t1")
+      ;; it now lives under the project subtree; still folded
+      (should (org-invisible-p (line-end-position))))))
+
+(ert-deftest mindwtr-reconcile-restore-view-no-window-no-error ()
+  "R4: reconcile completes without error with no live window (batch path) even
+after folding, and the buffer is correctly rebuilt -- proves the
+`condition-case' guard and the no-window path do not break the sync."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-reconcile--hide-subtree)
+    (let ((merged '(:tasks ((:id "t1" :title "renamed t" :status "next" :areaId "a1"
+                             :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged) ; must not signal
+      (goto-char (point-min))
+      (should (search-forward "renamed t" nil t)))))
+
+(ert-deftest mindwtr-reconcile-folded-ancestor-does-not-error ()
+  "Edge: a child entity hidden under a folded ancestor -- reconcile does not
+error, and the ancestor's own fold state is preserved (documents the known
+ancestor-skip limitation: only the ancestor's record drives restoration)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+              "*** NEXT child\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "child body\n")
+      (org-mode))
+    ;; fold the ancestor (project); the child is hidden only because of it
+    (mindwtr-reconcile--goto-id "p1")
+    (mindwtr-reconcile--hide-subtree)
+    (should (org-invisible-p (line-end-position)))
+    (let ((merged '(:tasks ((:id "t1" :title "child" :status "next" :projectId "p1"
+                             :description "child body"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"
+                                :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                                :updatedAt "2026-06-01T00:00:00Z"))
+                    :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged) ; must not signal
+      (mindwtr-reconcile--goto-id "p1")
+      (should (org-invisible-p (line-end-position)))))) ; ancestor still folded
+
 (ert-deftest mindwtr-reconcile-render-error-leaves-buffer-intact ()
   "If rendering the merged appdata errors, the buffer is NOT wiped.
 Regression: erase-buffer ran before insert, so a bad server status
