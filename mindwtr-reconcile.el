@@ -219,7 +219,12 @@ visual state is touched (fold overlays, `window-start'), never content, so
         ;; 1. Global backdrop first, so the per-entity pass below overrides it.
         (pcase global
           ('overview (org-overview))
-          ('contents (org-content)))
+          ('contents (org-content))
+          ;; `all' (S-TAB SHOW ALL): make the intent explicit and defensive on
+          ;; the Org 9.5 overlay-fold floor.  The fresh erase/insert is already
+          ;; fully shown on 9.6+, so this is a no-op there.
+          ('all (if (fboundp 'org-fold-show-all) (org-fold-show-all)
+                  (outline-show-all))))
         ;; 2. Per-entity, top-down: re-fold the entities the user had folded and
         ;;    re-open the ones they had open, keyed by MW_ID not position (R6).
         ;;    Entities not recorded (ancestor-hidden at snapshot) are left to the
@@ -237,10 +242,9 @@ visual state is touched (fold overlays, `window-start'), never content, so
           (let ((win (get-buffer-window (current-buffer))))
             (when win
               (save-excursion
-                (goto-char (point-min))
-                (when (re-search-forward
-                       (format ":MW_ID: *%s *$" (regexp-quote top-id)) nil t)
-                  (org-back-to-heading t)
+                ;; `--goto-id' returns non-nil (and leaves point on the heading)
+                ;; only when the anchor entity still exists after the rebuild.
+                (when (mindwtr-reconcile--goto-id top-id)
                   (set-window-start win (line-beginning-position))))))))
     (error nil)))
 

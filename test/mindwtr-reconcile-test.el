@@ -498,6 +498,46 @@ would prove nothing.  Asserts the backdrop via `org-invisible-p'."
       (mindwtr-reconcile--goto-id "t1")
       (should (org-invisible-p (line-beginning-position))))))
 
+(ert-deftest mindwtr-reconcile-reapplies-global-contents ()
+  "R2: the global `contents' S-TAB state is reapplied -- after reconcile a deep
+entity heading is visible while its body stays folded."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody\n")
+      (org-mode))
+    (setq-local org-cycle-global-status 'contents)
+    (org-content)
+    (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1"
+                             :description "body"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (mindwtr-reconcile--goto-id "t1")
+      (should-not (org-invisible-p (line-beginning-position))) ; heading visible
+      (should (org-invisible-p (line-end-position))))))        ; body folded
+
+(ert-deftest mindwtr-reconcile-reapplies-global-all ()
+  "R2: global `all' (S-TAB SHOW ALL) leaves the buffer fully expanded after
+reconcile (exercises the `all' backdrop branch)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\nbody\n")
+      (org-mode))
+    (setq-local org-cycle-global-status 'all)
+    (let ((merged '(:tasks ((:id "t1" :title "t" :status "next" :areaId "a1"
+                             :description "body"
+                             :rev 1 :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (mindwtr-reconcile--goto-id "t1")
+      (should-not (org-invisible-p (line-end-position)))))) ; body shown
+
 (ert-deftest mindwtr-reconcile-reopens-entity-on-top-of-backdrop ()
   "R2 + R1 composition: with global overview set but one entity left open,
 after reconcile that entity's own body is shown while a sibling the user had
