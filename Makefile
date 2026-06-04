@@ -20,3 +20,11 @@ smoke:
 .PHONY: smoke-write
 smoke-write:
 	MINDWTR_SMOKE_WRITE=1 $(EMACS) -Q --batch -L . -L smoke -l smoke/run.el
+
+# Spin up a real Mindwtr cloud server in Docker, run the smoke suite against it,
+# and cross-validate the /v1/data wire with an independent curl client.  Skips
+# cleanly when Docker/Emacs are unavailable.  Pin a version with
+# MINDWTR_CLOUD_TAG=0.9.7.  See test/integration/README.md.
+.PHONY: smoke-docker
+smoke-docker:
+	EMACS=$(EMACS) test/integration/run.sh
