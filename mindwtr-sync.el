@@ -364,7 +364,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                                   (format-time-string "%Y%m%dT%H%M%S")) bdir)))
                 (make-directory bdir t)
                 (write-region (point-min) (point-max) bf)
-                (setq backup-file bf)))
+                (setq backup-file bf)
+                (condition-case err
+                    (mindwtr-shadow-prune-backups)
+                  (error (message "mindwtr: backup cleanup skipped: %s"
+                                  (error-message-string err))))))
             (mindwtr-reconcile-buffer merged)
             ;; Return the buffer to clean on disk after the rebuild (an
             ;; erase+insert always marks it modified, so this always writes on
