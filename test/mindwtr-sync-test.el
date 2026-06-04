@@ -772,6 +772,75 @@ write already committed, so a disk-write hiccup must not fail the sync."
       (delete-file f)
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-once-writes-pre-reconcile-backup ()
+  "A full cycle on a file-visiting buffer snapshots the buffer to backups/
+BEFORE reconcile overwrites it.  The server returns a title that overrides the
+local edit, so the post-sync buffer differs from the backup: the backup must
+hold the user's PRE-sync text (the safety net the report points at), not the
+server's version, and the report must surface that path."
+  (let* ((dir (make-temp-file "mw-bak" t))
+         (f (make-temp-file "mw-bak-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         ;; The GET deliberately does NOT echo the PUT: the server wins with a
+         ;; different title, so reconcile rewrites the heading and the backup
+         ;; (taken before reconcile) is the only place LOCALWON survives.
+         (server-body
+          (concat "{\"tasks\":[{\"id\":\"t1\",\"title\":\"SERVERWON\","
+                  "\"status\":\"next\",\"areaId\":\"a1\",\"rev\":3,"
+                  "\"createdAt\":\"2026-01-01T00:00:00Z\","
+                  "\"updatedAt\":\"2026-06-02T00:00:00Z\"}],"
+                  "\"projects\":[],\"sections\":[],"
+                  "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],"
+                  "\"settings\":{}}"))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body server-body))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-current-buffer (find-file-noselect f)
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                      "** NEXT LOCALWON :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save
+             '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+               :projects nil :sections nil
+               :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (let* ((result (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z"))
+                   (bdir (expand-file-name "backups/" dir))
+                   (backups (and (file-directory-p bdir)
+                                 (directory-files bdir t "\\.org\\'"))))
+              (should (plist-get result :ok))
+              ;; reconcile applied the server's version into the live buffer
+              (goto-char (point-min))
+              (should (search-forward "SERVERWON" nil t))
+              ;; exactly one backup file was written for this single cycle
+              (should (= (length backups) 1))
+              (let ((snap (with-temp-buffer
+                            (insert-file-contents (car backups))
+                            (buffer-string))))
+                ;; the backup is the PRE-reconcile snapshot: it preserves the
+                ;; user's overridden edit and does NOT contain the server's
+                (should (string-match-p "LOCALWON" snap))
+                (should-not (string-match-p "SERVERWON" snap)))
+              ;; the report points the user at exactly this backup path
+              (with-current-buffer "*Mindwtr Sync Report*"
+                (goto-char (point-min))
+                (should (search-forward (car backups) nil t))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-prunes-stale-backups ()
   "A full sync writes a fresh backup and prunes ones older than retention."
   (let* ((dir (make-temp-file "mw-prune" t))

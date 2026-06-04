@@ -40,7 +40,7 @@ periodic/debounce/retry timer can fire mid-sync; this guard stops a re-entrant
 trigger from launching a second concurrent cycle.")
 ```
 
-**2. Bind the flag with `let` — automatic reset on every exit path** (`mindwtr.el:166-197`):
+**2. Bind the flag with `let` — automatic reset on every exit path** (`mindwtr.el:159`):
 
 ```elisp
 (defun mindwtr--sync-attempt ()
@@ -59,21 +59,28 @@ Because `defvar` makes the variable special, the `let` uses dynamic scope and Em
 binding on **any** non-local exit — including a signal propagating past `condition-case`. This is
 the Elisp equivalent of `unwind-protect` for the flag; no explicit reset is needed.
 
-**3. Every automatic trigger checks the flag (and backoff state) first** (`mindwtr.el:199-208`):
+**3. Every automatic trigger checks the flag (and backoff state) first** (`mindwtr.el:221-232`):
 
 ```elisp
 (defun mindwtr--auto-sync ()
   (unless (or mindwtr--sync-in-progress
-              (timerp mindwtr--retry-timer)   ; a retry is already queued
-              mindwtr--error-state)
+              (timerp mindwtr--retry-timer)              ; a retry is already queued
+              mindwtr--error-state
+              (mindwtr--buffer-has-unsaved-edits-p))     ; unsaved-edits gate (PR #29)
     (mindwtr--sync-attempt)))
 ```
+
+The fourth disjunct — the `buffer-modified-p` unsaved-edits gate — was added in PR #29 and is a
+distinct concern (protecting in-progress edits, not concurrency); it is documented in
+[[save-as-sync-commit-point]], including why it must be paired with an auto-save after reconcile.
+This guard list is the single chokepoint both patterns extend.
 
 A re-entrant timer fires `mindwtr--auto-sync`, sees the flag set, and returns immediately. The
 **armed retry timer itself** is the "deferred retry" signal — no separate boolean — so overlapping
 periodic/debounce triggers don't disturb the backoff cadence. Manual sync (`mindwtr-sync`,
-`mindwtr.el:211`) bypasses the gate and calls `mindwtr--reset-backoff` first, so a user request
-always runs regardless of backoff/error state.
+`mindwtr.el:235`) bypasses the gate and calls `mindwtr--reset-backoff` first, so a user request
+always runs regardless of backoff/error state. It also save-then-syncs (PR #29), so an explicit
+sync never refuses on a dirty buffer — see [[save-as-sync-commit-point]].
 
 ## Why This Matters
 A 2-second response on a 5-second periodic timer reliably spawns a second cycle before the first
@@ -99,7 +106,9 @@ Re-entrant timer during an in-flight PUT:
 3. It sees the flag set and returns — no second cycle, no duplicate PUT, backoff untouched.
 
 ## Related
-- `mindwtr.el:64` flag, `:166` attempt, `:199` auto-sync gate, `:211` manual override.
+- `mindwtr.el:64` flag, `:159` attempt, `:221` auto-sync gate (now four disjuncts), `:235`
+  manual override. The gate's fourth disjunct (`mindwtr--buffer-has-unsaved-edits-p`, `:211`)
+  belongs to [[save-as-sync-commit-point]] (PR #29), which extends this same chokepoint.
 - `mindwtr-api.el:28-70` — both transport paths are synchronous.
 - `test/mindwtr-test.el` — `mindwtr-auto-sync-defers-while-in-progress`. Commit `638c4a6`.
 - The same synchronous transport's buffer ownership is [[url-el-synchronous-buffer-leak]].
