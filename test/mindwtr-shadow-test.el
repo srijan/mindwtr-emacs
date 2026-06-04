@@ -91,7 +91,15 @@
      (should-not (file-directory-p
                   (expand-file-name "backups/" mindwtr-shadow-directory)))
      (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now)) ; must not error
-     (should t))))
+     ;; reaching here without error is the assertion
+     )))
+
+(ert-deftest mindwtr-shadow-prune-keeps-backup-at-cutoff ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "mindwtr-20260601T120000.org") ; exactly at cutoff
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20260601T120000.org")))))
 
 (ert-deftest mindwtr-shadow-prune-mixed-directory ()
   (mindwtr-shadow-test--with-dir

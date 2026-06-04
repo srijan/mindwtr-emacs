@@ -13,7 +13,7 @@
 (defcustom mindwtr-backup-retention-days 3
   "Delete pre-sync backups older than this many days after each sync.
 Age is measured from the timestamp encoded in the backup filename.
-nil or 0 disables cleanup (backups are kept forever)."
+nil or any non-positive value disables cleanup (backups are kept forever)."
   :type '(choice (const :tag "Keep forever" nil) integer)
   :group 'mindwtr)
 
@@ -90,7 +90,8 @@ timestamp are candidates; anything else is left untouched."
                                    (* days 24 60 60))))
         (dolist (f (directory-files bdir t nil t))
           (let ((btime (mindwtr-shadow--backup-time (file-name-nondirectory f))))
-            (when (and btime (time-less-p btime cutoff))
+            (when (and btime (time-less-p btime cutoff)
+                       (file-regular-p f))
               (delete-file f))))))))
 
 (provide 'mindwtr-shadow)
