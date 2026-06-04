@@ -29,6 +29,39 @@
     (should (string= (plist-get task :revBy) "phone"))
     (should (string= (plist-get task :updatedAt) "U"))))
 
+(ert-deftest mindwtr-sync-section-populated-description-not-clobbered ()
+  "Covers R3 (section).  A section with a server-authored :description that the
+user did not touch must round-trip as UNCHANGED -- the first post-U1 sync must
+not PUT an empty description over the mobile value.
+
+Pre-U1 this clobbered: render emitted no section body, parse left :description
+absent, classify saw a diff (shadow had it, local did not) and merge-content
+cleared it.  U1 renders + parses the description, so the parsed value now
+equals the server value and the section classifies unchanged."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :order 0
+                               :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :sections ((:id "s1" :projectId "p1" :title "Sec" :order 0
+                               :description "Mobile-authored note." :rev 5
+                               :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :areas nil :settings nil))
+         ;; The buffer is what render produces from the shadow; parse it back
+         ;; to get the local projection a real sync would compute.
+         (text (mindwtr-render-appdata shadow))
+         (local (with-temp-buffer
+                  (let ((org-inhibit-startup t)) (insert text) (org-mode))
+                  (mindwtr-parse-buffer)))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (sec (car (plist-get cand :sections))))
+    ;; parse recovered the description from the rendered body
+    (should (string= (plist-get (car (plist-get local :sections)) :description)
+                     "Mobile-authored note."))
+    ;; candidate keeps the server value and does NOT bump rev (unchanged echo)
+    (should (string= (plist-get sec :description) "Mobile-authored note."))
+    (should (= (plist-get sec :rev) 5))))
+
 (ert-deftest mindwtr-sync-build-candidate-update-bumps-rev ()
   (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 7
                             :createdAt "C" :updatedAt "U"))

@@ -168,6 +168,19 @@ the signature.")
     :pendingRemoteWriteAt :pendingRemoteWriteRetryAt :pendingRemoteWriteAttempts)
   "Fields that must be stripped before sending to the server.")
 
+(defconst mindwtr-model--notes-fields
+  '((task . :description) (section . :description) (project . :supportNotes))
+  "Alist of entity-kind -> the body-prose (notes) field that renders inline.
+`area' has no notes field and is omitted.  Render, parse, and reconcile all
+read this through `mindwtr-model-notes-field' so the kind->field mapping
+lives in one place -- adding a new note-bearing kind is a single edit here
+rather than three divergent per-kind checks across render/parse/reconcile.")
+
+(defun mindwtr-model-notes-field (kind)
+  "Return the inline body-prose (notes) field keyword for entity KIND, or nil.
+task/section -> `:description'; project -> `:supportNotes'; area -> nil."
+  (cdr (assq kind mindwtr-model--notes-fields)))
+
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate
                 :assignedTo :taskMode :startTime :dueDate :recurrence

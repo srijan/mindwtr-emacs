@@ -484,3 +484,87 @@ Check [[https://example.com][the site]] later.
     (let ((e (mindwtr-parse-heading)))
       (should (string= (plist-get e :description)
                        "Check [the site](https://example.com) later.")))))
+
+(ert-deftest mindwtr-parse-project-notes-into-support-notes ()
+  "Covers R3 (project parse half).  A project's body prose parses into
+:supportNotes, and a child subtree is NOT swallowed into the notes."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+Project planning notes.
+Second line.
+*** NEXT child task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+Task body, not project notes.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects))))
+      (should (string= (plist-get proj :supportNotes)
+                       "Project planning notes.\nSecond line."))
+      ;; the child task's body did not leak into the project notes
+      (should-not (string-match-p "Task body" (plist-get proj :supportNotes)))
+      ;; project has no :description / :checklist key
+      (should-not (plist-member proj :checklist)))))
+
+(ert-deftest mindwtr-parse-section-notes-into-description ()
+  "Covers R2/R3 (section parse half).  A section's body prose parses into
+:description."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** Planning
+:PROPERTIES:
+:MW_TYPE: section
+:MW_ID: s1
+:END:
+Section notes here.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (sec (car (plist-get ad :sections))))
+      (should (string= (plist-get sec :description) "Section notes here."))
+      (should-not (plist-member sec :checklist)))))
+
+(ert-deftest mindwtr-parse-project-checkbox-stays-prose ()
+  "Covers R9 / AE2.  A `- [ ]' line in project notes is preserved as literal
+prose and is NOT reclassified into a :checklist (projects have no such field)."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+Intro line.
+- [ ] a literal checkbox line
+More prose.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects))))
+      (should-not (plist-member proj :checklist))
+      (should (string-match-p "- \\[ \\] a literal checkbox line"
+                              (plist-get proj :supportNotes)))
+      (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
+                              (plist-get proj :supportNotes))))))

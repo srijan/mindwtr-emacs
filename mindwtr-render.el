@@ -173,12 +173,17 @@ Returns a string ending with a newline."
         (push (format ":%s: %s" (nth i extra) (nth (1+ i) extra)) lines)
         (setq i (+ i 2))))
     (push ":END:" lines)
-    ;; body: description then checklist (tasks)
+    ;; body: notes prose then checklist.  The notes field is per-kind
+    ;; (`mindwtr-model-notes-field': task/section -> :description, project ->
+    ;; :supportNotes, area -> none); checklist stays task-only.  This is the
+    ;; sole prose serializer, so reconcile's preserved-body must NOT also carry
+    ;; the note for any kind whose field renders here, or it double-grafts.
+    (let* ((field (mindwtr-model-notes-field kind))
+           (notes (and field (plist-get entity field))))
+      (when (and notes (> (length notes) 0))
+        (push (mindwtr-render--mw->org-text notes) lines)))
     (when (eq kind 'task)
-      (let ((desc (plist-get entity :description))
-            (cl (mindwtr-render--checklist entity)))
-        (when (and desc (> (length desc) 0))
-          (push (mindwtr-render--mw->org-text desc) lines))
+      (let ((cl (mindwtr-render--checklist entity)))
         (when (> (length cl) 0) (push cl lines))))
     (concat (mapconcat #'identity (nreverse lines) "\n") "\n")))
 

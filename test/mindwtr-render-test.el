@@ -210,3 +210,52 @@ treated like label==url."
                  :description "Check [the site](https://example.com) later."
                  :mw-extra-props nil) 2 nil)))
     (should (string-match-p "Check \\[\\[https://example.com\\]\\[the site\\]\\] later\\." text))))
+
+(ert-deftest mindwtr-render-project-notes-as-body ()
+  "Covers R1.  A project's :supportNotes renders as inline body prose after the
+PROPERTIES :END:, like a task description."
+  (let ((text (mindwtr-render-heading
+               '(:id "p1" :mw-kind project :title "Proj" :status "active"
+                 :supportNotes "Project planning notes." :mw-extra-props nil)
+               2 nil)))
+    (should (string-match-p ":MW_TYPE: project" text))
+    (should (string-match-p "^Project planning notes\\.$" text))
+    ;; the note sits AFTER the drawer's :END:, not inside the drawer.
+    (should (string-match-p ":END:\nProject planning notes\\." text))))
+
+(ert-deftest mindwtr-render-section-notes-as-body ()
+  "Covers R2.  A section's :description renders as inline body prose."
+  (let ((text (mindwtr-render-heading
+               '(:id "s1" :mw-kind section :title "Sec"
+                 :description "Section notes here." :mw-extra-props nil)
+               3 nil)))
+    (should (string-match-p ":MW_TYPE: section" text))
+    (should (string-match-p "^Section notes here\\.$" text))))
+
+(ert-deftest mindwtr-render-project-notes-links-converted ()
+  "Covers R7 (render half).  Markdown links in :supportNotes become org links."
+  (let ((text (mindwtr-render-heading
+               '(:id "p1" :mw-kind project :title "x" :status "active"
+                 :supportNotes "See [docs](https://example.com) now."
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "See \\[\\[https://example.com\\]\\[docs\\]\\] now\\." text))))
+
+(ert-deftest mindwtr-render-area-notes-none ()
+  "An area has no notes field, so it never emits a body even if a stray
+:description/:supportNotes value is present on the plist."
+  (let ((text (mindwtr-render-heading
+               '(:id "a1" :mw-kind area :name "Work"
+                 :description "should not render" :supportNotes "nor this"
+                 :mw-extra-props nil) 1 nil)))
+    (should-not (string-match-p "should not render" text))
+    (should-not (string-match-p "nor this" text))))
+
+(ert-deftest mindwtr-render-task-desc-then-checklist-unchanged ()
+  "A task still renders :description followed by its checklist (no regression)."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :description "Task notes."
+                 :checklist ((:title "one" :isCompleted :false)
+                             (:title "two" :isCompleted t))
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "Task notes\\.\n- \\[ \\] one\n- \\[X\\] two" text))))

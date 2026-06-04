@@ -109,9 +109,12 @@ link is matched only up to the first `]' (an inherent org limitation)."
                  url)))
      text t t)))
 
-(defun mindwtr-parse--body ()
-  "Return (description . checklist) for the entry at point.
-Description is the prose body minus planning, drawers, and checklist items."
+(defun mindwtr-parse--body (&optional parse-checklist)
+  "Return (PROSE . CHECKLIST) for the entry at point.
+PROSE is the body minus planning lines, drawers, and -- when PARSE-CHECKLIST
+is non-nil -- checklist items.  When PARSE-CHECKLIST is nil, `- [ ]' lines
+stay in PROSE: kinds without a `:checklist' field (project, section) must not
+have a checkbox line amputated into a dropped checklist on the next sync (R9)."
   (save-excursion
     (org-back-to-heading t)
     (let* ((el (org-element-at-point))
@@ -126,7 +129,8 @@ Description is the prose body minus planning, drawers, and checklist items."
          ((string-match-p "^[ \t]*:[A-Za-z0-9_]+:[ \t]*$" ln) (setq in-drawer t))
          (in-drawer nil)
          ((string-match-p "^[ \t]*\\(SCHEDULED\\|DEADLINE\\|CLOSED\\):" ln) nil)
-         ((string-match "^[ \t]*- \\[\\([ X]\\)\\] \\(.*\\)$" ln)
+         ((and parse-checklist
+               (string-match "^[ \t]*- \\[\\([ X]\\)\\] \\(.*\\)$" ln))
           (push (list :title (match-string 2 ln)
                       :isCompleted (if (string= (match-string 1 ln) "X") t :false))
                 checklist))
@@ -215,7 +219,7 @@ type was inferred from context).  When omitted it is read from the
           (push (list :id id :title title :keyword todo :kind kind)
                 mindwtr-parse--warnings)))))
     (when (eq kind 'task)
-      (let* ((body (mindwtr-parse--body))
+      (let* ((body (mindwtr-parse--body t))
              (pr (nth 3 (org-heading-components))))
         (setq e (plist-put e :priority (mindwtr-model-cookie->priority pr)))
         ;; MW_CONTEXTS/MW_TAGS are the exact-fidelity fallback for values
@@ -245,6 +249,13 @@ type was inferred from context).  When omitted it is read from the
                      ("MW_TASK_MODE" . :taskMode)))
           (let ((v (mindwtr-parse--prop (car p))))
             (when v (setq e (plist-put e (cdr p) v)))))))
+    ;; Notes prose for the non-task note-bearing kinds (section -> :description,
+    ;; project -> :supportNotes).  Parsed WITHOUT checklist extraction so a
+    ;; `- [ ]' line stays literal prose (R9).  Set unconditionally (like the
+    ;; task :description above) so an emptied note clears the field on merge.
+    (when (memq kind '(section project))
+      (setq e (plist-put e (mindwtr-model-notes-field kind)
+                         (car (mindwtr-parse--body nil)))))
     (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
       (when aid (setq e (plist-put e :areaId aid))))
     e))
