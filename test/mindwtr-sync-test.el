@@ -804,7 +804,7 @@ write already committed, so a disk-write hiccup must not fail the sync."
                         :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
                :projects nil :sections nil
                :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-            (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")
+            (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z") :ok))
             (set-buffer-modified-p nil))
           (should-not (file-exists-p
                        (expand-file-name "mindwtr-20200101T000000.org" bdir)))
