@@ -1,6 +1,7 @@
 ---
 title: Preserving Emacs buffer view state across a full reconcile rebuild
 date: 2026-06-03
+last_updated: 2026-06-04
 category: design-patterns
 module: mindwtr-reconcile
 problem_type: design_pattern
@@ -12,7 +13,7 @@ applies_when:
   - "Headings carry stable identity keys (e.g. MW_ID / MW_LIST) usable as restore anchors"
   - "The rebuild runs on a background/periodic trigger that can fire mid-session"
   - "The package must support an Org version floor where org-fold-* is absent (Org 9.5 / Emacs 28.1)"
-tags: [emacs, org-mode, buffer-view, fold-state, reconcile, scroll-anchor, cross-version]
+tags: [emacs, org-mode, buffer-view, fold-state, reconcile, scroll-anchor, recenter, cross-version]
 ---
 
 # Preserving Emacs buffer view state across a full reconcile rebuild
@@ -98,11 +99,51 @@ records. (The exact restore loop, contrasted against the inferior PR #1 version,
 [Examples](#examples) below.)
 
 **Restore scroll by content, not offset** — find the heading at/after the pre-rebuild
-`window-start`, store its key, and after the rebuild `set-window-start` to that heading if it
-still resolves. **Wrap the whole restore in `condition-case ... (error nil)`** — reconcile runs
-after the PUT commits, so a fold/redisplay hiccup that threw would surface as a *spurious sync
-failure* even though the server already succeeded. Restore touches only visual state (fold
-overlays, `window-start`), never content, so `buffer-modified-p` is left as the rebuild left it.
+`window-start`, store its key (`:top-id`), and after the rebuild `set-window-start` to that
+heading if it still resolves. **Wrap the whole restore in `condition-case ... (error nil)`** —
+reconcile runs after the PUT commits, so a fold/redisplay hiccup that threw would surface as a
+*spurious sync failure* even though the server already succeeded. Restore touches only visual
+state (fold overlays, `window-start`/`recenter`), never content, so `buffer-modified-p` is
+untouched by the restore itself. (Note: with PR #29 the engine now *auto-saves* after a
+content-changing reconcile, so the buffer ends up **clean** on disk — see
+[[save-as-sync-commit-point]]. That clean state comes from the engine save, not from restore;
+restore remains content-neutral.)
+
+**Pin the anchor heading's *screen row*, not just its first line** (PR #28). The `:top-id`
+approach snapped `window-start` to a heading boundary, which still nudged the viewport: any
+reflow at or above the anchor (property-drawer changes, body-length changes) moved the row the
+user was reading. The refinement captures the anchor heading's **0-based screen line** before the
+rebuild and reproduces it with `recenter` after — `count-screen-lines` (snapshot) and `recenter`
+(restore) share the same 0-based row index, so a captured row N round-trips to N. This is a
+*hybrid*, not a replacement: `:anchor-line` is the primary path; `:top-id` stays as the
+off-screen fallback (retiring it would leave no recovery when the anchor scrolled off screen).
+*(session history)*
+
+```elisp
+;; Snapshot -- record :anchor-line only when the heading is in the live window's
+;; visible region, measured against the reconcile window WIN (not the selected one).
+(let ((heading-pos (mindwtr-reconcile--anchor-heading-pos)))  ; (or MW_ID MW_LIST) walk-up
+  (when (and heading-pos
+             (<= (window-start win) heading-pos)
+             (< heading-pos (window-end win)))
+    (setq anchor-line (count-screen-lines (window-start win) heading-pos nil win))))
+
+;; Restore -- recenter on the SELECTED window; WIN is often NOT selected on a
+;; background sync, so re-assert the heading position before recentering.
+(cond
+ (anchor-line
+  (let ((pt (point)))
+    (with-selected-window win (goto-char pt) (recenter anchor-line))))
+ (top-id
+  (save-excursion
+    (when (mindwtr-reconcile--goto-id top-id)              ; off-screen fallback
+      (set-window-start win (line-beginning-position))))))
+```
+
+Pass the reconcile window explicitly to `count-screen-lines` and run `recenter` inside
+`with-selected-window` — reconcile fires on background/focus sync, when the buffer's window is
+frequently *not* the selected window, and an implicit measurement would compute the row against
+the wrong window's width and wrapping. *(session history)*
 
 ## Why This Matters
 Without this, every background sync visibly resets the buffer mid-edit, making the editing
@@ -139,6 +180,36 @@ A secondary PR #23 refinement: point and scroll anchors were originally `MW_ID`-
 cursor parked on a *container* heading (which has only `MW_LIST`) resolved to nil and the
 rebuild dumped point to `point-min`. Keying point/scroll by `(or MW_ID MW_LIST)` — the same way
 folds are keyed — means a cursor on `* Projects` lands back on Projects after sync.
+
+**The scroll dimension then went through a third iteration (PR #28): heading-granularity →
+pixel-stable.** PR #23's `:top-id` was *content*-keyed (good) but still *heading-granular* — it
+re-pinned the top of the window to a heading boundary, so the entry being read jumped a few rows
+on every background sync even when its own content was unchanged. PR #28 replaced the primary
+path with a screen-row `recenter` anchor (above): pin where the anchor heading sat *on screen*,
+not where its first line lands. Two candidate designs were weighed — a plain `recenter` at the
+saved point vs. measuring the anchor heading's screen line — and an adversarial review kept
+`:top-id` as the off-screen fallback rather than retiring it, since recentering on an off-screen
+point yanks the viewport to the top. *(session history)*
+
+Two failure modes were caught in review and locked in with regression tests:
+
+- **Stale window-point on a background sync.** Selecting a non-selected window resets buffer
+  point to *that window's* own stored point, so `recenter` would center on a stale line. Restore
+  re-asserts the heading position inside `with-selected-window` before recentering. The test
+  asserts the recenter uses buffer point, not the stale window-point. *(session history)*
+- **Anchor entity deleted by the same sync.** `--goto-id` then strands point at `point-min`;
+  recentering there yanks the viewport to the top — the exact jump this change exists to prevent.
+  So `mindwtr-reconcile-buffer` drops `:anchor-line` when the anchor no longer resolves, falling
+  back to `:top-id`:
+
+  ```elisp
+  (unless (mindwtr-reconcile--goto-id at-id)
+    (setq view (and view (plist-put view :anchor-line nil))))
+  ```
+
+`recenter`'s batch-mode determinism was verified before the windowed tests were written (a probe
+confirmed `recenter 5` then `count-screen-lines` round-trips to 5), so the tests assert real rows
+rather than skipping in non-interactive mode. *(session history)*
 
 ## When to Apply
 - Any time an Emacs command rebuilds a buffer the user is actively viewing (full
@@ -207,7 +278,14 @@ The scroll-anchor regex was widened the same way: `:MW_ID:` → `:MW_\(?:ID\|LIS
 
 ## Related
 - Merge commits: PR #1 = `fba8b6b` (the stopgap); PR #23 = `787e8eb` (fixes #22). The
-  degrade-each-sync fix is `49a9556`; the container point/scroll fix is `12c51cc`.
+  degrade-each-sync fix is `49a9556`; the container point/scroll fix is `12c51cc`. The
+  pixel-stable scroll iteration is PR #28 = `ebeefe7` (Closes #25); regression tests in
+  `test/mindwtr-reconcile-test.el` (windowed recenter round-trip; stale-window-point;
+  off-screen `:top-id` fallback; end-to-end deleted-anchor through `reconcile-buffer`).
+- The **trigger-side** counterpart that stops the rebuild from firing mid-edit at all is
+  [[save-as-sync-commit-point]] (PR #29) — this doc makes the rebuild *less jarring* when it
+  fires; that one mostly stops it firing while you have unsaved edits. The two are complementary
+  defenses.
 - Full signature-diffed incremental reconciliation is deliberately deferred — issue #5.
 - A separate multi-agent review flagged (3 reviewers, confidence 100, elevated to P1) that the
   snapshot ran outside the post-PUT `condition-case`; the snapshot was given its own guard
