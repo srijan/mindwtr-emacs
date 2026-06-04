@@ -96,10 +96,12 @@ with fast-access keys and the done-state separator."
                  :projectArchivedAt))
       (should (memq k sec)))
     (should (memq :icon area)))
-  ;; every content field that applies to tasks is a known task key
-  (dolist (k mindwtr-model-content-fields)
-    (unless (eq k :name)                ; :name is an area field, not a task field
-      (should (memq k (cdr (assq 'task mindwtr-model-known-fields)))))))
+  ;; every content field is a known key for at least one entity kind
+  ;; (e.g. :name is an area field, :supportNotes a project field, :description
+  ;; a task/section field -- none are task-only, so check the union).
+  (let ((all-known (apply #'append (mapcar #'cdr mindwtr-model-known-fields))))
+    (dolist (k mindwtr-model-content-fields)
+      (should (memq k all-known)))))
 
 (ert-deftest mindwtr-model-list-roles-and-titles ()
   (should (equal mindwtr-model-list-roles

@@ -128,6 +128,56 @@ timestamp of fields the user did not change."
     (should (string= (plist-get task :startTime) "2026-02-09T14:30:45.500Z"))
     (should (string= (plist-get (car (plist-get task :checklist)) :id) "c1"))))
 
+(ert-deftest mindwtr-sync-project-note-edit-adopted ()
+  "Covers R3/R4 (project).  After :supportNotes joins the allow-list, a buffer
+edit to a project's notes is detected and adopted into the candidate; the
+project's rev bumps."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old note" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "new note"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should (string= (plist-get proj :supportNotes) "new note"))
+    (should (= (plist-get proj :rev) 4))))
+
+(ert-deftest mindwtr-sync-project-note-emptied-clears ()
+  "Covers R3 (project).  Emptying a project's notes in the buffer clears the
+field on the candidate (an empty local note is a genuine clear)."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old note" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes ""))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should-not (plist-get proj :supportNotes))
+    (should (= (plist-get proj :rev) 4))))
+
+(ert-deftest mindwtr-sync-project-note-unchanged-echoes-rev ()
+  "Covers R4.  An untouched project note classifies unchanged: rev is echoed,
+no spurious change."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 9
+                               :revBy "phone" :supportNotes "stable note"
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "stable note"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should (= (plist-get proj :rev) 9))
+    (should (string= (plist-get proj :revBy) "phone"))))
+
 (ert-deftest mindwtr-sync-update-adopts-genuine-checklist-change ()
   "When the checklist content actually changes, the new value is taken."
   (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1

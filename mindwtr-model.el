@@ -148,16 +148,18 @@ each keyword is paired with its fast-access char from the shared sequence."
   "Fields rendered read-only into org; authoritative in the shadow.")
 
 (defconst mindwtr-model-content-fields
-  '(:name :title :status :priority :contexts :tags :description :checklist
-    :startTime :dueDate :completedAt
+  '(:name :title :status :priority :contexts :tags :description :supportNotes
+    :checklist :startTime :dueDate :completedAt
     :areaId :projectId :sectionId
     :energyLevel :timeEstimate :assignedTo :location :taskMode)
   "Editable fields that round-trip through org and define the content signature.
 This is an allow-list: any server field not named here (e.g.
-`:isFocusedToday', `:isSequential', `:supportNotes', `:tagIds',
-`:areaTitle', `:reviewAt') is excluded from change detection by
-construction, so it can neither drift a signature nor be lost -- it is
-preserved verbatim in the shadow and merged back on write.  Excludes
+`:isFocusedToday', `:isSequential', `:tagIds', `:areaTitle', `:reviewAt')
+is excluded from change detection by construction, so it can neither drift a
+signature nor be lost -- it is preserved verbatim in the shadow and merged
+back on write.  `:supportNotes' (project notes) and `:description'
+\(task/section notes) both round-trip as inline body prose and so are
+allow-listed.  Excludes
 `:id' (identity, matched separately), shadow-only fields, display
 mirrors, and internal parse keys.  Containment IDs ARE included: refiling
 a heading equals re-parenting in Mindwtr, so a changed parent must change
