@@ -76,7 +76,7 @@ change detection agree on what \"the same content\" means."
       (setq i (+ i 2)))
     out))
 
-(defun mindwtr-sync--merge-content (le se)
+(defun mindwtr-sync--merge-content (le se &optional protected-field)
   "Overlay LE's genuinely-changed content onto SE (the full shadow entity).
 LE is the lossy org projection (no checklist item ids, minute-precision
 timestamps); SE carries full fidelity plus server-managed and unmapped
@@ -85,7 +85,18 @@ canonical projection matches SE's -- so fields the user did not change
 retain their item ids and sub-minute precision -- while a genuine change
 adopts LE's value (clearing the field when LE emptied it).  LE's identity
 and internal keys are carried through (internal keys are stripped before
-the wire)."
+the wire).
+
+PROTECTED-FIELD, when non-nil, is a single content field whose clearing is
+suppressed when LE's value is empty but SE's is not.  Used for the first
+post-upgrade sync: a buffer written by a renderer that did not emit
+project/section note bodies parses to an empty notes value, which must not be
+read as the user clearing a server-authored note.  The caller passes the
+kind's notes field (project `:supportNotes', section `:description') only while
+the migration latch is unset (see `mindwtr-shadow-notes-migrated-p'); once set,
+this is nil and an empty note clears normally.  Note `:mw-kind' is stripped from
+LE by `mindwtr-parse-buffer', so the kind cannot be recovered here -- the caller
+resolves the field."
   (let ((out (copy-sequence (or se '()))))
     (dolist (k '(:id :mw-kind :mw-extra-props))
       (when (plist-member le k)
@@ -98,7 +109,11 @@ the wire)."
               ;; `:status' is mandatory for task/project; an empty local value
               ;; means the parser could not determine it (a type-invalid or
               ;; missing keyword), never an intentional clear -- so keep SV.
-              (unless (eq k :status)
+              ;; PROTECTED-FIELD: a non-task notes field the buffer could not
+              ;; yet render must likewise keep SV (pre-migration), never clear.
+              (unless (or (eq k :status)
+                          (and (eq k protected-field)
+                               (not (mindwtr-sync--empty-p sv))))
                 (setq out (mindwtr-sync--plist-remove out k)))
             (setq out (plist-put out k lv))))))
     out))
@@ -158,8 +173,12 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
     (plist-put (copy-sequence entity)
                :status (if (eq kind 'task) "inbox" "active"))))
 
-(defun mindwtr-sync-build-candidate (local shadow device-id now)
-  "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW."
+(defun mindwtr-sync-build-candidate (local shadow device-id now &optional protect-empty-notes)
+  "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW.
+PROTECT-EMPTY-NOTES is forwarded to `mindwtr-sync--merge-content' so the
+first post-upgrade sync does not clear a server-authored project/section
+note the old renderer never wrote into the buffer (see
+`mindwtr-shadow-notes-migrated-p')."
   ;; Guarantee non-null settings up front: a fresh namespace has none in its
   ;; shadow yet, and the server's settings merge 500s on a null blob.
   (setq shadow (mindwtr-model-ensure-settings shadow))
@@ -168,6 +187,12 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
     (dolist (key mindwtr-sync--entity-keys)
       (let* ((shadow-idx (mindwtr-shadow-index shadow key))
              (kind (mindwtr-sync--key->kind key))
+             ;; Pre-migration, protect this kind's notes field from being read
+             ;; as a clear (project :supportNotes, section :description); task
+             ;; notes always rendered, so they are never protected.
+             (protected-field (and protect-empty-notes
+                                   (not (eq kind 'task))
+                                   (mindwtr-model-notes-field kind)))
              (seen (make-hash-table :test 'equal))
              out)
         (dolist (le (plist-get local key))
@@ -183,13 +208,13 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
                     ('unchanged (copy-sequence se))
                     ('create
                      (let ((m (mindwtr-sync--ensure-status
-                               (mindwtr-sync--merge-content le se) kind)))
+                               (mindwtr-sync--merge-content le se protected-field) kind)))
                        (setq m (plist-put m :rev 1))
                        (setq m (plist-put m :createdAt now))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id)))
                     ('update
-                     (let ((m (mindwtr-sync--merge-content le se)))
+                     (let ((m (mindwtr-sync--merge-content le se protected-field)))
                        (setq m (plist-put m :rev (1+ (or (plist-get se :rev) 0))))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id))))))
@@ -347,7 +372,9 @@ Return (:ok t :conflicts LIST) or signals on hard error."
               (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
             (list :ok t :noop t :conflicts nil :stats stats :skew nil
                   :warnings parse-warnings))
-        (let* ((candidate (mindwtr-sync-build-candidate local shadow device now))
+        (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
+               (candidate (mindwtr-sync-build-candidate local shadow device now
+                                                        protect-empty-notes))
                (wire (mindwtr-sync--strip-internal-keys candidate)))
           (mindwtr-model-validate-appdata wire)
           ;; The PUT response carries {ok, stats, clockSkewWarning}; surface
@@ -377,6 +404,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                   (error (message "mindwtr: backup cleanup skipped: %s"
                                   (error-message-string err))))))
             (mindwtr-reconcile-buffer merged)
+            ;; The buffer now carries project/section note bodies rendered by
+            ;; this notes-capable client, so a future empty notes value is a
+            ;; genuine clear, not a pre-render artifact.  Latch the migration so
+            ;; the next sync stops protecting empty notes (see build-candidate).
+            (mindwtr-shadow-set-notes-migrated)
             ;; Return the buffer to clean on disk after the rebuild (an
             ;; erase+insert always marks it modified, so this always writes on
             ;; a full cycle -- never on the :noop branch above).  This closes

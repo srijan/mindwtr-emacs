@@ -128,6 +128,64 @@ timestamp of fields the user did not change."
     (should (string= (plist-get task :startTime) "2026-02-09T14:30:45.500Z"))
     (should (string= (plist-get (car (plist-get task :checklist)) :id) "c1"))))
 
+(ert-deftest mindwtr-sync-deploy-transition-preserves-project-note ()
+  "Finding A regression.  On the first sync after upgrade, the on-disk buffer was
+written by the OLD renderer (no project-note body), so parse yields an empty
+:supportNotes.  With protect-empty-notes on, build-candidate must NOT clear the
+server-authored note -- it preserves the shadow value instead of clobbering it."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :order 0
+                               :supportNotes "Mobile-authored note." :rev 5
+                               :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :sections nil :areas nil :settings nil))
+         ;; stale buffer: project with NO body (old renderer never emitted it)
+         (stale "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+         (local (with-temp-buffer
+                  (let ((org-inhibit-startup t)) (insert stale) (org-mode))
+                  (mindwtr-parse-buffer))))
+    ;; the parsed local note IS empty (the bug's precondition)
+    (should (mindwtr-sync--empty-p
+             (plist-get (car (plist-get local :projects)) :supportNotes)))
+    ;; WITHOUT protection the note is clobbered (documents the hazard)
+    (let ((proj (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev-1" "NOW" nil) :projects))))
+      (should (null (plist-get proj :supportNotes))))
+    ;; WITH protection (pre-migration) the server note is preserved
+    (let ((proj (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev-1" "NOW" t) :projects))))
+      (should (string= (plist-get proj :supportNotes) "Mobile-authored note.")))))
+
+(ert-deftest mindwtr-sync-protect-notes-does-not-block-task-description-clear ()
+  "protect-empty-notes guards only NON-task notes (project :supportNotes, section
+:description).  A genuinely emptied task :description still clears -- tasks always
+rendered their description, so an empty one is a real edit, never a pre-render
+artifact."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :description "old desc" :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"
+                                     :description ""))
+                      :projects nil :sections nil :areas nil))
+         (proj (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev-1" "NOW" t) :tasks))))
+    (should (null (plist-get proj :description)))))
+
+(ert-deftest mindwtr-sync-protect-notes-still-adopts-a-real-edit ()
+  "protect-empty-notes only suppresses clearing on an EMPTY local note; a real
+edited note value is always adopted, even pre-migration."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "edited"))
+                      :sections nil :areas nil))
+         (proj (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev-1" "NOW" t) :projects))))
+    (should (string= (plist-get proj :supportNotes) "edited"))))
+
 (ert-deftest mindwtr-sync-project-note-edit-adopted ()
   "Covers R3/R4 (project).  After :supportNotes joins the allow-list, a buffer
 edit to a project's notes is detected and adopted into the candidate; the

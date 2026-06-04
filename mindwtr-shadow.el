@@ -45,6 +45,20 @@ nil or any non-positive value disables cleanup (backups are kept forever)."
   (mindwtr-shadow--ensure-dir)
   (mindwtr-util-atomic-write (mindwtr-shadow--path "etag") (or etag "")))
 
+(defun mindwtr-shadow-notes-migrated-p ()
+  "Non-nil once this client has rendered project/section notes at least once.
+Before the first reconcile by a notes-capable client, the on-disk buffer was
+written by an older renderer that never emitted project/section note bodies, so
+parse yields an empty notes value that does NOT mean the user cleared the note.
+Sync uses this marker to avoid clobbering a server-authored note on the first
+post-upgrade cycle (see `mindwtr-sync-build-candidate')."
+  (and (mindwtr-util-read-file (mindwtr-shadow--path "notes-migrated")) t))
+
+(defun mindwtr-shadow-set-notes-migrated ()
+  "Record that this client has rendered project/section notes (one-way latch)."
+  (mindwtr-shadow--ensure-dir)
+  (mindwtr-util-atomic-write (mindwtr-shadow--path "notes-migrated") "1"))
+
 (defun mindwtr-shadow-device-id ()
   "Return the stable device id, generating and persisting one if needed."
   (let ((path (mindwtr-shadow--path "device-id")))

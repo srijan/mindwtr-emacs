@@ -26,6 +26,13 @@
    (mindwtr-shadow-set-etag "abc123")
    (should (string= (mindwtr-shadow-get-etag) "abc123"))))
 
+(ert-deftest mindwtr-shadow-notes-migrated-latch ()
+  "The notes-migration marker is absent until set, then latched on."
+  (mindwtr-shadow-test--with-dir
+   (should-not (mindwtr-shadow-notes-migrated-p))
+   (mindwtr-shadow-set-notes-migrated)
+   (should (mindwtr-shadow-notes-migrated-p))))
+
 (ert-deftest mindwtr-shadow-device-id-stable ()
   (mindwtr-shadow-test--with-dir
    (let ((id (mindwtr-shadow-device-id)))

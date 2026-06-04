@@ -87,9 +87,11 @@ drawer, description and checklist from ENTITY by reusing the canonical
 renderer -- so a remote change to ANY mapped field (dates, description,
 checklist, drawer props, tags) reaches the buffer instead of silently
 reverting on the next sync.  Preserves the heading's outline level,
-unknown PROPERTIES, and org-only body content (LOGBOOK/CLOCK and, for
-non-task entities, all free prose).  Child headings are outside the entry
-region and are left untouched."
+unknown PROPERTIES, and org-only body content: LOGBOOK/CLOCK for any
+note-bearing kind (task/project/section, whose prose is regenerated from the
+merged entity), and the entire free-prose body only for `area' (which has no
+notes field).  Child headings are outside the entry region and are left
+untouched."
   (org-back-to-heading t)
   (let* ((level (org-current-level))
          (extra (mindwtr-parse--extra-props))
