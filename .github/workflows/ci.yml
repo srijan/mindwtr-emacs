@@ -19,6 +19,8 @@ jobs:
   unit:
     name: compile + unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # safety net: a batch-mode hang (e.g. an interactive
+                          # prompt with no stdin) fails fast instead of stalling
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +43,7 @@ jobs:
     name: dockerized smoke + curl cross-check
     needs: unit            # don't spin up Docker if the fast checks are red
     runs-on: ubuntu-latest # GitHub-hosted runners have Docker preinstalled
+    timeout-minutes: 20    # safety net for a hung server/pull or batch prompt
     steps:
       - uses: actions/checkout@v4
 
