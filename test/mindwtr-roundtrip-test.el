@@ -29,6 +29,22 @@ Returns the full buffer text ready to parse."
     (puthash "a1" "Personal" mindwtr-render-area-names)
     (mindwtr-roundtrip--wrap (mindwtr-render-heading task 2 shadow))))
 
+(defun mindwtr-roundtrip--wrap-project (project-text)
+  "Wrap a rendered level-2 PROJECT-TEXT under a `* Projects' container.
+The task wrapper nests at level 2 under Next Actions, which would parse a
+project as a standalone task; projects must sit directly under the projects
+container so parse classifies and nests them correctly."
+  (concat "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+          project-text))
+
+(defun mindwtr-roundtrip--wrap-section (section-text)
+  "Wrap a rendered level-3 SECTION-TEXT under a project under `* Projects'.
+A section's :projectId is derived from its project ancestor, so it must be
+nested under a typed project heading to round-trip its containment."
+  (concat "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+          "** ACTIVE Parent\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: pX\n:END:\n"
+          section-text))
+
 (ert-deftest mindwtr-roundtrip-render-parse-signature-stable ()
   "render -> parse preserves the editable content signature."
   (let* ((shadow '(:createdAt "2026-01-01T10:00:00Z" :updatedAt "2026-05-30T15:30:00Z"))
@@ -126,10 +142,12 @@ and the signature normalizes items to (:title :isCompleted) so the lost
   "render-appdata -> parse-buffer preserves every entity's content signature,
 with areaId via MW_AREA and projectId via nesting."
   (let* ((ad '(:areas ((:id "a1" :name "Personal" :order 0))
-               :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1" :order 0)
+               :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1" :order 0
+                           :supportNotes "Project planning notes.")
                           (:id "pw" :title "Waiting proj" :status "waiting" :order 7)
                           (:id "ps" :title "Someday proj" :status "someday" :order 8))
-               :sections nil
+               :sections ((:id "s1" :projectId "p1" :title "Sec" :order 0
+                           :description "Section notes that must survive."))
                :tasks ((:id "t1" :mw-kind task :title "loose" :status "next"
                         :areaId "a1" :contexts ("@home") :order 0)
                        (:id "t2" :mw-kind task :title "child" :status "next"
@@ -143,9 +161,9 @@ with areaId via MW_AREA and projectId via nesting."
       (let ((org-inhibit-startup t)) (insert text) (org-mode))
       (let* ((re (mindwtr-parse-buffer))
              (idx (make-hash-table :test 'equal)))
-        (dolist (k '(:tasks :projects :areas))
+        (dolist (k '(:tasks :projects :sections :areas))
           (dolist (e (plist-get re k)) (puthash (plist-get e :id) e idx)))
-        (dolist (k '(:tasks :projects :areas))
+        (dolist (k '(:tasks :projects :sections :areas))
           (dolist (orig (plist-get ad k))
             (let ((got (gethash (plist-get orig :id) idx)))
               (should got)
@@ -176,6 +194,107 @@ org buffer text is byte-stable across the trip."
           ;; parse re-derives the same markdown description.
           (should (string= (plist-get parsed :description)
                            (plist-get mw-task :description))))))))
+
+(ert-deftest mindwtr-roundtrip-project-notes-links-stable ()
+  "Covers R7.  Org links in a project :supportNotes survive render->parse->render
+unchanged, reusing the same converters task descriptions use."
+  (dolist (note '("Check [[https://example.com][the site]] later."
+                  "Raw url [[https://example.com]] inline."
+                  "See [[https://en.wikipedia.org/wiki/Foo_(bar)][docs]] now."
+                  "Just prose, no links at all."))
+    (let* ((mw-proj (list :id "p1" :mw-kind 'project :title "x" :status "active"
+                          :supportNotes (mindwtr-parse--org->mw-text note)
+                          :mw-extra-props nil))
+           (text (mindwtr-roundtrip--wrap-project
+                  (mindwtr-render-heading mw-proj 2 nil))))
+      (should (string-match-p (regexp-quote note) text))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (let ((parsed (car (plist-get (mindwtr-parse-buffer) :projects))))
+          (should (string= (plist-get parsed :supportNotes)
+                           (plist-get mw-proj :supportNotes))))))))
+
+(ert-deftest mindwtr-roundtrip-section-notes-links-stable ()
+  "Covers R7.  Org links in a section :description survive render->parse->render."
+  (dolist (note '("Check [[https://example.com][the site]] later."
+                  "Raw url [[https://example.com]] inline."
+                  "Just prose, no links at all."))
+    (let* ((mw-sec (list :id "s1" :mw-kind 'section :title "Sec"
+                         :description (mindwtr-parse--org->mw-text note)
+                         :mw-extra-props nil))
+           (text (mindwtr-roundtrip--wrap-section
+                  (mindwtr-render-heading mw-sec 3 nil))))
+      (should (string-match-p (regexp-quote note) text))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (let ((parsed (car (plist-get (mindwtr-parse-buffer) :sections))))
+          (should (string= (plist-get parsed :description)
+                           (plist-get mw-sec :description))))))))
+
+(ert-deftest mindwtr-roundtrip-project-notes-render-stable ()
+  "Covers R5.  render == render(parse(render(x))) byte-identical for a project note."
+  (let* ((mw-proj (list :id "p1" :mw-kind 'project :title "x" :status "active"
+                        :supportNotes "Line one.\nLine two." :mw-extra-props nil))
+         (t1 (mindwtr-render-heading mw-proj 2 nil))
+         (text (mindwtr-roundtrip--wrap-project t1)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :projects)))
+             (t2 (mindwtr-render-heading
+                  (plist-put (copy-sequence parsed) :mw-kind 'project) 2 nil)))
+        (should (string= t1 t2))))))
+
+(ert-deftest mindwtr-roundtrip-section-notes-render-stable ()
+  "Covers R5.  render == render(parse(render(x))) byte-identical for a section note."
+  (let* ((mw-sec (list :id "s1" :mw-kind 'section :title "Sec"
+                       :description "Line one.\nLine two." :mw-extra-props nil))
+         (t1 (mindwtr-render-heading mw-sec 3 nil))
+         (text (mindwtr-roundtrip--wrap-section t1)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :sections)))
+             (t2 (mindwtr-render-heading
+                  (plist-put (copy-sequence parsed) :mw-kind 'section) 3 nil)))
+        (should (string= t1 t2))))))
+
+(ert-deftest mindwtr-roundtrip-project-notes-empty-nil-equivalent ()
+  "Covers R8.  A nil/absent note and an empty-string note both render no body and
+sign identically (no phantom change between the two empty forms)."
+  (let ((nil-proj '(:id "p1" :mw-kind project :title "x" :status "active"))
+        (empty-proj '(:id "p1" :mw-kind project :title "x" :status "active"
+                      :supportNotes "")))
+    (should (string-suffix-p ":END:\n" (mindwtr-render-heading nil-proj 2 nil)))
+    (should (string-suffix-p ":END:\n" (mindwtr-render-heading empty-proj 2 nil)))
+    (should (string= (mindwtr-signature nil-proj) (mindwtr-signature empty-proj)))))
+
+(ert-deftest mindwtr-roundtrip-section-notes-empty-nil-equivalent ()
+  "Covers R8.  Same empty/nil equivalence for a section :description."
+  (let ((nil-sec '(:id "s1" :mw-kind section :title "Sec"))
+        (empty-sec '(:id "s1" :mw-kind section :title "Sec" :description "")))
+    (should (string-suffix-p ":END:\n" (mindwtr-render-heading nil-sec 3 nil)))
+    (should (string-suffix-p ":END:\n" (mindwtr-render-heading empty-sec 3 nil)))
+    (should (string= (mindwtr-signature nil-sec) (mindwtr-signature empty-sec)))))
+
+(ert-deftest mindwtr-roundtrip-project-notes-non-ascii-stable ()
+  "Covers R6 / AE1.  A non-ASCII project note round-trips byte-identical AND stays
+a multibyte string.  Equality alone passes a symmetric encoder bug, so assert
+representation too (per the encoder-symmetry learning)."
+  (let* ((note "Café — “smart quotes” • naïve — 日本語")
+         (mw-proj (list :id "p1" :mw-kind 'project :title "x" :status "active"
+                        :supportNotes note :mw-extra-props nil))
+         (t1 (mindwtr-render-heading mw-proj 2 nil))
+         (text (mindwtr-roundtrip--wrap-project t1)))
+    (should (multibyte-string-p text))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :projects)))
+             (got (plist-get parsed :supportNotes)))
+        (should (string= got note))
+        (should (multibyte-string-p got))
+        ;; render is byte-stable on the non-ASCII note too
+        (should (string= (mindwtr-render-heading
+                          (plist-put (copy-sequence parsed) :mw-kind 'project) 2 nil)
+                         t1))))))
 
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here
