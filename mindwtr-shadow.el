@@ -10,6 +10,13 @@
   (expand-file-name "mindwtr/" user-emacs-directory)
   "Directory holding shadow.json, etag, and device-id.")
 
+(defcustom mindwtr-backup-retention-days 3
+  "Delete pre-sync backups older than this many days after each sync.
+Age is measured from the timestamp encoded in the backup filename.
+nil or 0 disables cleanup (backups are kept forever)."
+  :type '(choice (const :tag "Keep forever" nil) integer)
+  :group 'mindwtr)
+
 (defun mindwtr-shadow--path (name)
   (expand-file-name name mindwtr-shadow-directory))
 
@@ -54,6 +61,37 @@
     (dolist (e (plist-get appdata key))
       (puthash (plist-get e :id) e h))
     h))
+
+(defun mindwtr-shadow--backup-time (filename)
+  "Return the encoded time parsed from a backup FILENAME, or nil.
+FILENAME is a non-directory name like \"mindwtr-20260604T080500.org\".
+Returns nil for any name that does not match the mindwtr backup pattern."
+  (when (string-match
+         "\\`mindwtr-\\([0-9]\\{8\\}\\)T\\([0-9]\\{6\\}\\)\\.org\\'" filename)
+    (let ((d (match-string 1 filename))
+          (tm (match-string 2 filename)))
+      (encode-time (string-to-number (substring tm 4 6))  ; sec
+                   (string-to-number (substring tm 2 4))  ; min
+                   (string-to-number (substring tm 0 2))  ; hour
+                   (string-to-number (substring d 6 8))   ; day
+                   (string-to-number (substring d 4 6))   ; month
+                   (string-to-number (substring d 0 4)))))) ; year
+
+(defun mindwtr-shadow-prune-backups (&optional now)
+  "Delete pre-sync backups older than `mindwtr-backup-retention-days'.
+NOW defaults to `current-time' and is injectable for tests.  A no-op when
+retention is nil or <= 0, or when the backups directory is absent.  Only
+files matching the mindwtr-<timestamp>.org pattern with a parseable
+timestamp are candidates; anything else is left untouched."
+  (let ((days mindwtr-backup-retention-days)
+        (bdir (expand-file-name "backups/" mindwtr-shadow-directory)))
+    (when (and days (> days 0) (file-directory-p bdir))
+      (let ((cutoff (time-subtract (or now (current-time))
+                                   (* days 24 60 60))))
+        (dolist (f (directory-files bdir t nil t))
+          (let ((btime (mindwtr-shadow--backup-time (file-name-nondirectory f))))
+            (when (and btime (time-less-p btime cutoff))
+              (delete-file f))))))))
 
 (provide 'mindwtr-shadow)
 ;;; mindwtr-shadow.el ends here
