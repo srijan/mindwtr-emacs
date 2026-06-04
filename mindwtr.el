@@ -172,6 +172,18 @@ cycles never run concurrently."
                       buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
             (mindwtr--reset-backoff)
             (cond
+             ;; The sync succeeded but writing the rebuilt buffer to disk
+             ;; failed: the shadow/etag have advanced, so the on-disk file is
+             ;; now stale and the unsaved-edits gate would stand down every
+             ;; future tick silently.  Reuse the persistent error-state
+             ;; machinery to make that divergence visible and recoverable --
+             ;; it surfaces a standing message, itself stands down auto-sync,
+             ;; and is cleared only by a manual `mindwtr-sync' (which
+             ;; save-then-syncs and recovers).  (KTD-5)
+             ((plist-get res :save-failed)
+              (setq mindwtr--error-state
+                    "mindwtr: synced, but saving the file failed — disk is stale vs server (M-x mindwtr-sync to retry)")
+              (message "%s" mindwtr--error-state))
              ((plist-get res :noop) (message "mindwtr: up to date"))
              (t (message "mindwtr: sync ok%s"
                          (if (plist-get res :conflicts)
@@ -196,23 +208,47 @@ cycles never run concurrently."
          (mindwtr--reset-backoff)
          (message "mindwtr: %s" (error-message-string err)))))))
 
+(defun mindwtr--buffer-has-unsaved-edits-p ()
+  "Non-nil when the synced file is open in a buffer with unsaved edits.
+Nil when `mindwtr-file' is unset or the file is not open in any buffer (no
+buffer means no in-progress edits, so an automatic sync is free to run and
+rebuild).  Uses `find-buffer-visiting' for truename/symlink-safe matching,
+consistent with the `file-equal-p' guard in `mindwtr--maybe-debounced-sync'."
+  (when mindwtr-file
+    (let ((buf (find-buffer-visiting mindwtr-file)))
+      (and buf (buffer-modified-p buf)))))
+
 (defun mindwtr--auto-sync ()
   "Entry point for automatic triggers (save/focus/periodic).
-A no-op while a cycle is in progress, while a backoff retry is armed, or
-after sync has given up -- so backoff fully owns the retry cadence and
-overlapping triggers never pile on.  A manual `mindwtr-sync' is the escape
-hatch that resets this state."
+A no-op while a cycle is in progress, while a backoff retry is armed, after
+sync has given up, or while the synced buffer has unsaved edits -- so a
+background rebuild never erases the user's in-progress work, backoff fully
+owns the retry cadence, and overlapping triggers never pile on.  A manual
+`mindwtr-sync' is the escape hatch that resets this state and saves first."
   (unless (or mindwtr--sync-in-progress
               (timerp mindwtr--retry-timer)
-              mindwtr--error-state)
+              mindwtr--error-state
+              (mindwtr--buffer-has-unsaved-edits-p))
     (mindwtr--sync-attempt)))
 
 ;;;###autoload
 (defun mindwtr-sync ()
   "Run one synchronization cycle now.
-A manual sync clears any pending backoff and starts a fresh attempt."
+A manual sync clears any pending backoff, saves the synced buffer first when
+it has unsaved edits, then starts a fresh attempt.  An explicit sync never
+refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
+\"save = commit point\" means a manual sync always leaves the buffer clean."
   (interactive)
   (mindwtr--reset-backoff)
+  ;; Save-then-sync.  Echo-suppressed (the cycle is about to run, so the
+  ;; pre-save must not separately arm the debounce) but WITHOUT content
+  ;; protection: a manual sync is an ordinary user save, so the user's
+  ;; before-save-hooks run, exactly as a real `C-x C-s' would (KTD-7).
+  (when mindwtr-file
+    (let ((buf (find-buffer-visiting mindwtr-file)))
+      (when (and buf (buffer-modified-p buf))
+        (with-current-buffer buf
+          (mindwtr-sync--save-buffer-quietly)))))
   (mindwtr--sync-attempt))
 
 ;;;###autoload
@@ -228,18 +264,25 @@ A manual sync clears any pending backoff and starts a fresh attempt."
         (erase-buffer)
         (mindwtr-mode)
         (mindwtr-reconcile-buffer appdata)
-        (save-buffer))
+        ;; Quiet-save (content-protected, like the engine save) so this
+        ;; deliberate overwrite does not echo a stray HEAD-only sync ~5s
+        ;; later when `mindwtr-auto-sync-mode' is on.
+        (mindwtr-sync--save-buffer-quietly t))
       (mindwtr-shadow-save appdata)
       (mindwtr-shadow-set-etag (plist-get got :etag))
       (message "mindwtr: bootstrapped from server"))))
 
 (defun mindwtr--maybe-debounced-sync ()
-  "Schedule a debounced auto-sync after saving the mindwtr file."
-  (when (and mindwtr-file buffer-file-name
-             (file-equal-p buffer-file-name mindwtr-file))
-    (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
-    (setq mindwtr--debounce-timer
-          (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync))))
+  "Schedule a debounced auto-sync after saving the mindwtr file.
+A save the engine itself performed (`mindwtr--inhibit-save-sync' bound)
+is ignored outright: it leaves any pending debounce timer untouched, so
+the engine's own writes never echo a stray HEAD-only sync ~5s later."
+  (unless mindwtr--inhibit-save-sync
+    (when (and mindwtr-file buffer-file-name
+               (file-equal-p buffer-file-name mindwtr-file))
+      (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
+      (setq mindwtr--debounce-timer
+            (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync)))))
 
 ;;;###autoload
 (define-minor-mode mindwtr-auto-sync-mode
