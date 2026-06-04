@@ -37,3 +37,77 @@
               :projects nil :sections nil :areas nil)))
     (let ((idx (mindwtr-shadow-index ad :tasks)))
       (should (= (plist-get (gethash "t2" idx) :rev) 2)))))
+
+(defun mindwtr-shadow-test--make-backup (name)
+  "Create an empty backup file NAME under the backups dir."
+  (let ((bdir (expand-file-name "backups/" mindwtr-shadow-directory)))
+    (make-directory bdir t)
+    (write-region "" nil (expand-file-name name bdir))))
+
+(defun mindwtr-shadow-test--backup-exists-p (name)
+  (file-exists-p (expand-file-name (concat "backups/" name)
+                                   mindwtr-shadow-directory)))
+
+;; Fixed clock: 2026-06-04 12:00:00 local.  Cutoff at retention 3 = 2026-06-01 12:00.
+(defun mindwtr-shadow-test--now () (encode-time 0 0 12 4 6 2026))
+
+(ert-deftest mindwtr-shadow-prune-deletes-old-backup ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "mindwtr-20260530T120000.org") ; 5 days old
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should-not (mindwtr-shadow-test--backup-exists-p "mindwtr-20260530T120000.org")))))
+
+(ert-deftest mindwtr-shadow-prune-keeps-recent-backup ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "mindwtr-20260604T080000.org") ; same day
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20260604T080000.org")))))
+
+(ert-deftest mindwtr-shadow-prune-disabled-keeps-everything ()
+  (mindwtr-shadow-test--with-dir
+   (mindwtr-shadow-test--make-backup "mindwtr-20200101T000000.org") ; ancient
+   (let ((mindwtr-backup-retention-days nil))
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20200101T000000.org")))
+   (let ((mindwtr-backup-retention-days 0))
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20200101T000000.org")))))
+
+(ert-deftest mindwtr-shadow-prune-leaves-foreign-files ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "notes.txt")              ; not ours
+     (mindwtr-shadow-test--make-backup "mindwtr-garbage.org")    ; ours-shaped, unparseable
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "notes.txt"))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-garbage.org")))))
+
+(ert-deftest mindwtr-shadow-prune-missing-dir-is-noop ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     ;; no backups/ dir created at all
+     (should-not (file-directory-p
+                  (expand-file-name "backups/" mindwtr-shadow-directory)))
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now)) ; must not error
+     ;; reaching here without error is the assertion
+     )))
+
+(ert-deftest mindwtr-shadow-prune-keeps-backup-at-cutoff ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "mindwtr-20260601T120000.org") ; exactly at cutoff
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20260601T120000.org")))))
+
+(ert-deftest mindwtr-shadow-prune-mixed-directory ()
+  (mindwtr-shadow-test--with-dir
+   (let ((mindwtr-backup-retention-days 3))
+     (mindwtr-shadow-test--make-backup "mindwtr-20260530T120000.org") ; old → go
+     (mindwtr-shadow-test--make-backup "mindwtr-20260604T080000.org") ; new → stay
+     (mindwtr-shadow-test--make-backup "keep-me.org")                 ; foreign → stay
+     (mindwtr-shadow-prune-backups (mindwtr-shadow-test--now))
+     (should-not (mindwtr-shadow-test--backup-exists-p "mindwtr-20260530T120000.org"))
+     (should (mindwtr-shadow-test--backup-exists-p "mindwtr-20260604T080000.org"))
+     (should (mindwtr-shadow-test--backup-exists-p "keep-me.org")))))

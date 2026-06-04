@@ -121,7 +121,9 @@ org-capture, or editing outside `mindwtr-mode` is never silently lost:
   `* Sync Failures` heading after each sync, annotated with what to fix — add a
   `:MW_TYPE:` or move it under a list container, then sync again. A pre-sync
   backup of the whole file is also written to `backups/` under the data
-  directory on every sync as a final safety net.
+  directory on every sync as a final safety net. Backups older than
+  `mindwtr-backup-retention-days` (default 3) are pruned automatically after
+  each sync; set it to `nil` to keep them forever.
 
 **Fallback.** Off a Mindwtr task or project heading these keys fall back to
 standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
@@ -169,6 +171,7 @@ the template is ergonomics, not a correctness requirement.
 | `mindwtr-file` | `nil` | Path to the synced org file. |
 | `mindwtr-sync-idle-debounce` | `5` | Idle seconds after save before auto-sync. |
 | `mindwtr-sync-interval` | `600` | Seconds between periodic syncs (`nil` disables). |
+| `mindwtr-backup-retention-days` | `3` | Days to keep pre-sync backups; pruned after each sync (`nil`/`0` keeps forever). |
 
 ## Org schema
 
