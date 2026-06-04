@@ -427,7 +427,15 @@ to call: a no-op PASS if the task is already gone."
          (run-id (format-time-string "%Y%m%dT%H%M%S"))
          (id (mindwtr-util-uuid))
          (base-title (format "[mw-smoke] lifecycle %s" run-id))
+         ;; The :description carries non-ASCII content so a real PUT exercises
+         ;; the notes body-prose path (render-heading body + the org<->markdown
+         ;; converters) end to end -- the SAME machinery that now round-trips
+         ;; project :supportNotes and section :description.  Offline equality
+         ;; round-trips can pass a symmetric encoder bug; only a real
+         ;; server PUT/GET of multibyte content proves the wire encoding (per
+         ;; AGENTS.md).  assert-target's signature check validates it.
          (desired (list :mw-kind 'task :id id :status "inbox" :title base-title
+                        :description "Café — “smart quotes” • naïve — 日本語"
                         :contexts '("@computer") :tags '("#smoke")
                         :priority "high" :energyLevel "low" :dueDate "2099-12-31"
                         :checklist (list (list :title "step one" :isCompleted :false)

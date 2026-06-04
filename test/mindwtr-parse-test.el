@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'org)
 (require 'mindwtr-parse)
+(require 'mindwtr-render)
 
 (defmacro mindwtr-parse-test--with (text &rest body)
   "Insert TEXT in an org buffer, move to first heading, run BODY."
@@ -414,6 +415,28 @@ must stay un-inferable so its children keep round-tripping through quarantine."
           (if (or (member role parent-only) (string= role "sync-failures"))
               (should (null (mindwtr-parse--infer-kind)))
             (should (mindwtr-parse--infer-kind))))))))
+
+(ert-deftest mindwtr-parse-notes-field-round-trips-for-every-note-bearing-kind ()
+  "Drift guard: every kind in `mindwtr-model--notes-fields' must render its notes
+field as inline body prose and parse it back into the same field.  Adding a new
+note-bearing kind to the registry without teaching render/parse fails loudly
+here instead of silently dropping that kind's body on the next sync.  Mirrors
+`mindwtr-parse-infer-kind-covers-every-entity-role'."
+  (dolist (pair mindwtr-model--notes-fields)
+    (let* ((kind (car pair))
+           (field (cdr pair))
+           (status (pcase kind ('task "next") ('project "active") (_ nil)))
+           (entity (append (list :id "x" :mw-kind kind :title "H"
+                                 field "drift sentinel." :mw-extra-props nil)
+                           (and status (list :status status))))
+           (text (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
+                   (mindwtr-render-heading entity 2 nil))))
+      (should (string-match-p "drift sentinel\\." text))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (goto-char (point-min))
+        (let ((parsed (mindwtr-parse-heading kind)))
+          (should (string= (plist-get parsed field) "drift sentinel.")))))))
 
 (ert-deftest mindwtr-parse-explicit-mw-type-not-overridden-by-inference ()
   "Inference is a pure fallback: an explicit MW_TYPE always wins, even when the
