@@ -811,3 +811,37 @@ write already committed, so a disk-write hiccup must not fail the sync."
           (should (seq-some (lambda (f) (string-match-p "\\`mindwtr-.*\\.org\\'" f))
                             (directory-files bdir))))
       (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-survives-prune-failure ()
+  "A prune that signals must not abort the sync (post-PUT must never throw)."
+  (let* ((dir (make-temp-file "mw-prunefail" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-backup-retention-days 3)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (orgfile (expand-file-name "mw.org" dir))
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mindwtr-shadow-prune-backups)
+                   (lambda (&optional _now) (error "boom"))))
+          (with-temp-buffer
+            (setq buffer-file-name orgfile)
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                      "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save
+             '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+               :projects nil :sections nil
+               :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z") :ok))
+            (set-buffer-modified-p nil)))
+      (delete-directory dir t))))
