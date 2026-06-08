@@ -163,7 +163,13 @@ the parse was clean."
 (defun mindwtr-parse--build-area-names ()
   "Scan the current buffer for area headings, returning a name->id hash.
 Warns on a duplicate name (keeps the first id)."
-  (let ((h (make-hash-table :test 'equal)))
+  ;; `buffer-file-name' nil for the scan: `org-map-entries' (nil scope) otherwise
+  ;; hands this buffer's file to Org's agenda-file check, which prompts
+  ;; "Non-existent agenda file ...  [R]emove from list or [A]bort?" -- a hang
+  ;; under `--batch' -- when the file is not yet on disk (e.g. parsing the live
+  ;; buffer on a first sync, before its initial save).  The scan reads only
+  ;; buffer text, so hiding the file name leaves its result unchanged.
+  (let ((h (make-hash-table :test 'equal)) (buffer-file-name nil))
     (org-map-entries
      (lambda ()
        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "area")
@@ -307,7 +313,11 @@ container's :MW_LIST: plus project/section ancestry:
   "Parse the current org buffer into a content appdata plist."
   (setq mindwtr-parse--warnings nil)
   (mindwtr-parse-ensure-keywords)
+  ;; `buffer-file-name' nil: keep the `org-map-entries' scan below from
+  ;; triggering Org's agenda-file prompt on an unsaved file (see
+  ;; `mindwtr-parse--build-area-names').
   (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
+        (buffer-file-name nil)
         tasks projects sections areas)
     (org-map-entries
      (lambda ()
