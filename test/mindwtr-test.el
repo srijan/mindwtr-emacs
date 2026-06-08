@@ -429,3 +429,32 @@ echo, even with mindwtr--maybe-debounced-sync live on after-save-hook."
       (mindwtr-test--kill-file-buffer f)
       (when (file-exists-p f) (delete-file f))
       (delete-directory dir t))))
+
+(ert-deftest mindwtr-bootstrap-synthesizes-initial-settings-when-server-has-none ()
+  "A freshly provisioned namespace returns no `settings'; bootstrap must
+synthesize a non-null blob into the shadow so the first sync's settings merge
+is never handed a null value (the Cloud server 500s on that).  Guards the
+`else' arm of the settings synthesis in `mindwtr-bootstrap'."
+  (let* ((dir (make-temp-file "mw-boot-settings" t))
+         (mindwtr-shadow-directory dir)
+         (f (expand-file-name "mw-boot.org" dir))   ; does not exist yet
+         (mindwtr-file f)
+         (mindwtr-server-url "https://mw.example/")
+         (mindwtr-auth-token "x")
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ;; No `settings' key at all -- the fresh-namespace case.
+              ("GET" (list :status 200 :headers '(("ETag" . "v1"))
+                           :body (concat "{\"tasks\":[],\"projects\":[],"
+                                         "\"sections\":[],\"areas\":[]}")))
+              (m (error "mindwtr: unexpected %s on bootstrap" m))))))
+    (unwind-protect
+        (progn
+          (mindwtr-bootstrap)
+          (let ((settings (plist-get (mindwtr-shadow-load) :settings)))
+            (should settings)
+            (should (plist-get settings :syncPreferences))))
+      (mindwtr-test--kill-file-buffer f)
+      (when (file-exists-p f) (delete-file f))
+      (delete-directory dir t))))
