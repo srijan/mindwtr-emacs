@@ -370,6 +370,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             ;; silently swallowed -- surface it in the report.
             (when parse-warnings
               (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
+            ;; The notes-migration latch is intentionally NOT set here: a noop
+            ;; skips reconcile, so the buffer still holds the old pre-notes
+            ;; render.  Empty-notes protection must stay on until a full cycle
+            ;; actually rewrites the buffer (the latch is set in that branch
+            ;; below, after a confirmed save).
             (list :ok t :noop t :conflicts nil :stats stats :skew nil
                   :warnings parse-warnings))
         (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
@@ -404,11 +409,6 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                   (error (message "mindwtr: backup cleanup skipped: %s"
                                   (error-message-string err))))))
             (mindwtr-reconcile-buffer merged)
-            ;; The buffer now carries project/section note bodies rendered by
-            ;; this notes-capable client, so a future empty notes value is a
-            ;; genuine clear, not a pre-render artifact.  Latch the migration so
-            ;; the next sync stops protecting empty notes (see build-candidate).
-            (mindwtr-shadow-set-notes-migrated)
             ;; Return the buffer to clean on disk after the rebuild (an
             ;; erase+insert always marks it modified, so this always writes on
             ;; a full cycle -- never on the :noop branch above).  This closes
@@ -423,6 +423,19 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             (let ((save-failed (null (mindwtr-sync--save-buffer-quietly t))))
               (mindwtr-shadow-save merged)
               (mindwtr-shadow-set-etag (plist-get got :etag))
+              ;; Latch the notes migration ONLY once the notes-capable render is
+              ;; durably on disk.  The buffer now carries project/section note
+              ;; bodies, so a future empty notes value is a genuine clear -- but
+              ;; only if the file actually persisted.  If the save failed, the
+              ;; .org on disk may still hold the old note-less render; latching
+              ;; now would drop empty-notes protection, and a later reload from
+              ;; that stale file would clear a server note via LWW.  Guarded so
+              ;; a latch-write failure cannot throw (post-PUT; server committed).
+              (unless save-failed
+                (condition-case err
+                    (mindwtr-shadow-set-notes-migrated)
+                  (error (message "mindwtr: notes-migrated latch write failed: %s"
+                                  (error-message-string err)))))
               (mindwtr-report-show stats conflicts skew backup-file (current-buffer) parse-warnings)
               (list :ok t :conflicts conflicts :stats stats :skew skew
                     :warnings parse-warnings :save-failed save-failed))))))))

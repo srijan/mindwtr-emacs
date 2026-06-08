@@ -159,7 +159,10 @@ is excluded from change detection by construction, so it can neither drift a
 signature nor be lost -- it is preserved verbatim in the shadow and merged
 back on write.  `:supportNotes' (project notes) and `:description'
 \(task/section notes) both round-trip as inline body prose and so are
-allow-listed.  Excludes
+allow-listed.  This list is kind-agnostic -- it is iterated for every
+entity regardless of kind -- so a field only affects an entity's signature
+when that entity actually carries the key (e.g. `:supportNotes' is inert on
+areas, which never carry it).  Excludes
 `:id' (identity, matched separately), shadow-only fields, display
 mirrors, and internal parse keys.  Containment IDs ARE included: refiling
 a heading equals re-parenting in Mindwtr, so a changed parent must change

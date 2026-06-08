@@ -591,3 +591,33 @@ More prose.
                               (plist-get proj :supportNotes)))
       (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
                               (plist-get proj :supportNotes))))))
+
+(ert-deftest mindwtr-parse-section-checkbox-stays-prose ()
+  "Covers R9 for sections.  Sections route through the same registry-gated
+note path as projects, so a `- [ ]' line in section notes must likewise stay
+literal prose in :description and NOT be reclassified into a :checklist."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** Planning
+:PROPERTIES:
+:MW_TYPE: section
+:MW_ID: s1
+:END:
+Intro line.
+- [ ] a literal checkbox line
+More prose.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (sec (car (plist-get ad :sections))))
+      (should-not (plist-member sec :checklist))
+      (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
+                              (plist-get sec :description))))))

@@ -260,11 +260,15 @@ type was inferred from context).  When omitted it is read from the
                      ("MW_TASK_MODE" . :taskMode)))
           (let ((v (mindwtr-parse--prop (car p))))
             (when v (setq e (plist-put e (cdr p) v)))))))
-    ;; Notes prose for the non-task note-bearing kinds (section -> :description,
-    ;; project -> :supportNotes).  Parsed WITHOUT checklist extraction so a
-    ;; `- [ ]' line stays literal prose (R9).  Set unconditionally (like the
-    ;; task :description above) so an emptied note clears the field on merge.
-    (when (memq kind '(section project))
+    ;; Notes prose for the non-task note-bearing kinds, dispatched through the
+    ;; registry (`mindwtr-model-notes-field': section -> :description, project
+    ;; -> :supportNotes).  task is handled in its own block above; any future
+    ;; note-bearing kind added to the registry is picked up here automatically,
+    ;; with no second edit-point to keep in sync.  Parsed WITHOUT checklist
+    ;; extraction so a `- [ ]' line stays literal prose (R9).  Set
+    ;; unconditionally (like the task :description above) so an emptied note
+    ;; clears the field on merge.
+    (when (and (not (eq kind 'task)) (mindwtr-model-notes-field kind))
       (setq e (plist-put e (mindwtr-model-notes-field kind)
                          (car (mindwtr-parse--body nil)))))
     (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))

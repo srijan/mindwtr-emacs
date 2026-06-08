@@ -921,6 +921,83 @@ write already committed, so a disk-write hiccup must not fail the sync."
       (delete-file f)
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-once-save-failure-does-not-latch-notes-migration ()
+  "Regression: the notes-migration latch must NOT be set when the post-reconcile
+save fails.  If it were, a later reload from the stale (note-less) file would
+parse empty notes with protection OFF and clear a server note via LWW.  The
+latch is gated on a confirmed save (see `mindwtr-sync-once')."
+  (let* ((dir (make-temp-file "mw-nl" t))
+         (f (make-temp-file "mw-nl-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-notes-migrated-p))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (plist-get res :save-failed))
+              ;; The save failed, so the on-disk file is stale -- protection
+              ;; must remain on for the next sync.
+              (should-not (mindwtr-shadow-notes-migrated-p)))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-latches-notes-migration-after-successful-save ()
+  "A full cycle that saves the rendered buffer to disk durably latches the
+notes migration, so subsequent syncs stop protecting empty notes."
+  (let* ((dir (make-temp-file "mw-ml" t))
+         (f (make-temp-file "mw-ml-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-notes-migrated-p))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+            (should (plist-get res :ok))
+            (should-not (plist-get res :save-failed))
+            (should (mindwtr-shadow-notes-migrated-p))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-writes-pre-reconcile-backup ()
   "A full cycle on a file-visiting buffer snapshots the buffer to backups/
 BEFORE reconcile overwrites it.  The server returns a title that overrides the
