@@ -100,6 +100,20 @@ for i in $(seq 1 60); do
 done
 [ "$ready" = "1" ] || die "server did not become healthy at ${BASE_URL}/health within 60s"
 
+# --- seed the namespace -------------------------------------------------------
+# A fresh server has no namespace yet, so a bare `HEAD /v1/data` -- the first
+# request the Emacs connectivity phase issues -- 404s.  An authenticated GET
+# auto-creates the empty snapshot (per the cloud API), after which HEAD/GET/PUT
+# all resolve.  A real client reaches this state via `mindwtr-bootstrap', whose
+# GET runs before any HEAD; the smoke suite leads with HEAD, so seed explicitly.
+note "seed namespace (authenticated GET auto-creates the empty snapshot)"
+seed_code="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/v1/data" || true)"
+case "$seed_code" in
+  2*) info "GET /v1/data -> $seed_code (namespace ready)";;
+  *)  die "seed GET /v1/data returned '$seed_code' (expected 2xx); cannot initialize namespace";;
+esac
+
 # --- client config for the Emacs smoke suite ---------------------------------
 export MINDWTR_URL="$BASE_URL"
 export MINDWTR_TOKEN="$TOKEN"
