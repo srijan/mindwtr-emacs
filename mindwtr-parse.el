@@ -90,24 +90,35 @@ neither a real kind nor an orphan."
         (mindwtr-util-org->iso (match-string 1))))))
 
 (defun mindwtr-parse--org->mw-text (text)
-  "Convert org link syntax in TEXT to mindwtr (markdown) link syntax.
-`[[url][label]]' becomes `[label](url)' and a label-less `[[url]]' becomes
-`[url](url)'.  An empty label (`[[url][]]') falls back to the url, yielding
-`[url](url)'.  Text with no org links is returned unchanged.  Only links are
-converted; other org markup (bold, italic, ...) is left verbatim.
-A literal `]' inside an org link url or label is not supported: org link
-syntax cannot unambiguously represent a bare `]' inside its path, so such a
-link is matched only up to the first `]' (an inherent org limitation)."
+  "Convert org body syntax in TEXT to mindwtr (markdown) syntax.
+
+Bullets: a line whose first non-blank content is a `-', `+', or run of `*'
+followed by a space is normalized to a markdown `- ' bullet.  This is the
+inverse-side of `mindwtr-render--mw->org-text''s bullet normalization, so a
+hand-typed `+'/`*' bullet in the buffer converges to `- ' in one cycle
+instead of churning the signature.
+
+Links: `[[url][label]]' becomes `[label](url)' and a label-less `[[url]]'
+becomes `[url](url)'.  An empty label (`[[url][]]') falls back to the url,
+yielding `[url](url)'.  Only links are converted; other inline org markup
+\(bold, italic, ...) is left verbatim, mirroring the render side.  A literal
+`]' inside an org link url or label is not supported: org link syntax cannot
+unambiguously represent a bare `]' inside its path, so such a link is matched
+only up to the first `]' (an inherent org limitation).
+
+Text with no convertible syntax is returned unchanged."
   (when text
-    (replace-regexp-in-string
-     "\\[\\[\\([^]]*\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
-     (lambda (m)
-       (let ((url (match-string 1 m))
-             (label (match-string 2 m)))
-         (format "[%s](%s)"
-                 (if (and label (not (string-empty-p label))) label url)
-                 url)))
-     text t t)))
+    (let ((s (replace-regexp-in-string
+              "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
+      (replace-regexp-in-string
+       "\\[\\[\\([^]]*\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
+       (lambda (m)
+         (let ((url (match-string 1 m))
+               (label (match-string 2 m)))
+           (format "[%s](%s)"
+                   (if (and label (not (string-empty-p label))) label url)
+                   url)))
+       s t t))))
 
 (defun mindwtr-parse--body (&optional parse-checklist)
   "Return (PROSE . CHECKLIST) for the entry at point.

@@ -296,5 +296,76 @@ representation too (per the encoder-symmetry learning)."
                           (plist-put (copy-sequence parsed) :mw-kind 'project) 2 nil)
                          t1))))))
 
+(defun mindwtr-roundtrip--project-note-cycle (note)
+  "Render a project whose :supportNotes is NOTE (markdown), parse it back, and
+return a plist describing the round-trip:
+  :org1   the rendered org body region (heading text)
+  :ad     the parsed appdata
+  :proj   the parsed project entity
+  :org2   render of the parsed project (for byte-stability comparison)."
+  (let* ((mw-proj (list :id "p1" :mw-kind 'project :title "Proj" :status "active"
+                        :supportNotes note :mw-extra-props nil))
+         (org1 (mindwtr-render-heading mw-proj 2 nil))
+         (text (mindwtr-roundtrip--wrap-project org1))
+         (ad (with-temp-buffer
+               (let ((org-inhibit-startup t)) (insert text) (org-mode))
+               (mindwtr-parse-buffer)))
+         (proj (car (plist-get ad :projects)))
+         (org2 (mindwtr-render-heading
+                (plist-put (copy-sequence proj) :mw-kind 'project) 2 nil)))
+    (list :org1 org1 :ad ad :proj proj :org2 org2)))
+
+(ert-deftest mindwtr-roundtrip-notes-no-heading-injection ()
+  "Covers B (heading injection).  No markdown note -- however structured --
+renders a body line org would read as a heading, and parsing it never
+fabricates a phantom sibling/child entity.  The note round-trips to exactly one
+project with the note intact (bullet markers normalized to `- ')."
+  (dolist (case '(;; (note . expected-parsed-supportNotes)
+                  ("* foo\nbar"            . "- foo\nbar")
+                  ("Intro\n* a\n* b\nmore" . "Intro\n- a\n- b\nmore")
+                  ("+ plus bullet"         . "- plus bullet")
+                  ("- dash bullet"         . "- dash bullet")
+                  ;; pathological multi-star+space lines (not real markdown):
+                  ;; neutralized to bullets, never injected as headings
+                  ("** bold ** text"       . "- bold ** text")
+                  ("*** triple star"       . "- triple star")))
+    (let* ((note (car case))
+           (expected (cdr case))
+           (r (mindwtr-roundtrip--project-note-cycle note))
+           (ad (plist-get r :ad)))
+      ;; exactly one project, zero phantom tasks/projects
+      (should (= 1 (length (plist-get ad :projects))))
+      (should (= 0 (length (plist-get ad :tasks))))
+      ;; no rendered body line is an org heading
+      (should-not (string-match-p "\n\\*+ " (plist-get r :org1)))
+      ;; the note content is preserved (bullets normalized to `- ')
+      (should (string= (plist-get (plist-get r :proj) :supportNotes) expected)))))
+
+(ert-deftest mindwtr-roundtrip-notes-literal-emphasis-not-corrupted ()
+  "Covers B.  Ordinary prose containing `_', `*', backticks is left VERBATIM --
+naive emphasis conversion would mangle identifiers and math.  Inline emphasis
+does not collide with org headings, so it is safe to leave literal and must
+round-trip byte-identically."
+  (dolist (note '("snake_case_name and file_path_here"
+                  "math: 2 * 3 * 4 = 24"
+                  "**bold** and *italic* and `code` inline"
+                  "trailing _underscore_ and a*b*c"))
+    (let* ((r (mindwtr-roundtrip--project-note-cycle note)))
+      (should (= 1 (length (plist-get (plist-get r :ad) :projects))))
+      ;; literal text preserved exactly (no emphasis conversion applied)
+      (should (string= (plist-get (plist-get r :proj) :supportNotes) note)))))
+
+(ert-deftest mindwtr-roundtrip-notes-render-byte-stable-across-structures ()
+  "Covers R5.  render == render(parse(render(x))) for every note shape above,
+including bullets and literal emphasis -- the rendered org buffer is the fixed
+point even when the markdown normalizes on the first pass."
+  (dolist (note '("- already a dash bullet"
+                  "Intro\n- a\n- b\nmore"
+                  "snake_case and 2 * 3"
+                  "**bold** inline"
+                  "Check [[https://example.com][site]] then go."))
+    (let ((r (mindwtr-roundtrip--project-note-cycle note)))
+      (should (string= (plist-get r :org1) (plist-get r :org2))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here
