@@ -160,7 +160,11 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
 
 (defun mindwtr-sync-build-candidate (local shadow device-id now)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW."
-  (let ((cand (list :settings (plist-get shadow :settings)))
+  (let ((cand (list :settings (or (plist-get shadow :settings)
+                                  ;; Create initial settings when the namespace
+                                  ;; has none, so the server's settings merge is
+                                  ;; never handed a null blob (it would 500).
+                                  (mindwtr-model-default-settings))))
         (live (mindwtr-sync--live-container-ids shadow)))
     (dolist (key mindwtr-sync--entity-keys)
       (let* ((shadow-idx (mindwtr-shadow-index shadow key))

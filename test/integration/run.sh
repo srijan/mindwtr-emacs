@@ -168,7 +168,11 @@ payload="$(jq -nc --arg id "$ITEST_ID" --arg now "$NOW" '{
   tasks:    [ { id:$id, title:"[itest] curl-written task", status:"inbox",
                rev:1, createdAt:$now, updatedAt:$now, revBy:"itest-curl",
                contexts:[], tags:[] } ],
-  projects: [], sections: [], areas: [], settings: null
+  projects: [], sections: [], areas: [],
+  # Non-null settings: the server merge dereferences settings.syncPreferences
+  # without a null guard and 500s on a null blob (same reason the Emacs client
+  # synthesizes initial settings). Mirror that here.
+  settings: { syncPreferences: { initialized: true } }
 }')"
 
 put_code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${auth[@]}" \

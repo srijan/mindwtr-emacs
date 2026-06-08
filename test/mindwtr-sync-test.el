@@ -127,6 +127,15 @@ timestamp of fields the user did not change."
          (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW")))
     (should (equal (plist-get cand :settings) '(:theme "dark" :gtd (:x 1))))))
 
+(ert-deftest mindwtr-sync-candidate-creates-initial-settings-when-absent ()
+  "A namespace with no settings gets a fresh non-null settings blob, so the
+server's settings merge is never handed a null value (which 500s)."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW")))
+    (should (plist-get cand :settings))
+    (should (equal (plist-get cand :settings) (mindwtr-model-default-settings)))))
+
 (ert-deftest mindwtr-sync-candidate-strips-device-local-fields ()
   (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1
                                       :createdAt "C" :localStatus "dirty"))
