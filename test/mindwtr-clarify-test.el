@@ -111,6 +111,39 @@ completing-read-multiple prompt)."
       (should (string= (plist-get task :areaId) "a1"))
       (should (string= (plist-get task :status) "inbox")))))
 
+(ert-deftest mindwtr-clarify-invalid-context-input-keeps-pass-alive ()
+  "A `user-error' from the `c' action (org-unrepresentable typed context)
+is caught like the r/p arms: the loop re-prompts instead of aborting the
+whole pass."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox")
+                (:id "t2" :title "Two" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '("bad context")))
+              ((symbol-function 'sit-for) (lambda (&rest _) t)))
+      ;; c (space fails normalize) -> n (skip One) -> s n (NEXT clarifies Two)
+      (mindwtr-clarify-test--feed '(?c ?n ?s ?n) (lambda () (mindwtr-clarify))))
+    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
+    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "single-actions"))))
+
+(ert-deftest mindwtr-clarify-status-works-on-drawerless-item ()
+  "A hand-written inbox heading without an MW_TYPE drawer still gets the
+type-valid status picker via kind inference, so `s' NEXT relocates it to
+single-actions instead of falling through to plain `org-todo'."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** Some idea\n"
+              "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (mindwtr-clarify-test--feed '(?s ?n) (lambda () (mindwtr-clarify)))
+    (should (string= (mindwtr-clarify-test--parent-list-of "Some idea")
+                     "single-actions"))))
+
 (ert-deftest mindwtr-clarify-refile-targets-only-projects ()
   "The refile wiring offers exactly the buffer's project headings."
   (mindwtr-clarify-test--with-appdata

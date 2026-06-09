@@ -51,12 +51,12 @@ Signals a `user-error' when the buffer has no inbox container."
 
 (defun mindwtr-clarify--in-inbox-p ()
   "Non-nil when the heading at point still sits under the inbox container."
-  (equal (mindwtr-parse--ancestor-list-role) "inbox"))
+  (equal (mindwtr-commands--parent-list-role) "inbox"))
 
 (defun mindwtr-clarify--project-target-p ()
   "Non-nil when the heading at point is a mindwtr project heading.
 The `org-refile-target-verify-function' that scopes refiling to projects."
-  (equal (org-entry-get (point) "MW_TYPE") "project"))
+  (eq (mindwtr-commands--kind-at-point) 'project))
 
 (defun mindwtr-clarify--refile ()
   "Refile the item at point under a project, via native `org-refile'.
@@ -85,7 +85,12 @@ skipped; throws `mindwtr-clarify--quit' when the user quits the whole pass."
               ;; A status change relocates the item to its bucket; if it left
               ;; the inbox it is clarified.  Choosing INBOX keeps the loop.
               (setq done (not (mindwtr-clarify--in-inbox-p))))
-          (?c (mindwtr-set-context))
+          (?c (condition-case err
+                  (mindwtr-set-context)
+                ;; An org-unrepresentable typed context (or MW_CONTEXTS
+                ;; value) should not abort the whole pass either.
+                (user-error (message "%s" (error-message-string err))
+                            (sit-for 1))))
           (?a (mindwtr-set-area))
           (?r (condition-case err
                   (progn (mindwtr-clarify--refile) (setq done t))

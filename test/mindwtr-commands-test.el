@@ -359,6 +359,33 @@ the task moves under it instead of creating a duplicate -- app behavior."
     (re-search-forward "Child")
     (should-error (mindwtr-promote-to-project) :type 'user-error)))
 
+(ert-deftest mindwtr-commands-promote-without-projects-container-leaves-task-untouched ()
+  "Promote errors out BEFORE mutating when there is no `* Projects'
+container and no same-titled project: no NEXT stamp on the task, no
+keyword stamping on its children."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Plan party\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "*** Book venue\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Plan party"))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &optional init &rest _) (or init ""))))
+      (should-error (mindwtr-promote-to-project) :type 'user-error))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "Plan party"))
+      (org-back-to-heading t)
+      (should (string= (org-get-todo-state) "INBOX")))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "Book venue"))
+      (org-back-to-heading t)
+      (should-not (org-get-todo-state)))))
+
 (ert-deftest mindwtr-commands-set-context-sets-tags-preserves-hashtags ()
   "Chosen contexts (with `@' added when missing) replace the @-tags; hashtag
 tags stay; parse yields the new :contexts and the untouched :tags."

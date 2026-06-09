@@ -36,7 +36,8 @@ Return the chosen keyword string, or nil on quit."
 Shadows `org-todo' in `mindwtr-mode'.  After setting, relocate a standalone
 task or a project to the container matching its new status."
   (interactive)
-  (let ((kind (mindwtr-commands--kind-at-point)))
+  (let ((kind (or (mindwtr-commands--kind-at-point)
+                  (ignore-errors (mindwtr-parse--infer-kind)))))
     (if (not (memq kind '(task project)))
         (call-interactively #'org-todo)
       (let ((kw (mindwtr-commands--read-keyword
@@ -65,7 +66,8 @@ comes from outline nesting, so setting an area there would parse the task with
 BOTH a project and an area -- the dual-container over-stamp that silently
 re-parents on the next PUT.  No-ops off a task/project heading."
   (interactive)
-  (let ((kind (mindwtr-commands--kind-at-point)))
+  (let ((kind (or (mindwtr-commands--kind-at-point)
+                  (ignore-errors (mindwtr-parse--infer-kind)))))
     (cond
      ((not (memq kind '(task project)))
       (message "mindwtr-set-area: point is not on a task or project"))
@@ -330,6 +332,14 @@ to a project or section (lift it out with `org-refile' first)."
              (ptitle (string-trim (read-string "Project title: " task-title))))
         (when (string-empty-p ptitle)
           (user-error "mindwtr-promote-to-project: a project title is required"))
+        ;; Validate the destination before any mutation: a missing
+        ;; `* Projects' container must not leave the task half-promoted
+        ;; (retitled and stamped NEXT with no project to land under).
+        (let ((dest (or (mindwtr-commands--find-project-by-title ptitle)
+                        (mindwtr-commands--container-marker "projects"))))
+          (if dest
+              (set-marker dest nil)
+            (user-error "mindwtr-promote-to-project: no `* Projects' container in this buffer")))
         (unless children-p
           (let ((action (string-trim (read-string "Next action: " task-title))))
             (when (and (not (string-empty-p action))
