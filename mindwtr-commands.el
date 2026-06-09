@@ -12,6 +12,7 @@
 (require 'mindwtr-util)
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
+(require 'mindwtr-render)
 
 (defun mindwtr-commands--kind-at-point ()
   "Return the MW_TYPE symbol of the heading at point, or nil."
@@ -79,6 +80,77 @@ re-parents on the next PUT.  No-ops off a task/project heading."
               (save-excursion
                 (org-back-to-heading t)
                 (org-set-property "MW_AREA" name))))))))))
+
+(defun mindwtr-set-context--candidates ()
+  "Return every @context used as an org tag in the current buffer, sorted."
+  (let (out)
+    (dolist (tg (org-get-buffer-tags))
+      (when (string-prefix-p "@" (car tg))
+        (push (car tg) out)))
+    (sort out #'string<)))
+
+(defun mindwtr-set-context--normalize (values)
+  "Normalize VALUES into context tags: trim, drop empties, ensure `@' prefix.
+Signals a `user-error' on a value org tags cannot represent (the chars
+outside `mindwtr-render--org-tag-re')."
+  (let (out)
+    (dolist (v values)
+      (let* ((v (string-trim v))
+             (v (cond ((string-empty-p v) nil)
+                      ((string-prefix-p "@" v) v)
+                      (t (concat "@" v)))))
+        (when v
+          (unless (string-match-p mindwtr-render--org-tag-re v)
+            (user-error "mindwtr-set-context: %S cannot be an org tag (allowed: alphanumerics and _ @ # %%)" v))
+          (push v out))))
+    (delete-dups (nreverse out))))
+
+;;;###autoload
+(defun mindwtr-set-context ()
+  "Set the contexts of the task at point (the `@'-prefixed org tags).
+Prompts with `completing-read-multiple' (comma-separated) over every
+@context already used in the buffer, prefilled with the task's current
+contexts.  New contexts can be typed freely (a missing `@' prefix is
+added); an empty input clears the contexts.  Hashtag tags on the heading
+are preserved untouched.
+
+A task whose MW_CONTEXTS fallback drawer holds a value org tags cannot
+represent (spaces, dashes, ...) is refused -- replacing such values here
+would corrupt contexts only the app can faithfully edit.  A representable
+MW_CONTEXTS is lifted onto the native tag line and the drawer key removed,
+so the edit is authoritative on the next parse.  No-ops off a task heading:
+contexts are task-only in the model."
+  (interactive)
+  (let ((kind (or (mindwtr-commands--kind-at-point)
+                  (ignore-errors (mindwtr-parse--infer-kind)))))
+    (if (not (eq kind 'task))
+        (message "mindwtr-set-context: point is not on a task")
+      (save-excursion
+        (org-back-to-heading t)
+        (let* ((mw (mindwtr-parse--prop "MW_CONTEXTS"))
+               (mw-vals (and mw (mindwtr-util-json-decode mw))))
+          (if (and mw-vals
+                   (not (seq-every-p
+                         (lambda (s)
+                           (string-match-p mindwtr-render--org-tag-re s))
+                         mw-vals)))
+              (message "mindwtr-set-context: contexts hold values org tags can't represent; edit them in the app")
+            (let* ((split (mindwtr-parse--split-tags (org-get-tags nil t)))
+                   (current (or mw-vals (car split)))
+                   ;; The splitter returns hashtags in model form ("#shop");
+                   ;; the org tag line stores them bare ("shop"), mirroring
+                   ;; `mindwtr-render--org-tag-tokens'.
+                   (hashtags (mapcar (lambda (s) (string-remove-prefix "#" s))
+                                     (cdr split)))
+                   (cands (delete-dups
+                           (append (copy-sequence current)
+                                   (mindwtr-set-context--candidates))))
+                   (chosen (mindwtr-set-context--normalize
+                            (completing-read-multiple
+                             "Contexts (comma-separated): " cands nil nil
+                             (and current (string-join current ","))))))
+              (org-set-tags (append chosen hashtags))
+              (when mw (org-entry-delete nil "MW_CONTEXTS")))))))))
 
 (defun mindwtr-commands--status-at-point (kind)
   "Status string for the KIND entity at point, derived from its TODO keyword."

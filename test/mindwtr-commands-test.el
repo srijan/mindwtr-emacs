@@ -312,4 +312,118 @@ stamped NEXT, existing child keywords preserved."
     (re-search-forward "Child")
     (should-error (mindwtr-promote-to-project) :type 'user-error)))
 
+(ert-deftest mindwtr-commands-set-context-sets-tags-preserves-hashtags ()
+  "Chosen contexts (with `@' added when missing) replace the @-tags; hashtag
+tags stay; parse yields the new :contexts and the untouched :tags."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next"
+                 :contexts ("@office") :tags ("#shop")))
+        :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '("@home" "work"))))
+      (mindwtr-set-context))
+    (let ((task (mindwtr-commands-test--task-by-id "t1")))
+      (should (equal (plist-get task :contexts) '("@home" "@work")))
+      (should (equal (plist-get task :tags) '("#shop"))))))
+
+(ert-deftest mindwtr-commands-set-context-offers-buffer-contexts-prefills-current ()
+  "Completion candidates cover the buffer's @contexts (not hashtags); the
+initial input prefills the task's current contexts."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next" :contexts ("@office"))
+                (:id "t2" :title "Other" :status "next"
+                 :contexts ("@home") :tags ("#shop")))
+        :settings nil)
+    (re-search-forward "Loose")
+    (let (offered initial)
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (_prompt coll _pred _req init &rest _)
+                   (setq offered coll initial init)
+                   '("@office"))))
+        (mindwtr-set-context))
+      (should (member "@home" offered))
+      (should (member "@office" offered))
+      (should-not (member "shop" offered))
+      (should (equal initial "@office")))))
+
+(ert-deftest mindwtr-commands-set-context-empty-input-clears ()
+  "An empty selection clears the contexts but keeps hashtag tags."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next"
+                 :contexts ("@office") :tags ("#shop")))
+        :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '())))
+      (mindwtr-set-context))
+    (let ((task (mindwtr-commands-test--task-by-id "t1")))
+      (should-not (plist-get task :contexts))
+      (should (equal (plist-get task :tags) '("#shop"))))))
+
+(ert-deftest mindwtr-commands-set-context-noop-off-task ()
+  "On a project heading the command no-ops without prompting."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil :tasks nil :settings nil)
+    (re-search-forward "ACTIVE Proj")
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) (error "should not prompt off a task"))))
+      (mindwtr-set-context))))
+
+(ert-deftest mindwtr-commands-set-context-rejects-org-unsafe-input ()
+  "A typed context org tags cannot hold is a user-error, not a silent drop."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '("@home office"))))
+      (should-error (mindwtr-set-context) :type 'user-error))))
+
+(ert-deftest mindwtr-commands-set-context-refuses-unsafe-mw-contexts ()
+  "A task whose MW_CONTEXTS holds org-unsafe values is refused untouched."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Exotic\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n"
+              ":MW_CONTEXTS: [\"@home office\"]\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Exotic"))
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) (error "should not prompt on unsafe MW_CONTEXTS"))))
+      (mindwtr-set-context))
+    (org-back-to-heading t)
+    (should (org-entry-get nil "MW_CONTEXTS"))))
+
+(ert-deftest mindwtr-commands-set-context-lifts-safe-mw-contexts ()
+  "A representable MW_CONTEXTS prefills the prompt, lands on the native tag
+line, and the drawer key is removed (the edit is authoritative)."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Deep\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n"
+              ":MW_CONTEXTS: [\"@deep\"]\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Deep"))
+    (let (initial)
+      (cl-letf (((symbol-function 'completing-read-multiple)
+                 (lambda (_prompt _coll _pred _req init &rest _)
+                   (setq initial init)
+                   '("@deep" "@work"))))
+        (mindwtr-set-context))
+      (should (equal initial "@deep")))
+    (org-back-to-heading t)
+    (should-not (org-entry-get nil "MW_CONTEXTS"))
+    (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+      (should (equal (plist-get task :contexts) '("@deep" "@work"))))))
+
 ;;; mindwtr-commands-test.el ends here

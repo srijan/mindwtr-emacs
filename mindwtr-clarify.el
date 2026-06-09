@@ -5,7 +5,7 @@
 ;; state machine.  `mindwtr-clarify' visits each inbox item in turn and
 ;; runs a single-key action loop: set a type-valid status
 ;; (`mindwtr-set-status', which also relocates the item to its status
-;; bucket), edit contexts/hashtags (org tags), set an area
+;; bucket), set contexts (`mindwtr-set-context'), set an area
 ;; (`mindwtr-set-area'), refile under a project (native `org-refile',
 ;; offered only mindwtr project headings as targets), or promote the item
 ;; into a brand new project (`mindwtr-promote-to-project').  An item is
@@ -75,7 +75,7 @@ skipped; throws `mindwtr-clarify--quit' when the user quits the whole pass."
       (org-back-to-heading t)
       (mindwtr-clarify--show-entry)
       (let ((ch (read-char-choice
-                 (format "Clarify \"%s\":  [s]tatus  [c]ontexts/tags  [a]rea  [r]efile to project  [p]romote to project  [n]ext  [q]uit "
+                 (format "Clarify \"%s\":  [s]tatus  [c]ontexts  [a]rea  [r]efile to project  [p]romote to project  [n]ext  [q]uit "
                          (org-get-heading t t t t))
                  '(?s ?c ?a ?r ?p ?n ?q))))
         (pcase ch
@@ -83,7 +83,7 @@ skipped; throws `mindwtr-clarify--quit' when the user quits the whole pass."
               ;; A status change relocates the item to its bucket; if it left
               ;; the inbox it is clarified.  Choosing INBOX keeps the loop.
               (setq done (not (mindwtr-clarify--in-inbox-p))))
-          (?c (org-set-tags-command))
+          (?c (mindwtr-set-context))
           (?a (mindwtr-set-area))
           (?r (condition-case err
                   (progn (mindwtr-clarify--refile) (setq done t))
@@ -108,7 +108,8 @@ For each item, single keys apply the existing type-aware commands:
 
   s  set a type-valid status (`mindwtr-set-status'); the item immediately
      relocates to the bucket matching the new status
-  c  edit contexts/hashtags (org tags; `@'-prefixed tags are contexts)
+  c  set contexts (`mindwtr-set-context', completion over the buffer's
+     @contexts; hashtag tags are preserved)
   a  set an area (`mindwtr-set-area')
   r  refile under a project (native `org-refile', project targets only)
   p  promote the item to a brand new ACTIVE project

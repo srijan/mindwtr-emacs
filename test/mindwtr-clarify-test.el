@@ -93,14 +93,16 @@ item did not leave the inbox), so a further key is needed to move on."
     (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))))
 
 (ert-deftest mindwtr-clarify-contexts-and-area-stay-on-item ()
-  "Tags and area edits act on the item and keep its loop running."
+  "Context and area edits act on the item and keep its loop running.
+The `c' action goes through `mindwtr-set-context' (stubbed at its
+completing-read-multiple prompt)."
   (mindwtr-clarify-test--with-appdata
       '(:areas ((:id "a1" :name "Personal" :order 0))
         :projects nil :sections nil
         :tasks ((:id "t1" :title "One" :status "inbox"))
         :settings nil)
-    (cl-letf (((symbol-function 'org-set-tags-command)
-               (lambda (&rest _) (org-set-tags '("@home"))))
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '("@home")))
               ((symbol-function 'completing-read)
                (lambda (&rest _) "Personal")))
       (mindwtr-clarify-test--feed '(?c ?a ?n) (lambda () (mindwtr-clarify))))

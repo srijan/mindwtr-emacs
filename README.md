@@ -82,6 +82,7 @@ equivalents for Mindwtr headings:
 | Key | Command | Behaviour |
 |---|---|---|
 | `C-c C-t` | `mindwtr-set-status` | Prompt for a status; offers **only** the keywords valid for the entity type at point (task vs project). |
+| `C-c C-q` | `mindwtr-set-context` | Set the task's contexts (`@`-prefixed org tags) with completion over the buffer's existing @contexts; hashtag tags are preserved. Honors the `MW_CONTEXTS` fallback drawer (lifts representable values onto the tag line; refuses on values org tags can't hold). |
 | `S-<right>` | `mindwtr-cycle-status-forward` | Cycle forward through type-valid keywords. |
 | `S-<left>` | `mindwtr-cycle-status-backward` | Cycle backward through type-valid keywords. |
 
@@ -183,7 +184,7 @@ single-key action loop:
 | Key | Action |
 |---|---|
 | `s` | Set a type-valid status (`mindwtr-set-status`); the item immediately relocates to the bucket matching its new status |
-| `c` | Edit contexts/hashtags (org tags; `@`-prefixed tags are contexts) |
+| `c` | Set contexts (`mindwtr-set-context`; completion over the buffer's @contexts, hashtags preserved) |
 | `a` | Set an area (`mindwtr-set-area`) |
 | `r` | Refile under a project (native `org-refile`, offered only mindwtr project headings as targets) |
 | `p` | Promote the item to a brand-new **ACTIVE project** (`mindwtr-promote-to-project`) |
