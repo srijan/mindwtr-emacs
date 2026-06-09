@@ -186,6 +186,20 @@ rather than three divergent per-kind checks across render/parse/reconcile.")
 task/section -> `:description'; project -> `:supportNotes'; area -> nil."
   (cdr (assq kind mindwtr-model--notes-fields)))
 
+(defconst mindwtr-model--protected-boolean-fields
+  '((task . (:isFocusedToday)) (project . (:isSequential :isFocused)))
+  "Alist of entity-kind -> the newly-signed boolean fields whose empty value
+must be protected from clobbering server data on the first post-upgrade sync.
+These are exactly the booleans that never rendered before the render-key fix,
+so an old on-disk buffer parses them as empty (a false-empty, not a clear).
+`:reviewAt' is absent on purpose: it always rendered, so an empty local value
+is a genuine clear, not a false-empty (see the migration-latch reasoning).")
+
+(defun mindwtr-model-protected-boolean-fields (kind)
+  "Return the list of migration-protected boolean fields for entity KIND.
+Empty for kinds that carry none (section, area)."
+  (cdr (assq kind mindwtr-model--protected-boolean-fields)))
+
 (defun mindwtr-model-entity-title (entity)
   "Return ENTITY's human-readable label, or nil when it carries neither key.
 task/project/section carry `:title'; area carries `:name'.  One place for the

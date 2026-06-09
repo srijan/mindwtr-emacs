@@ -33,6 +33,16 @@
    (mindwtr-shadow-set-notes-migrated)
    (should (mindwtr-shadow-notes-migrated-p))))
 
+(ert-deftest mindwtr-shadow-fields-migrated-latch ()
+  "The fields-migration marker is absent until set, then latched on, and is
+independent of the notes-migration marker (the two latches do not interfere)."
+  (mindwtr-shadow-test--with-dir
+   (should-not (mindwtr-shadow-fields-migrated-p))
+   (mindwtr-shadow-set-fields-migrated)
+   (should (mindwtr-shadow-fields-migrated-p))
+   ;; the notes latch is unaffected
+   (should-not (mindwtr-shadow-notes-migrated-p))))
+
 (ert-deftest mindwtr-shadow-device-id-stable ()
   (mindwtr-shadow-test--with-dir
    (let ((id (mindwtr-shadow-device-id)))
