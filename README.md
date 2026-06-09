@@ -146,21 +146,51 @@ standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
 
 ### Capture
 
-`mindwtr-capture-template` is an `org-capture` template function that drops a new
-task into the `* Inbox` bucket, stamped with `:MW_TYPE: task` and a freshly
-minted `:MW_ID:`. Register it once:
+**`M-x mindwtr-capture`** drops a new task into the `* Inbox` bucket of
+`mindwtr-file`, stamped with `:MW_TYPE: task` and a freshly minted `:MW_ID:`.
+It is a self-contained front door over `org-capture` — no
+`org-capture-templates` setup needed; type the title, finish with `C-c C-c`.
+With a prefix argument (`C-u M-x mindwtr-capture`) the entry also gets the
+org-capture annotation, a link back to where you were.
+
+If you prefer the standard `C-c c` dispatcher, register the same template
+once:
 
 ```elisp
-(add-to-list 'org-capture-templates
-  `("m" "Mindwtr inbox" entry
-    (file+headline mindwtr-file "Inbox")
-    (function mindwtr-capture-template)))
+(with-eval-after-load 'org-capture
+  (add-to-list 'org-capture-templates (mindwtr-capture-template-entry)))
 ```
 
-`C-c c m` then captures straight into the inbox. The stamping is belt-and-
-suspenders: even a hand-written inbox heading is recognized as a task by context
-inference and gets an `MW_ID` on the next sync (see **Graceful degradation**), so
-the template is ergonomics, not a correctness requirement.
+`C-c c m` then captures straight into the inbox. Pass
+`(mindwtr-capture-template-entry "M" "Mindwtr inbox + link" t)` for the
+annotation-appending variant — also the right template body for an
+`org-protocol` capture. The target is located by the `:MW_LIST: inbox`
+property (falling back to a literal `* Inbox` headline), so a renamed inbox
+heading still works.
+
+The stamping is belt-and-suspenders: even a hand-written inbox heading is
+recognized as a task by context inference and gets an `MW_ID` on the next sync
+(see **Graceful degradation**), so the template is ergonomics, not a
+correctness requirement.
+
+### Clarify (inbox triage)
+
+**`M-x mindwtr-clarify`** is a guided pass over the `* Inbox` items — the
+org-gtd clarify/organize wizard, rebuilt on the existing type-aware commands
+instead of a new state machine. It visits each inbox item in turn and offers a
+single-key action loop:
+
+| Key | Action |
+|---|---|
+| `s` | Set a type-valid status (`mindwtr-set-status`); the item immediately relocates to the bucket matching its new status |
+| `c` | Edit contexts/hashtags (org tags; `@`-prefixed tags are contexts) |
+| `a` | Set an area (`mindwtr-set-area`) |
+| `r` | Refile under a project (native `org-refile`, offered only mindwtr project headings as targets) |
+| `n` | Skip to the next inbox item |
+| `q` | Stop the pass |
+
+An item is finished when it leaves the inbox (status change or refile) or is
+skipped; the loop then advances to the next item until the inbox is empty.
 
 ### Customization summary
 
@@ -293,13 +323,8 @@ edited).
 - A one-time importer from an existing `org-gtd` file into the schema.
 - Recurrence-object fidelity beyond serialized round-trip.
 - **`org-protocol` capture** — a browser-triggered front door on top of the
-  shipped `org-capture` template (see [Capture](#capture)). (Emacs-native
-  editing track.)
-- **Clarify workflow** — a guided triage flow over `* Inbox` items to replace
-  org-gtd's clarify/organize wizard: set type-valid status (`mindwtr-set-status`),
-  add contexts/area, optionally refile under a project (`org-refile`), and move
-  to the next inbox item. Built on the existing type-aware commands rather than a
-  new state machine. (Emacs-native editing track.)
+  shipped capture command/template (see [Capture](#capture); the with-link
+  template entry is the intended body for it). (Emacs-native editing track.)
 - **org-edna local automation (spike)** — evaluate using `org-edna` inside
   `mindwtr-mode` for desk-only task automation. Mechanically it composes (edna
   fires on `org-todo`, which `mindwtr-set-status` calls). Constraints to design
@@ -372,11 +397,12 @@ edited).
   Since mindwtr owns its keyword set, ship a tested `org-agenda-custom-commands`
   block / a `mindwtr-engage` command so users don't reconstruct it. (Emacs-native
   editing track.)
-- **Refile-target wiring** — the clarify flow and re-parenting both lean on
-  `org-refile`, but nothing sets `org-refile-targets` to mindwtr projects, so
-  `C-c C-w` won't offer the right destinations out of the box. Small; a
-  prerequisite that makes the clarify workflow land cleanly. (Emacs-native editing
-  track.)
+- **Refile-target wiring** — re-parenting leans on `org-refile`, but nothing
+  sets `org-refile-targets` to mindwtr projects globally, so a bare `C-c C-w`
+  won't offer the right destinations out of the box. The clarify flow already
+  binds project-only targets around its own `r` action
+  (`mindwtr-clarify--refile`); what remains is wiring the same targets into
+  `mindwtr-mode` for direct `C-c C-w` use. (Emacs-native editing track.)
 - **`mindwtr-lint` / pre-sync validation command** — an on-demand command that
   flags type-invalid keywords, orphaned tasks, and malformed drawers *before*
   sync, turning the existing graceful-degradation warnings into something the user
