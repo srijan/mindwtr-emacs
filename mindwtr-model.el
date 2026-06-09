@@ -206,6 +206,16 @@ object from collapsing back to JSON null through the encoder (empty objects
 do); `syncPreferences' is the field the server's merge reads first."
   (list :syncPreferences (list :initialized t)))
 
+(defun mindwtr-model-ensure-settings (appdata)
+  "Return APPDATA with a guaranteed non-null `settings'.
+Substitutes `mindwtr-model-default-settings' when APPDATA carries no settings
+(a freshly provisioned namespace), so the server's settings merge is never
+handed a null blob -- it dereferences `settings.syncPreferences' without a
+null guard and 500s otherwise.  Present settings are returned unchanged; the
+substitution copies APPDATA rather than mutating the caller's structure."
+  (if (plist-get appdata :settings) appdata
+    (plist-put (copy-sequence appdata) :settings (mindwtr-model-default-settings))))
+
 (defun mindwtr-model-shadow-only-field-p (field)
   "Non-nil if FIELD (a keyword) is shadow-only."
   (and (memq field mindwtr-model-shadow-only-fields) t))

@@ -262,9 +262,7 @@ refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
            ;; Create initial settings when a freshly provisioned namespace has
            ;; none, so the first sync's settings merge is never handed a null
            ;; blob (the Cloud server 500s on that).
-           (appdata (let ((ad (plist-get got :appdata)))
-                      (if (plist-get ad :settings) ad
-                        (plist-put ad :settings (mindwtr-model-default-settings))))))
+           (appdata (mindwtr-model-ensure-settings (plist-get got :appdata))))
       (with-current-buffer (find-file-noselect mindwtr-file)
         (erase-buffer)
         (mindwtr-mode)
