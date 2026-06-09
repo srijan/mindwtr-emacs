@@ -41,7 +41,7 @@ export COMPOSE_PROJECT_NAME="$PROJECT"
 # `:latest' floats ahead of this, so we pin by default for reproducibility;
 # override per run with MINDWTR_CLOUD_TAG=... (e.g. =0.9.9, =latest) or
 # MINDWTR_CLOUD_IMAGE for the whole ref.
-DEFAULT_CLOUD_TAG="0.9.7"
+DEFAULT_CLOUD_TAG="0.9.8"
 export MINDWTR_CLOUD_TAG="${MINDWTR_CLOUD_TAG:-$DEFAULT_CLOUD_TAG}"
 CLOUD_IMAGE="${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG}}"
 
