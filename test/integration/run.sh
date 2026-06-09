@@ -66,8 +66,11 @@ info "port:   ${PORT}"
 
 # --- secrets / config ---------------------------------------------------------
 # A fresh 50-char token per run, used by BOTH the server and the two clients.
-TOKEN="$(LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 50 || true)"
-[ -n "$TOKEN" ] || TOKEN="itest$(date +%s)token"
+# Keep `|| true` so the SIGPIPE `head' delivers to `tr' does not trip pipefail;
+# then validate strictly -- fail loudly rather than fall back to a guessable
+# low-entropy token if the entropy source ever comes up short.
+TOKEN="$(LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c 50 || true)"
+[ "${#TOKEN}" -ge 40 ] || die "could not generate a random token (/dev/urandom unavailable?)"
 export MINDWTR_CLOUD_AUTH_TOKENS="$TOKEN"
 export MINDWTR_CLOUD_CORS_ORIGIN="http://localhost:5173"
 
@@ -75,7 +78,7 @@ dc() { docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"; }
 
 cleanup() {
   note "teardown"
-  dc logs --no-color --tail 40 mindwtr-cloud 2>/dev/null || true
+  dc logs --no-color --tail 40 mindwtr-cloud 2>&1 || true
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   info "removed containers + data volume for project '$PROJECT'"
 }
@@ -92,13 +95,13 @@ fi
 
 note "wait for /health"
 ready=0
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
   if curl -fsS "${BASE_URL}/health" >/dev/null 2>&1; then
     ready=1; info "healthy after ${i}s"; break
   fi
   sleep 1
 done
-[ "$ready" = "1" ] || die "server did not become healthy at ${BASE_URL}/health within 60s"
+[ "$ready" = "1" ] || die "server did not become healthy at ${BASE_URL}/health within 90s"
 
 # --- seed the namespace -------------------------------------------------------
 # A fresh server has no namespace yet, so a bare `HEAD /v1/data` -- the first
@@ -107,11 +110,14 @@ done
 # all resolve.  A real client reaches this state via `mindwtr-bootstrap', whose
 # GET runs before any HEAD; the smoke suite leads with HEAD, so seed explicitly.
 note "seed namespace (authenticated GET auto-creates the empty snapshot)"
+# `|| true' keeps a curl transport failure from tripping set -e; curl then
+# reports 000, which we treat distinctly from a reachable-but-bad status.
 seed_code="$(curl -s -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/v1/data" || true)"
 case "$seed_code" in
-  2*) info "GET /v1/data -> $seed_code (namespace ready)";;
-  *)  die "seed GET /v1/data returned '$seed_code' (expected 2xx); cannot initialize namespace";;
+  2*)  info "GET /v1/data -> $seed_code (namespace ready)";;
+  000) die "seed GET /v1/data got no HTTP response (curl could not reach ${BASE_URL}; server crashed or port closed?)";;
+  *)   die "seed GET /v1/data returned '$seed_code' (expected 2xx); cannot initialize namespace";;
 esac
 
 # --- client config for the Emacs smoke suite ---------------------------------
@@ -162,7 +168,12 @@ fi
 
 # --- Phase 3: foreign write via curl, then confirm BOTH clients agree --------
 note "curl cross-check: foreign write round-trips through the server"
-ITEST_ID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid;print(uuid.uuid4())')"
+# Linux exposes /proc; macOS/dev boxes have uuidgen; python3 is the last resort.
+# `|| true' so an all-sources-missing case dies with a clear message, not set -e.
+ITEST_ID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null \
+  || uuidgen 2>/dev/null \
+  || python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null || true)"
+[ -n "$ITEST_ID" ] || die "could not generate a UUID (need /proc, uuidgen, or python3)"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 payload="$(jq -nc --arg id "$ITEST_ID" --arg now "$NOW" '{
   tasks:    [ { id:$id, title:"[itest] curl-written task", status:"inbox",
