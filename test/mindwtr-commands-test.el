@@ -141,4 +141,102 @@
         (goto-char (point-min)) (re-search-forward "PCyc") (org-back-to-heading t)
         (should (member (org-get-todo-state) valid))))))
 
+(defun mindwtr-commands-test--task-by-id (id)
+  "Parse the buffer and return the task entity with :id ID."
+  (seq-find (lambda (tk) (string= (plist-get tk :id) id))
+            (plist-get (mindwtr-parse-buffer) :tasks)))
+
+(ert-deftest mindwtr-commands-set-area-on-standalone-task ()
+  "On a standalone task, choosing an area writes MW_AREA and parse resolves :areaId."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0)
+                (:id "a2" :name "Work" :order 1))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work")))
+      (mindwtr-set-area))
+    (save-excursion
+      (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_AREA") "Work")))
+    (should (string= (plist-get (mindwtr-commands-test--task-by-id "t1") :areaId) "a2"))))
+
+(ert-deftest mindwtr-commands-set-area-on-project ()
+  "On a project heading, the command sets the area likewise."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil :tasks nil :settings nil)
+    (re-search-forward "ACTIVE Proj")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Personal")))
+      (mindwtr-set-area))
+    (save-excursion
+      (goto-char (point-min)) (re-search-forward "ACTIVE Proj") (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_AREA") "Personal")))))
+
+(ert-deftest mindwtr-commands-set-area-refuses-task-under-project ()
+  "On a task under a project, the command refuses: no MW_AREA written, and parse
+yields :projectId with NO :areaId (guards the dual-container over-stamp)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Child" :status "next" :projectId "p1"))
+        :settings nil)
+    (re-search-forward "Child")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (error "should not prompt for a task under a project"))))
+      (mindwtr-set-area))
+    (save-excursion
+      (goto-char (point-min)) (re-search-forward "Child") (org-back-to-heading t)
+      (should-not (org-entry-get nil "MW_AREA")))
+    (let ((task (mindwtr-commands-test--task-by-id "t1")))
+      (should (string= (plist-get task :projectId) "p1"))
+      (should-not (plist-get task :areaId)))))
+
+(ert-deftest mindwtr-commands-set-area-noop-off-entity ()
+  "Off a non-task/project heading (a container), the command no-ops -- it does
+not prompt and writes no MW_AREA."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects nil :sections nil :tasks nil :settings nil)
+    (goto-char (point-min))
+    (re-search-forward "^\\* Inbox$")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (error "should not prompt off an entity"))))
+      (mindwtr-set-area))
+    (org-back-to-heading t)
+    (should-not (org-entry-get nil "MW_AREA"))))
+
+(ert-deftest mindwtr-commands-set-area-offers-exactly-area-names ()
+  "Completion offers exactly the buffer's existing area names."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0)
+                (:id "a2" :name "Work" :order 1))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt coll &rest _) (setq offered coll) "Personal")))
+        (mindwtr-set-area))
+      (should (equal (sort (copy-sequence offered) #'string<) '("Personal" "Work"))))))
+
+(ert-deftest mindwtr-commands-set-area-replaces-existing-no-duplicate ()
+  "Changing an already-set area replaces the MW_AREA value (no duplicate property)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0)
+                (:id "a2" :name "Work" :order 1))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next" :areaId "a1")) :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work")))
+      (mindwtr-set-area))
+    (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
+    (should (string= (org-entry-get nil "MW_AREA") "Work"))
+    (let ((end (save-excursion (outline-next-heading) (point))) (count 0))
+      (save-excursion
+        (while (re-search-forward "^:MW_AREA:" end t) (setq count (1+ count))))
+      (should (= count 1)))))
+
 ;;; mindwtr-commands-test.el ends here
