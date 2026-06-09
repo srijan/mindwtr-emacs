@@ -8,12 +8,12 @@
 # and no host-permission juggling on a bind mount is needed.
 services:
   mindwtr-cloud:
-    # Defaults to a pinned 0.9.7 so a run is reproducible and never drifts when a
-    # newer image ships (`:latest' floats).  Override the tag with
-    # MINDWTR_CLOUD_TAG (e.g. =0.9.9, =latest) or the whole ref with
-    # MINDWTR_CLOUD_IMAGE.  run.sh exports MINDWTR_CLOUD_TAG, so it and a direct
-    # `docker compose' invocation resolve the same default.
-    image: ${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG:-0.9.7}}
+    # The version lives in run.sh (DEFAULT_CLOUD_TAG), which exports
+    # MINDWTR_CLOUD_TAG before invoking compose -- so it is required here (like
+    # the auth token below) rather than defaulted, keeping the pinned version in
+    # one place.  Run via test/integration/run.sh; override the whole ref with
+    # MINDWTR_CLOUD_IMAGE.
+    image: ${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG:?set MINDWTR_CLOUD_TAG (run via test/integration/run.sh)}}
     ports:
       - "${MINDWTR_DOCKER_PORT:-8787}:8787"
     environment:

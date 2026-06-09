@@ -11,10 +11,10 @@
 #
 # Usage:
 #   test/integration/run.sh
-#   MINDWTR_CLOUD_TAG=0.9.7 test/integration/run.sh   # validate a target version
+#   MINDWTR_CLOUD_TAG=latest test/integration/run.sh   # validate a target version
 #
 # Knobs (environment):
-#   MINDWTR_CLOUD_TAG        image tag to test           (default: 0.9.7)
+#   MINDWTR_CLOUD_TAG        image tag to test           (default: DEFAULT_CLOUD_TAG)
 #   MINDWTR_CLOUD_IMAGE      full image ref override      (default: ghcr.io/dongdongbh/mindwtr-cloud:<tag>)
 #   MINDWTR_DOCKER_PORT      host port to bind            (default: 8787)
 #   MINDWTR_SKIP_WRITE=1     skip the Emacs write lifecycle (read-only phases only)
@@ -35,12 +35,14 @@ EMACS_BIN="${EMACS:-emacs}"
 PROJECT="mindwtr-itest"
 export COMPOSE_PROJECT_NAME="$PROJECT"
 
-# Pin a concrete server version by default so the suite is reproducible and CI
-# never drifts when a newer image is published (`:latest' floats -- e.g. it is
-# already ahead of 0.9.7).  Override with MINDWTR_CLOUD_TAG (=latest, =0.9.9, ...)
-# or MINDWTR_CLOUD_IMAGE for the whole ref.  Exported so compose.yaml resolves
-# the same value.  Keep this in sync with .github/workflows/ci.yml.
-export MINDWTR_CLOUD_TAG="${MINDWTR_CLOUD_TAG:-0.9.7}"
+# Single source of truth for the server version under test.  compose.yaml and
+# the CI workflow both derive from this -- run.sh exports it, compose *requires*
+# it (like the auth token) -- so the version is bumped in exactly one place.
+# `:latest' floats ahead of this, so we pin by default for reproducibility;
+# override per run with MINDWTR_CLOUD_TAG=... (e.g. =0.9.9, =latest) or
+# MINDWTR_CLOUD_IMAGE for the whole ref.
+DEFAULT_CLOUD_TAG="0.9.7"
+export MINDWTR_CLOUD_TAG="${MINDWTR_CLOUD_TAG:-$DEFAULT_CLOUD_TAG}"
 CLOUD_IMAGE="${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG}}"
 
 note()  { printf '\n=== %s ===\n' "$*"; }

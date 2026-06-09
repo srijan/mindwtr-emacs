@@ -55,15 +55,14 @@ jobs:
 
       # Provisions ghcr.io/dongdongbh/mindwtr-cloud, runs the Emacs smoke suite
       # against it, and cross-validates /v1/data with curl. See
-      # test/integration/README.md. Pin a target server version by setting
-      # MINDWTR_CLOUD_TAG below (e.g. "0.9.7").
+      # test/integration/README.md. The server version is pinned in run.sh
+      # (DEFAULT_CLOUD_TAG); set MINDWTR_CLOUD_TAG below only to override.
       - name: Integration test against a real Mindwtr cloud server
         env:
           # On CI, Docker + Emacs are present, so a SKIP would hide a real
           # problem -- require the prerequisites and fail loudly if missing.
           MINDWTR_DOCKER_REQUIRE: "1"
-          # Pin the server version explicitly so CI is reproducible and never
-          # drifts when a newer image ships (`:latest' floats ahead of this).
-          # Bump deliberately to validate an upgrade; mirrors the run.sh default.
-          MINDWTR_CLOUD_TAG: "0.9.7"
+          # The pinned server version lives in one place -- DEFAULT_CLOUD_TAG in
+          # test/integration/run.sh -- so CI inherits it rather than duplicating
+          # it here. Set MINDWTR_CLOUD_TAG here only to override for a one-off run.
         run: make smoke-docker
