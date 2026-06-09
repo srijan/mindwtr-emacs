@@ -8,9 +8,11 @@
 ;; bucket), set contexts (`mindwtr-set-context'), set an area
 ;; (`mindwtr-set-area'), refile under a project (native `org-refile',
 ;; offered only mindwtr project headings as targets), or promote the item
-;; into a brand new project (`mindwtr-promote-to-project').  An item is
-;; finished when it leaves the inbox (status change, refile, or promotion)
-;; or is skipped; the loop then advances to the next item.
+;; into the first NEXT action of a brand new project
+;; (`mindwtr-promote-to-project', mirroring the app's convert-to-project:
+;; the task keeps its MW_ID).  An item is finished when it leaves the inbox
+;; (status change, refile, or promotion) or is skipped; the loop then
+;; advances to the next item.
 ;; `mindwtr-clarify-this-item' runs the same action loop for just the inbox
 ;; item at point.
 ;;; Code:
@@ -112,8 +114,9 @@ For each item, single keys apply the existing type-aware commands:
      @contexts; hashtag tags are preserved)
   a  set an area (`mindwtr-set-area')
   r  refile under a project (native `org-refile', project targets only)
-  p  promote the item to a brand new ACTIVE project
-     (`mindwtr-promote-to-project'); child headings become its tasks
+  p  promote: the item becomes the first NEXT action of a new ACTIVE
+     project (`mindwtr-promote-to-project'); sketched child headings
+     become the project's tasks
   n  skip to the next inbox item
   q  stop the pass
 

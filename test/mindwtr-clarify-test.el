@@ -157,16 +157,25 @@ the item as clarified."
     (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox"))))
 
 (ert-deftest mindwtr-clarify-promote-action-creates-project ()
-  "`p' promotes the item to an ACTIVE project under * Projects and finishes it."
+  "`p' makes the item the first NEXT action of a new ACTIVE project (the
+task keeps its id; the project is a fresh entity) and finishes the item."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "t1" :title "Plan party" :status "inbox"))
         :settings nil)
-    (mindwtr-clarify-test--feed '(?p) (lambda () (mindwtr-clarify)))
+    ;; RET through both prompts (project title and next action keep defaults)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &optional init &rest _) (or init ""))))
+      (mindwtr-clarify-test--feed '(?p) (lambda () (mindwtr-clarify))))
     (should (string= (mindwtr-clarify-test--parent-list-of "Plan party") "projects"))
-    (let ((proj (car (plist-get (mindwtr-parse-buffer) :projects))))
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects)))
+           (task (car (plist-get ad :tasks))))
       (should (string= (plist-get proj :title) "Plan party"))
-      (should (string= (plist-get proj :status) "active")))))
+      (should (string= (plist-get proj :status) "active"))
+      (should (string= (plist-get task :id) "t1"))
+      (should (string= (plist-get task :status) "next"))
+      (should (string= (plist-get task :projectId) (plist-get proj :id))))))
 
 (ert-deftest mindwtr-clarify-this-item-only-touches-item-at-point ()
   "`mindwtr-clarify-this-item' triages exactly the item at point: Two is

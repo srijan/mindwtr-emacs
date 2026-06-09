@@ -227,9 +227,10 @@ then relocate.  Falls back to plain org shift-cycling off Mindwtr headings."
 
 (defun mindwtr-commands--stamp-missing-child-keywords ()
   "Give NEXT to every descendant heading of the subtree at point lacking a keyword.
-Used when a task becomes a project: a keyword-less new task would otherwise
-default to status inbox at sync time (`mindwtr-sync--ensure-status'), which is
-the wrong resting state for a project task.  Existing keywords are preserved."
+Used when a task's sketched sub-headings become project tasks: a keyword-less
+new task would otherwise default to status inbox at sync time
+\(`mindwtr-sync--ensure-status'), which is the wrong resting state for a
+project task.  Existing keywords are preserved."
   (save-excursion
     (org-back-to-heading t)
     (let ((end (save-excursion (org-end-of-subtree t t) (point-marker))))
@@ -239,19 +240,78 @@ the wrong resting state for a project task.  Existing keywords are preserved."
               (org-todo "NEXT")))
         (set-marker end nil)))))
 
+(defun mindwtr-commands--has-child-heading-p ()
+  "Non-nil when the heading at point has at least one descendant heading."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((end (save-excursion (org-end-of-subtree t t) (point))))
+      (and (outline-next-heading) (< (point) end)))))
+
+(defun mindwtr-commands--find-project-by-title (title)
+  "Return a marker at the first project heading titled TITLE, or nil.
+The comparison is case-insensitive, mirroring the app's reuse of an
+existing same-titled project on convert-to-project."
+  (save-excursion
+    (goto-char (point-min))
+    (let (found)
+      (while (and (not found)
+                  (re-search-forward "^[ \t]*:MW_TYPE:[ \t]*project[ \t]*$" nil t))
+        (save-excursion
+          (org-back-to-heading t)
+          (when (string= (downcase (org-get-heading t t t t)) (downcase title))
+            (setq found (point-marker)))))
+      found)))
+
+(defun mindwtr-commands--create-project-heading (title)
+  "Insert an ACTIVE project heading TITLE as the last child of `* Projects'.
+Mints its MW_ID eagerly: type inference and the `:projectId' derivation
+both key on the ancestor's id, so an id-less project would misclassify the
+tasks beneath it on the next parse.  Returns a marker at the new heading,
+or nil when the buffer has no projects container."
+  (let ((target (mindwtr-commands--container-marker "projects")))
+    (when target
+      (unwind-protect
+          (save-excursion
+            (goto-char target)
+            (let ((level (1+ (org-current-level))))
+              (org-end-of-subtree t t)
+              (unless (bolp) (insert "\n"))
+              (let ((beg (point)))
+                (insert (make-string level ?*) " ACTIVE " title "\n"
+                        ":PROPERTIES:\n:MW_TYPE: project\n:MW_ID: "
+                        (mindwtr-util-uuid) "\n:END:\n")
+                (goto-char beg)
+                (point-marker))))
+        (set-marker target nil)))))
+
+(defun mindwtr-commands--move-subtree-under (target)
+  "Move the subtree at point to be the last child of the heading at TARGET.
+Leaves point on the moved heading."
+  (org-back-to-heading t)
+  (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
+    (org-cut-subtree)
+    (goto-char target)
+    (org-end-of-subtree t t)
+    (org-paste-subtree level)))
+
 ;;;###autoload
 (defun mindwtr-promote-to-project ()
-  "Convert the standalone task at point into a new ACTIVE project.
-Replaces the heading's MW_ID with a freshly minted one (the old task id
-disappears from the buffer, so the next sync tombstones it -- if it ever
-synced -- and creates the project; the server is never asked to mutate an
-entity's type).  Minting the project id eagerly, rather than leaving it to
-the sync, matters for the children: type inference and the `:projectId'
-derivation both key on the ancestor's MW_ID, so an id-less project would
-misclassify its children as sibling projects on the next parse.  Sets
-:MW_TYPE: project and the ACTIVE keyword, stamps NEXT on any child heading
-lacking a TODO keyword (children become the project's tasks by outline
-nesting), and relocates the subtree under the `* Projects' container.
+  "Make the task at point the first NEXT action of a new project.
+Mirrors the app's \"make this a project\" (its inbox-processing wizard):
+the task KEEPS its MW_ID -- updated in place, never tombstoned, so its
+server history survives and pending edits from other devices still land on
+a live task -- and becomes a NEXT action under a freshly created ACTIVE
+project.  Prompts for the project title (prefilled with the task's title);
+when a project with that title already exists (case-insensitive), the task
+moves under it instead of creating a duplicate -- also the app's behavior.
+
+A childless task is then prompted for a next-action retitle (RET keeps the
+current title): its old title usually names the outcome, which just became
+the project's name, not the first action.  A task with sketched child
+headings skips that prompt -- the children are the actions; they ride
+along, keyword-less ones stamped NEXT, and parse as the project's tasks
+(`mindwtr-parse--ancestor-id' skips intermediate task headings, and the
+next reconcile renders them flat under the project).
 
 Refuses on anything but a task heading, and on a task that already belongs
 to a project or section (lift it out with `org-refile' first)."
@@ -265,12 +325,26 @@ to a project or section (lift it out with `org-refile' first)."
      ((mindwtr-commands--in-project-p)
       (user-error "mindwtr-promote-to-project: task already belongs to a project; refile it out first"))
      (t
-      (org-set-property "MW_ID" (mindwtr-util-uuid))
-      (org-set-property "MW_TYPE" "project")
-      (org-todo "ACTIVE")
-      (mindwtr-commands--stamp-missing-child-keywords)
-      (mindwtr-commands--relocate 'project)
-      (message "mindwtr: promoted to an ACTIVE project")))))
+      (let* ((task-title (org-get-heading t t t t))
+             (children-p (mindwtr-commands--has-child-heading-p))
+             (ptitle (string-trim (read-string "Project title: " task-title))))
+        (when (string-empty-p ptitle)
+          (user-error "mindwtr-promote-to-project: a project title is required"))
+        (unless children-p
+          (let ((action (string-trim (read-string "Next action: " task-title))))
+            (when (and (not (string-empty-p action))
+                       (not (string= action task-title)))
+              (org-edit-headline action))))
+        (org-todo "NEXT")
+        (mindwtr-commands--stamp-missing-child-keywords)
+        (let ((target (or (mindwtr-commands--find-project-by-title ptitle)
+                          (mindwtr-commands--create-project-heading ptitle))))
+          (unless target
+            (user-error "mindwtr-promote-to-project: no `* Projects' container in this buffer"))
+          (unwind-protect
+              (mindwtr-commands--move-subtree-under target)
+            (set-marker target nil)))
+        (message "mindwtr: task is now the next action of project %S" ptitle))))))
 
 ;;;###autoload
 (defun mindwtr-cycle-status-forward ()

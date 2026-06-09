@@ -187,7 +187,7 @@ single-key action loop:
 | `c` | Set contexts (`mindwtr-set-context`; completion over the buffer's @contexts, hashtags preserved) |
 | `a` | Set an area (`mindwtr-set-area`) |
 | `r` | Refile under a project (native `org-refile`, offered only mindwtr project headings as targets) |
-| `p` | Promote the item to a brand-new **ACTIVE project** (`mindwtr-promote-to-project`) |
+| `p` | Promote: the item becomes the **first NEXT action** of a new ACTIVE project (`mindwtr-promote-to-project`) |
 | `n` | Skip to the next inbox item |
 | `q` | Stop the pass |
 
@@ -200,17 +200,23 @@ inbox item at point (from a heading nested inside an item, it acts on the
 containing item) — handy for triaging one capture without a full pass.
 
 **Promoting to a project.** `p` (also standalone as
-`M-x mindwtr-promote-to-project`) is the mindwtr counterpart of org-gtd's
-"this inbox item is actually a multi-step project". Sketch the project by
-adding subtask headings under the inbox item (just type them — nesting is
-the model), then promote: the heading gets a **freshly minted** `MW_ID`
-(the old task id vanishes, so the next sync tombstones the task and creates
-the project — the server is never asked to mutate an entity's type), becomes
-`:MW_TYPE: project` with the `ACTIVE` keyword, child headings lacking a TODO
-keyword are stamped `NEXT` (they become the project's tasks by nesting), and
-the whole subtree relocates under `* Projects`. Unlike org-gtd there is no
-dependency graph or NEXT-advancement bookkeeping to set up locally — the
-server owns task ordering and project semantics.
+`M-x mindwtr-promote-to-project`) mirrors the Mindwtr app's "make this a
+project" in its inbox-processing wizard, with the same ID semantics: the
+task **keeps its `MW_ID`** — it is updated in place, never tombstoned, so
+its server history survives and pending edits from other devices still land
+on a live task — and becomes a `NEXT` action under a **freshly created**
+`ACTIVE` project. You are prompted for the project title (prefilled with
+the task's title); if a project with that title already exists
+(case-insensitive), the task moves under it instead of creating a duplicate
+— also the app's behavior. A childless task then gets a next-action retitle
+prompt (`RET` keeps the title): its old title usually names the outcome,
+which just became the project's name. Alternatively, sketch the project
+org-gtd-style by typing subtask headings under the inbox item first — then
+`p` skips the retitle prompt, the children ride along (keyword-less ones
+stamped `NEXT`), and they parse as the project's tasks; the next reconcile
+renders them flat under the project. Unlike org-gtd there is no dependency
+graph or NEXT-advancement bookkeeping to set up locally — the server owns
+task ordering and project semantics.
 
 ### Customization summary
 
