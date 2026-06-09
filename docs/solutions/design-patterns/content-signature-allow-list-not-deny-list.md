@@ -110,3 +110,7 @@ A future boolean `:pinned`, not mapped to org:
   byte-stability sibling of this idea is [[org-markdown-link-conversion-roundtrip]].
 - [[migration-latch-for-newly-signed-fields]] — the deploy-seam guard for the first sync
   after a field is promoted onto this allow-list (the downstream half of allow-list-LAST).
+- [[content-signature-cannot-detect-remote-deletes]] — the delete-shaped corollary: because
+  the deletion marker is shadow-only and off this allow-list, a server tombstone has an
+  unchanged signature, so deletes are invisible to signature comparison and must be detected
+  before any signature-equality gate.
