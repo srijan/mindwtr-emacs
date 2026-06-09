@@ -239,4 +239,77 @@ not prompt and writes no MW_AREA."
         (while (re-search-forward "^:MW_AREA:" end t) (setq count (1+ count))))
       (should (= count 1)))))
 
+(ert-deftest mindwtr-commands-promote-task-to-project ()
+  "Promoting an inbox task converts it to an ACTIVE project under * Projects:
+a FRESH MW_ID replaces the task's (so children infer as its tasks and the old
+task id is tombstoned at sync), MW_TYPE project, keyword-less children
+stamped NEXT, existing child keywords preserved."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Plan party\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "*** Book venue\n"
+              "*** WAIT Invite people\n"
+              "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Plan party"))
+    (mindwtr-promote-to-project)
+    (should (string= (mindwtr-commands-test--parent-list-of "Plan party") "projects"))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "Plan party"))
+      (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_TYPE") "project"))
+      ;; fresh id, not the old task's
+      (let ((id (org-entry-get nil "MW_ID")))
+        (should id)
+        (should-not (string= id "t1")))
+      (should (string= (org-get-todo-state) "ACTIVE")))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "Book venue"))
+      (org-back-to-heading t)
+      (should (string= (org-get-todo-state) "NEXT")))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "Invite people"))
+      (org-back-to-heading t)
+      (should (string= (org-get-todo-state) "WAIT")))
+    ;; The whole structure parses: one active project, its two child tasks
+    ;; bound to it via the freshly minted project id.
+    (let* ((ad (mindwtr-parse-buffer))
+           (projects (plist-get ad :projects))
+           (proj (car projects))
+           (tasks (plist-get ad :tasks))
+           (statuses (sort (mapcar (lambda (tk) (plist-get tk :status)) tasks)
+                           #'string<)))
+      (should (= (length projects) 1))
+      (should (string= (plist-get proj :title) "Plan party"))
+      (should (string= (plist-get proj :status) "active"))
+      (should (equal statuses '("next" "waiting")))
+      (dolist (tk tasks)
+        (should (string= (plist-get tk :projectId) (plist-get proj :id)))))))
+
+(ert-deftest mindwtr-commands-promote-refuses-project ()
+  "Promote refuses on a project heading."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil :tasks nil :settings nil)
+    (re-search-forward "ACTIVE Proj")
+    (should-error (mindwtr-promote-to-project) :type 'user-error)))
+
+(ert-deftest mindwtr-commands-promote-refuses-task-in-project ()
+  "Promote refuses on a task that already belongs to a project."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Child" :status "next" :projectId "p1"))
+        :settings nil)
+    (re-search-forward "Child")
+    (should-error (mindwtr-promote-to-project) :type 'user-error)))
+
 ;;; mindwtr-commands-test.el ends here

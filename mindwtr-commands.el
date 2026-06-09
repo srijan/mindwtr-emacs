@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'mindwtr-util)
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 
@@ -151,6 +152,53 @@ then relocate.  Falls back to plain org shift-cycling off Mindwtr headings."
                          (t (mod (+ idx dir) (length kws))))))
         (save-excursion (org-back-to-heading t) (org-todo (nth next kws)))
         (mindwtr-commands--relocate kind)))))
+
+(defun mindwtr-commands--stamp-missing-child-keywords ()
+  "Give NEXT to every descendant heading of the subtree at point lacking a keyword.
+Used when a task becomes a project: a keyword-less new task would otherwise
+default to status inbox at sync time (`mindwtr-sync--ensure-status'), which is
+the wrong resting state for a project task.  Existing keywords are preserved."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((end (save-excursion (org-end-of-subtree t t) (point-marker))))
+      (unwind-protect
+          (while (and (outline-next-heading) (< (point) end))
+            (unless (org-get-todo-state)
+              (org-todo "NEXT")))
+        (set-marker end nil)))))
+
+;;;###autoload
+(defun mindwtr-promote-to-project ()
+  "Convert the standalone task at point into a new ACTIVE project.
+Replaces the heading's MW_ID with a freshly minted one (the old task id
+disappears from the buffer, so the next sync tombstones it -- if it ever
+synced -- and creates the project; the server is never asked to mutate an
+entity's type).  Minting the project id eagerly, rather than leaving it to
+the sync, matters for the children: type inference and the `:projectId'
+derivation both key on the ancestor's MW_ID, so an id-less project would
+misclassify its children as sibling projects on the next parse.  Sets
+:MW_TYPE: project and the ACTIVE keyword, stamps NEXT on any child heading
+lacking a TODO keyword (children become the project's tasks by outline
+nesting), and relocates the subtree under the `* Projects' container.
+
+Refuses on anything but a task heading, and on a task that already belongs
+to a project or section (lift it out with `org-refile' first)."
+  (interactive)
+  (org-back-to-heading t)
+  (let ((kind (or (mindwtr-commands--kind-at-point)
+                  (mindwtr-parse--infer-kind))))
+    (cond
+     ((not (eq kind 'task))
+      (user-error "mindwtr-promote-to-project: point is not on a task heading"))
+     ((mindwtr-commands--in-project-p)
+      (user-error "mindwtr-promote-to-project: task already belongs to a project; refile it out first"))
+     (t
+      (org-set-property "MW_ID" (mindwtr-util-uuid))
+      (org-set-property "MW_TYPE" "project")
+      (org-todo "ACTIVE")
+      (mindwtr-commands--stamp-missing-child-keywords)
+      (mindwtr-commands--relocate 'project)
+      (message "mindwtr: promoted to an ACTIVE project")))))
 
 ;;;###autoload
 (defun mindwtr-cycle-status-forward ()

@@ -186,11 +186,30 @@ single-key action loop:
 | `c` | Edit contexts/hashtags (org tags; `@`-prefixed tags are contexts) |
 | `a` | Set an area (`mindwtr-set-area`) |
 | `r` | Refile under a project (native `org-refile`, offered only mindwtr project headings as targets) |
+| `p` | Promote the item to a brand-new **ACTIVE project** (`mindwtr-promote-to-project`) |
 | `n` | Skip to the next inbox item |
 | `q` | Stop the pass |
 
-An item is finished when it leaves the inbox (status change or refile) or is
-skipped; the loop then advances to the next item until the inbox is empty.
+An item is finished when it leaves the inbox (status change, refile, or
+promotion) or is skipped; the loop then advances to the next item until the
+inbox is empty.
+
+**`M-x mindwtr-clarify-this-item`** runs the same action loop for just the
+inbox item at point (from a heading nested inside an item, it acts on the
+containing item) — handy for triaging one capture without a full pass.
+
+**Promoting to a project.** `p` (also standalone as
+`M-x mindwtr-promote-to-project`) is the mindwtr counterpart of org-gtd's
+"this inbox item is actually a multi-step project". Sketch the project by
+adding subtask headings under the inbox item (just type them — nesting is
+the model), then promote: the heading gets a **freshly minted** `MW_ID`
+(the old task id vanishes, so the next sync tombstones the task and creates
+the project — the server is never asked to mutate an entity's type), becomes
+`:MW_TYPE: project` with the `ACTIVE` keyword, child headings lacking a TODO
+keyword are stamped `NEXT` (they become the project's tasks by nesting), and
+the whole subtree relocates under `* Projects`. Unlike org-gtd there is no
+dependency graph or NEXT-advancement bookkeeping to set up locally — the
+server owns task ordering and project semantics.
 
 ### Customization summary
 

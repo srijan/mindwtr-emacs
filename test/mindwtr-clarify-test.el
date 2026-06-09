@@ -154,4 +154,60 @@ the item as clarified."
     (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
     (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox"))))
 
+(ert-deftest mindwtr-clarify-promote-action-creates-project ()
+  "`p' promotes the item to an ACTIVE project under * Projects and finishes it."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Plan party" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify-test--feed '(?p) (lambda () (mindwtr-clarify)))
+    (should (string= (mindwtr-clarify-test--parent-list-of "Plan party") "projects"))
+    (let ((proj (car (plist-get (mindwtr-parse-buffer) :projects))))
+      (should (string= (plist-get proj :title) "Plan party"))
+      (should (string= (plist-get proj :status) "active")))))
+
+(ert-deftest mindwtr-clarify-this-item-only-touches-item-at-point ()
+  "`mindwtr-clarify-this-item' triages exactly the item at point: Two is
+clarified to single-actions, One is neither prompted for nor moved."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox")
+                (:id "t2" :title "Two" :status "inbox"))
+        :settings nil)
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Two"))
+    ;; s -> n (NEXT); the feed has nothing further, so a prompt for One
+    ;; would error out the test.
+    (mindwtr-clarify-test--feed '(?s ?n) (lambda () (mindwtr-clarify-this-item)))
+    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "single-actions"))
+    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))))
+
+(ert-deftest mindwtr-clarify-this-item-climbs-to-inbox-item ()
+  "From a heading nested inside an inbox item, this-item acts on the item."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Plan party\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "*** Book venue\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Book venue"))
+    (let (prompts)
+      (cl-letf (((symbol-function 'read-char-choice)
+                 (lambda (prompt &rest _) (push prompt prompts) ?n)))
+        (mindwtr-clarify-this-item))
+      (should (= (length prompts) 1))
+      (should (string-match-p "Plan party" (car prompts))))))
+
+(ert-deftest mindwtr-clarify-this-item-errors-off-inbox ()
+  "Off an inbox item (a single-actions task), this-item is a user-error."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next"))
+        :settings nil)
+    (goto-char (point-min))
+    (let ((case-fold-search nil)) (re-search-forward "Loose"))
+    (should-error (mindwtr-clarify-this-item) :type 'user-error)))
+
 ;;; mindwtr-clarify-test.el ends here
