@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": "The only dependency tracked is the Mindwtr cloud server image used by the dockerized integration test. Its version is a bash variable (DEFAULT_CLOUD_TAG in test/integration/run.sh), not a manifest entry, so a custom regex manager extracts it from the '# renovate:' annotation above that line. Renovate opens a PR per new tag; the CI integration job then runs the smoke suite against that version, so upgrades are validated before merge. To also track GitHub Actions versions, drop the enabledManagers restriction below (or add 'github-actions').",
+  "enabledManagers": ["custom.regex"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^test/integration/run\\.sh$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+DEFAULT_CLOUD_TAG=\"(?<currentValue>[^\"]+)\""
+      ],
+      "versioningTemplate": "semver"
+    }
+  ]
+}
