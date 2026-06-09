@@ -259,3 +259,32 @@ PROPERTIES :END:, like a task description."
                              (:title "two" :isCompleted t))
                  :mw-extra-props nil) 2 nil)))
     (should (string-match-p "Task notes\\.\n- \\[ \\] one\n- \\[X\\] two" text))))
+
+(ert-deftest mindwtr-render-focus-today-true-renders ()
+  "A task with :isFocusedToday t renders a :MW_FOCUS_TODAY: t drawer line."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :isFocusedToday t :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "^:MW_FOCUS_TODAY: t$" text))))
+
+(ert-deftest mindwtr-render-focus-today-false-omits ()
+  "A task with :isFocusedToday :false renders no MW_FOCUS_TODAY line."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :isFocusedToday :false :mw-extra-props nil) 2 nil)))
+    (should-not (string-match-p "MW_FOCUS_TODAY" text))))
+
+(ert-deftest mindwtr-render-focus-today-absent-omits ()
+  "A task with no :isFocusedToday key renders no MW_FOCUS_TODAY line."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :mw-extra-props nil) 2 nil)))
+    (should-not (string-match-p "MW_FOCUS_TODAY" text))))
+
+(ert-deftest mindwtr-render-project-booleans-mixed ()
+  "A project with :isSequential t and :isFocused :false renders only SEQUENTIAL."
+  (let ((text (mindwtr-render-heading
+               '(:id "p1" :mw-kind project :title "x" :status "active"
+                 :isSequential t :isFocused :false :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "^:MW_SEQUENTIAL: t$" text))
+    (should-not (string-match-p "MW_FOCUSED" text))))

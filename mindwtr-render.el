@@ -12,17 +12,24 @@
 Dynamically bound by `mindwtr-render-appdata' / reconcile.")
 
 (defconst mindwtr-render--drawer-order
-  '(:energyLevel :timeEstimate :recurrence :assignedTo :focusToday
-    :reviewAt :location :taskMode :sequential :focused :attach)
+  '(:energyLevel :timeEstimate :recurrence :assignedTo :isFocusedToday
+    :reviewAt :location :taskMode :isSequential :isFocused :attach)
   "Canonical order of content properties in the drawer.")
 
 (defconst mindwtr-render--prop-names
   '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
     (:recurrence . "MW_RECURRENCE") (:assignedTo . "MW_ASSIGNED_TO")
-    (:focusToday . "MW_FOCUS_TODAY") (:reviewAt . "MW_REVIEW_AT")
+    (:isFocusedToday . "MW_FOCUS_TODAY") (:reviewAt . "MW_REVIEW_AT")
     (:location . "MW_LOCATION") (:taskMode . "MW_TASK_MODE")
-    (:sequential . "MW_SEQUENTIAL") (:focused . "MW_FOCUSED")
+    (:isSequential . "MW_SEQUENTIAL") (:isFocused . "MW_FOCUSED")
     (:attach . "MW_ATTACH")))
+
+(defconst mindwtr-render--boolean-fields '(:isFocusedToday :isSequential :isFocused)
+  "Drawer fields whose value is a server boolean.
+The server's false is the symbol `:false' (non-nil, truthy in elisp), so the
+generic non-nil render arm would wrongly emit `:false'; these fields get an
+explicit branch that emits the property only for a genuine `t' and omits it
+otherwise, making \"absent\" the unique fixed point for not-set/false.")
 
 (defconst mindwtr-render--org-tag-re "\\`[[:alnum:]_@#%]+\\'"
   "A context/tag matching this can be a native org tag.
@@ -156,12 +163,19 @@ Returns a string ending with a newline."
           (when name (push (format ":MW_AREA: %s" name) lines)))))
     (dolist (k mindwtr-render--drawer-order)
       (let ((v (plist-get entity k)))
-        (when v
+        (cond
+         ;; Booleans: emit `:PROP: t' only for a genuine `t'; `:false'/nil omit
+         ;; the property so absent is the unique not-set/false fixed point.
+         ((memq k mindwtr-render--boolean-fields)
+          (when (eq v t)
+            (push (format ":%s: t" (cdr (assq k mindwtr-render--prop-names)))
+                  lines)))
+         (v
           (push (format ":%s: %s" (cdr (assq k mindwtr-render--prop-names))
                         (cond ((eq k :recurrence) (mindwtr-render--recurrence v))
                               ((eq v t) "t")
                               (t v)))
-                lines))))
+                lines)))))
     ;; contexts/tags fallback: when any value can't be a native org tag,
     ;; move the whole list into a drawer property (JSON-encoded for
     ;; exactness, since the trigger includes spaces and other separators).
