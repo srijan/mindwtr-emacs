@@ -434,6 +434,121 @@ remote change into the buffer."
             (should (search-forward "from server" nil t))))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-once-reports-incoming-remote-change ()
+  "Covers AE1 end-to-end.  A clean local buffer with a remote-created entity
+surfaces an incoming line in the report and the :incoming result."
+  (let* ((dir (make-temp-file "mw-inc" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (remote (concat "{\"tasks\":[{\"id\":\"t9\",\"title\":\"from server\","
+                         "\"status\":\"next\",\"areaId\":\"a1\",\"rev\":1,"
+                         "\"createdAt\":\"2026-06-01T00:00:00Z\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}],"
+                         "\"projects\":[],\"sections\":[],"
+                         "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],\"settings\":{}}"))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v2")) :body ""))
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body remote))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                   :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v1")
+            (let* ((res (mindwtr-sync-once (current-buffer) "NOW"))
+                   (inc (plist-get res :incoming)))
+              (should (= (length inc) 1))
+              (should (eq (plist-get (car inc) :change) 'created))
+              (should (eq (plist-get (car inc) :kind) 'task))
+              (should (string= (plist-get (car inc) :title) "from server"))
+              (with-current-buffer "*Mindwtr Sync Report*"
+                (goto-char (point-min))
+                (should (search-forward "Incoming from remote:" nil t))
+                (should (save-excursion
+                          (goto-char (point-min))
+                          (search-forward "↓ from server (task) — created" nil t)))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-noop-reports-no-incoming ()
+  "Covers AE4.  A HEAD-match no-op surfaces no incoming and creates no report."
+  (let* ((dir (make-temp-file "mw-noop" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v2")) :body ""))
+              (_ (error "no PUT/GET expected on a no-op"))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                   :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v2")
+            (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+              (should (plist-get res :noop))
+              (should (null (plist-get res :incoming))))
+            ;; Nothing reportable and no parse warnings: no report buffer at all.
+            (should (null (get-buffer "*Mindwtr Sync Report*")))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-own-edit-won-no-incoming ()
+  "A full cycle where the user's own edit won and the server changed nothing
+else yields no incoming lines -- the own-edit exclusion holds through the
+real cycle, not just the unit helper."
+  (let* ((dir (make-temp-file "mw-own" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ;; Server echoes exactly what we PUT: our edit won, nothing else moved.
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                      "** NEXT renamed by me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save
+             '(:tasks ((:id "t1" :title "old name" :status "next" :areaId "a1" :rev 1
+                        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+               :projects nil :sections nil
+               :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v1")
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (null (plist-get res :incoming)))
+              (should (null (plist-get res :conflicts))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-handles-non-ascii-content ()
   "A server task with non-ASCII content (bullet, curly quotes) syncs and
 shadow-saves without raw-byte corruption or a coding-system prompt."

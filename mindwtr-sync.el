@@ -463,8 +463,10 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             ;; render.  Empty-notes protection must stay on until a full cycle
             ;; actually rewrites the buffer (the latch is set in that branch
             ;; below, after a confirmed save).
+            ;; A HEAD-match means the server is unchanged, so nothing is
+            ;; incoming; the report-show above passes nil incoming by omission.
             (list :ok t :noop t :conflicts nil :stats stats :skew nil
-                  :warnings parse-warnings))
+                  :warnings parse-warnings :incoming nil))
         (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
                (candidate (mindwtr-sync-build-candidate local shadow device now
                                                         protect-empty-notes))
@@ -481,6 +483,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                  ;; cycle.
                  (merged (mindwtr-model-ensure-settings (plist-get got :appdata)))
                  (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
+                 ;; Remote changes the merge pulled in for entities the user
+                 ;; did not edit locally -- benign merges that complete silently
+                 ;; today.  Computed from the same shadow/wire/merged bindings
+                 ;; the conflict path consumes; excludes own edits and conflicts.
+                 (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
                  (backup-file nil))
             (unless (= tick (buffer-chars-modified-tick))
               (error "mindwtr: buffer changed during sync; aborting"))
@@ -524,9 +531,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                     (mindwtr-shadow-set-notes-migrated)
                   (error (message "mindwtr: notes-migrated latch write failed: %s"
                                   (error-message-string err)))))
-              (mindwtr-report-show stats conflicts skew backup-file (current-buffer) parse-warnings)
+              (mindwtr-report-show stats conflicts skew backup-file (current-buffer)
+                                   parse-warnings incoming)
               (list :ok t :conflicts conflicts :stats stats :skew skew
-                    :warnings parse-warnings :save-failed save-failed))))))))
+                    :warnings parse-warnings :incoming incoming
+                    :save-failed save-failed))))))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here
