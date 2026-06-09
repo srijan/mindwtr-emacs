@@ -48,8 +48,13 @@ JSON snapshot lets changes be detected without re-fetching.
   `make compile` (byte-compile) is the ship gate; run them before every commit.
 - `make smoke` / `make smoke-write` — **online** integration tests that require a live
   `MINDWTR_URL` (and credentials); they exit early with a connection error when no server is
-  reachable, so they're manual/staging-only, not a CI gate. Always exercise at least one
-  non-ASCII title through smoke — a symmetric encoder bug passes equality-based round-trip tests.
+  reachable, so run *directly* they're manual/staging-only, not a CI gate. Always exercise at
+  least one non-ASCII title through smoke — a symmetric encoder bug passes equality-based
+  round-trip tests.
+- `make smoke-docker` — the **CI gate** version: it provisions its own throwaway cloud server
+  in Docker, runs the smoke suite against it, cross-checks the wire with curl, and tears down.
+  Because it self-provisions (no external `MINDWTR_URL` dependency) it *is* wired into CI; see
+  `test/integration/README.md`. SKIPs cleanly without Docker/Emacs unless `MINDWTR_DOCKER_REQUIRE=1`.
 - Remove stale `*.elc` before batch ERT runs if results look off (`rm -f *.elc`).
 
 ## Documented solutions
