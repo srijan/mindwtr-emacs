@@ -155,5 +155,19 @@ prevents a coding-system prompt when CONTENT carries non-ASCII text."
       (insert content))
     (rename-file tmp path t)))
 
+(defmacro mindwtr-util--map-entries (func &rest args)
+  "Run `org-map-entries' (FUNC plus optional ARGS) with `buffer-file-name' nil.
+`org-map-entries' (nil scope) otherwise hands this buffer's file to Org's
+agenda-file check, which prompts \"Non-existent agenda file ...  [R]emove
+from list or [A]bort?\" -- a hang under `--batch', a stray prompt
+interactively -- whenever the file is not yet on disk (e.g. parsing or
+rebuilding the live buffer on a first sync, before its initial save).  Our
+scans read only buffer text, so hiding the file name leaves their results
+unchanged.  Binding nil here, around just the scan, keeps the suppression a
+single enforced obligation rather than a comment repeated at each call site."
+  (declare (indent 1) (debug t))
+  `(let ((buffer-file-name nil))
+     (org-map-entries ,func ,@args)))
+
 (provide 'mindwtr-util)
 ;;; mindwtr-util.el ends here

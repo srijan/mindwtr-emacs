@@ -17,15 +17,8 @@
 
 (defun mindwtr-reconcile--id-markers ()
   "Return a hash MW_ID -> marker at heading start for every entity heading."
-  ;; `buffer-file-name' nil for the scan: `org-map-entries' (nil scope) otherwise
-  ;; hands this buffer's file to Org's agenda-file machinery, which calls
-  ;; `org-check-agenda-file' and prompts "Non-existent agenda file ...  [R]emove
-  ;; from list or [A]bort?" -- a hang under `--batch', and a stray prompt
-  ;; interactively -- whenever the file is not yet on disk, e.g. a fresh
-  ;; `mindwtr-bootstrap' rebuilds the buffer before its first save.  The scan
-  ;; reads only buffer text, so hiding the file name leaves its result unchanged.
-  (let ((h (make-hash-table :test 'equal)) (buffer-file-name nil))
-    (org-map-entries
+  (let ((h (make-hash-table :test 'equal)))
+    (mindwtr-util--map-entries
      (lambda ()
        ;; Use the parser's own drawer scan rather than `org-entry-get': the
        ;; latter fails to associate a PROPERTIES drawer with its heading when
@@ -126,10 +119,8 @@ region and are left untouched."
   "Return a hash id -> (:body STR :extra PLIST) of preserved org-only content.
 This is collected for every MW_ID heading in the current buffer, so a full
 rebuild can carry it across."
-  ;; `buffer-file-name' nil: keep `org-map-entries' from triggering Org's
-  ;; agenda-file prompt on an unsaved file (see `mindwtr-reconcile--id-markers').
-  (let ((h (make-hash-table :test 'equal)) (buffer-file-name nil))
-    (org-map-entries
+  (let ((h (make-hash-table :test 'equal)))
+    (mindwtr-util--map-entries
      (lambda ()
        (let ((id (mindwtr-parse--prop "MW_ID"))
              (kind (mindwtr-parse--prop "MW_TYPE")))
@@ -258,13 +249,10 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
              reflow at/below it.  Nil when there is no live window, the point
              anchor resolves to no heading, or that heading was off-screen --
              in which case restore falls back to :top-id."
-  ;; `buffer-file-name' nil: keep the `org-map-entries' scan from triggering
-  ;; Org's agenda-file prompt on an unsaved file (see `mindwtr-reconcile--id-markers').
   (let ((folds (make-hash-table :test 'equal))
         (win (get-buffer-window (current-buffer)))
-        (buffer-file-name nil)
         top-id anchor-line)
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        (let ((key (or (mindwtr-parse--prop "MW_ID")
                       (mindwtr-parse--prop "MW_LIST"))))
@@ -302,14 +290,10 @@ committed, so a throw here would surface as a spurious sync failure (R4).  Only
 visual state is touched (fold overlays, `window-start'), never content, so
 `buffer-modified-p' is left exactly as the rebuild left it (R5)."
   (condition-case nil
-      ;; `buffer-file-name' nil: keep the `org-map-entries' fold scan from
-      ;; triggering Org's agenda-file prompt on an unsaved file (see
-      ;; `mindwtr-reconcile--id-markers').
       (let ((folds (plist-get view :folds))
             (top-id (plist-get view :top-id))
             (anchor-line (plist-get view :anchor-line))
-            (win (get-buffer-window (current-buffer)))
-            (buffer-file-name nil))
+            (win (get-buffer-window (current-buffer))))
         ;; 1. Re-fold, top-down, keyed by MW_ID/MW_LIST not position (R6).  The
         ;;    rebuilt buffer is fully expanded, so we only ever HIDE -- never an
         ;;    `org-overview'/`org-content' backdrop, which would collapse more
@@ -324,7 +308,7 @@ visual state is touched (fold overlays, `window-start'), never content, so
         ;;    -- the recenter step below anchors on that point.
         (when folds
           (save-excursion
-            (org-map-entries
+            (mindwtr-util--map-entries
              (lambda ()
                (let* ((key (or (mindwtr-parse--prop "MW_ID")
                                (mindwtr-parse--prop "MW_LIST")))
