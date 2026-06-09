@@ -435,15 +435,19 @@ to call: a no-op PASS if the task is already gone."
          ;; a real server PUT/GET of multibyte content proves the wire encoding
          ;; (per AGENTS.md, which requires a non-ASCII title through smoke).
          ;; assert-target's signature check validates it.
-         ;; :isFocusedToday and :reviewAt are the newly read-write reserved
-         ;; drawer fields -- carry them through a real PUT/GET so the boolean
-         ;; render (t-only) and the reviewAt ISO round-trip (minute-coarsened
-         ;; signature) are exercised on the wire, not just in offline tests.
+         ;; :reviewAt is one of the newly read-write reserved drawer fields --
+         ;; carry it through a real PUT/GET so the ISO round-trip (minute-
+         ;; coarsened signature) is exercised on the wire, not just offline.
+         ;; (:isFocusedToday is deliberately NOT exercised here: the live server
+         ;; clears focus-today when a task completes, so a lifecycle that ends
+         ;; in `done' would see it round-trip to nil at the final step.  Its
+         ;; render/parse/signature/merge round-trip is covered offline by the
+         ;; roundtrip and sync tests.)
          (desired (list :mw-kind 'task :id id :status "inbox" :title base-title
                         :description "Café — “smart quotes” • naïve — 日本語"
                         :contexts '("@computer") :tags '("#smoke")
                         :priority "high" :energyLevel "low" :dueDate "2099-12-31"
-                        :isFocusedToday t :reviewAt "2099-12-30T09:00:00Z"
+                        :reviewAt "2099-12-30T09:00:00Z"
                         :checklist (list (list :title "step one" :isCompleted :false)
                                          (list :title "step two" :isCompleted :false)))))
     (unwind-protect
