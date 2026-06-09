@@ -271,6 +271,24 @@ type was inferred from context).  When omitted it is read from the
     (when (and (not (eq kind 'task)) (mindwtr-model-notes-field kind))
       (setq e (plist-put e (mindwtr-model-notes-field kind)
                          (car (mindwtr-parse--body nil)))))
+    ;; Reserved drawer fields parsed kind-agnostically -- mirror the :areaId
+    ;; resolution below, which also runs for every kind.  MW_SEQUENTIAL/
+    ;; MW_FOCUSED are project-only and MW_REVIEW_AT is task+project, so parsing
+    ;; them inside the task-only block above would leave the project-side fields
+    ;; permanently unparsed.  Booleans: set the key to `t' only when the value
+    ;; is exactly "t"; a blank or absent value omits the key (never read an
+    ;; empty string as meaningful -- the same blank-guard discipline that fixed
+    ;; the blank-MW_TYPE bug).  Parsing a field on a kind that never carries it
+    ;; is harmless (the drawer simply lacks the key).
+    (dolist (p '(("MW_FOCUS_TODAY" . :isFocusedToday)
+                 ("MW_SEQUENTIAL" . :isSequential)
+                 ("MW_FOCUSED" . :isFocused)))
+      (let ((v (mindwtr-parse--prop (car p))))
+        (when (and v (string= (string-trim v) "t"))
+          (setq e (plist-put e (cdr p) t)))))
+    (let ((rv (mindwtr-parse--prop "MW_REVIEW_AT")))
+      (when (and rv (not (string-empty-p (string-trim rv))))
+        (setq e (plist-put e :reviewAt rv))))
     (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
       (when aid (setq e (plist-put e :areaId aid))))
     e))
