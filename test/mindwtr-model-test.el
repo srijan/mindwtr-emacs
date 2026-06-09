@@ -137,6 +137,14 @@ with fast-access keys and the done-state separator."
   (should (null (mindwtr-model-keyword->status-safe 'project "NEXT")))
   (should (null (mindwtr-model-keyword->status-safe 'task "ACTIVE"))))
 
+(ert-deftest mindwtr-model-entity-title-resolves-title-or-name ()
+  "task/project/section resolve via :title; area via :name; neither -> nil."
+  (should (string= (mindwtr-model-entity-title '(:id "t1" :title "A task")) "A task"))
+  (should (string= (mindwtr-model-entity-title '(:id "p1" :title "A project")) "A project"))
+  (should (string= (mindwtr-model-entity-title '(:id "s1" :title "A section")) "A section"))
+  (should (string= (mindwtr-model-entity-title '(:id "a1" :name "An area")) "An area"))
+  (should (null (mindwtr-model-entity-title '(:id "x1")))))
+
 (ert-deftest mindwtr-model-status-choices-are-type-scoped-with-fast-keys ()
   (let ((task (mindwtr-model-status-choices 'task))
         (proj (mindwtr-model-status-choices 'project)))
