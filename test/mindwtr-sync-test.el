@@ -434,6 +434,121 @@ remote change into the buffer."
             (should (search-forward "from server" nil t))))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-once-reports-incoming-remote-change ()
+  "Covers AE1 end-to-end.  A clean local buffer with a remote-created entity
+surfaces an incoming line in the report and the :incoming result."
+  (let* ((dir (make-temp-file "mw-inc" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (remote (concat "{\"tasks\":[{\"id\":\"t9\",\"title\":\"from server\","
+                         "\"status\":\"next\",\"areaId\":\"a1\",\"rev\":1,"
+                         "\"createdAt\":\"2026-06-01T00:00:00Z\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}],"
+                         "\"projects\":[],\"sections\":[],"
+                         "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],\"settings\":{}}"))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v2")) :body ""))
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body remote))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                   :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v1")
+            (let* ((res (mindwtr-sync-once (current-buffer) "NOW"))
+                   (inc (plist-get res :incoming)))
+              (should (= (length inc) 1))
+              (should (eq (plist-get (car inc) :change) 'created))
+              (should (eq (plist-get (car inc) :kind) 'task))
+              (should (string= (plist-get (car inc) :title) "from server"))
+              (with-current-buffer "*Mindwtr Sync Report*"
+                (goto-char (point-min))
+                (should (search-forward "Incoming from remote:" nil t))
+                (should (save-excursion
+                          (goto-char (point-min))
+                          (search-forward "↓ from server (task) — created" nil t)))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-noop-reports-no-incoming ()
+  "Covers AE4.  A HEAD-match no-op surfaces no incoming and creates no report."
+  (let* ((dir (make-temp-file "mw-noop" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v2")) :body ""))
+              (_ (error "no PUT/GET expected on a no-op"))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                   :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v2")
+            (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+              (should (plist-get res :noop))
+              (should (null (plist-get res :incoming))))
+            ;; Nothing reportable and no parse warnings: no report buffer at all.
+            (should (null (get-buffer "*Mindwtr Sync Report*")))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-own-edit-won-no-incoming ()
+  "A full cycle where the user's own edit won and the server changed nothing
+else yields no incoming lines -- the own-edit exclusion holds through the
+real cycle, not just the unit helper."
+  (let* ((dir (make-temp-file "mw-own" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true}"))
+              ;; Server echoes exactly what we PUT: our edit won, nothing else moved.
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (when (get-buffer "*Mindwtr Sync Report*")
+            (kill-buffer "*Mindwtr Sync Report*"))
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                      "** NEXT renamed by me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (org-mode))
+            (mindwtr-shadow-save
+             '(:tasks ((:id "t1" :title "old name" :status "next" :areaId "a1" :rev 1
+                        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+               :projects nil :sections nil
+               :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+            (mindwtr-shadow-set-etag "v1")
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (null (plist-get res :incoming)))
+              (should (null (plist-get res :conflicts))))))
+      (when (get-buffer "*Mindwtr Sync Report*")
+        (kill-buffer "*Mindwtr Sync Report*"))
+      (delete-directory dir t))))
+
 (ert-deftest mindwtr-sync-once-handles-non-ascii-content ()
   "A server task with non-ASCII content (bullet, curly quotes) syncs and
 shadow-saves without raw-byte corruption or a coding-system prompt."
@@ -644,6 +759,165 @@ default so validation does not abort."
       (when (get-buffer "*Mindwtr Sync Report*")
         (kill-buffer "*Mindwtr Sync Report*"))
       (delete-directory dir t))))
+
+;;; incoming remote changes ---------------------------------------------------
+
+(defun mindwtr-sync-test--incoming-find (incoming id)
+  "Return the incoming entry for ID, or nil."
+  (seq-find (lambda (e) (equal (plist-get e :id) id)) incoming))
+
+(ert-deftest mindwtr-sync-incoming-reports-remote-update-not-own-edit ()
+  "Covers AE1.  An untouched task changed on the server is `updated'; the
+device's own accepted edit (merged == wire) is not incoming."
+  (let* ((shadow '(:tasks ((:id "t1" :title "orig" :status "next")
+                           (:id "t2" :title "old" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         ;; t1 echoed unchanged; t2 carries the user's local edit.
+         (wire '(:tasks ((:id "t1" :title "orig" :status "next")
+                         (:id "t2" :title "MINE" :status "next"))
+                 :projects nil :sections nil :areas nil))
+         ;; server moved t1; accepted the user's t2 edit verbatim.
+         (merged '(:tasks ((:id "t1" :title "remote-new" :status "next")
+                           (:id "t2" :title "MINE" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (= (length incoming) 1))
+    (let ((e (mindwtr-sync-test--incoming-find incoming "t1")))
+      (should e)
+      (should (eq (plist-get e :change) 'updated))
+      (should (eq (plist-get e :kind) 'task))
+      (should (string= (plist-get e :title) "remote-new")))
+    (should-not (mindwtr-sync-test--incoming-find incoming "t2"))))
+
+(ert-deftest mindwtr-sync-incoming-reports-remote-delete-with-content-tombstone ()
+  "Covers AE2.  A server tombstone that KEEPS its content fields (so its content
+signature equals the live wire entity's) is still reported `deleted', because
+the delete test precedes the signature own-edit gate.  Title comes from shadow."
+  (let* ((shadow '(:tasks ((:id "t1" :title "doomed" :status "next" :areaId "a1"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t1" :title "doomed" :status "next" :areaId "a1"))
+                 :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t1" :title "doomed" :status "next" :areaId "a1"
+                            :deletedAt "2026-06-01T00:00:00Z" :rev 2))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (= (length incoming) 1))
+    (let ((e (car incoming)))
+      (should (eq (plist-get e :change) 'deleted))
+      (should (string= (plist-get e :title) "doomed")))))
+
+(ert-deftest mindwtr-sync-incoming-excludes-own-local-delete ()
+  "A delete this device pushed (tombstone in WIRE) is the user's own, not
+incoming, even though it is also tombstoned in MERGED."
+  (let* ((shadow '(:tasks ((:id "t1" :title "gone" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t1" :title "gone" :status "next"
+                          :deletedAt "2026-06-01T00:00:00Z" :rev 2))
+                 :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t1" :title "gone" :status "next"
+                            :deletedAt "2026-06-01T00:00:00Z" :rev 2))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (null incoming))))
+
+(ert-deftest mindwtr-sync-incoming-reports-remote-create ()
+  "An id present in MERGED, absent from SHADOW and WIRE, is a remote `created'."
+  (let* ((shadow '(:tasks ((:id "t0" :title "anchor" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t0" :title "anchor" :status "next"))
+                 :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t0" :title "anchor" :status "next")
+                           (:id "t9" :title "from phone" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (= (length incoming) 1))
+    (let ((e (car incoming)))
+      (should (string= (plist-get e :id) "t9"))
+      (should (eq (plist-get e :change) 'created))
+      (should (string= (plist-get e :title) "from phone")))))
+
+(ert-deftest mindwtr-sync-incoming-excludes-conflicts ()
+  "Covers AE3.  An id already reported as a conflict is excluded from incoming."
+  (let* ((shadow '(:tasks ((:id "t1" :title "orig" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t1" :title "MINE" :status "next"))
+                 :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t1" :title "THEIRS" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (conflicts '((:id "t1" :kind task :mine (:title "MINE")
+                       :theirs (:title "THEIRS"))))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts)))
+    (should (null incoming))))
+
+(ert-deftest mindwtr-sync-incoming-excludes-remotely-unchanged ()
+  "An entity whose MERGED signature equals its SHADOW signature is excluded."
+  (let* ((shadow '(:tasks ((:id "t1" :title "same" :status "next" :rev 1))
+                   :projects nil :sections nil :areas nil))
+         ;; wire absent for t1 (hypothetical), merged unchanged content but new rev.
+         (wire '(:tasks nil :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t1" :title "same" :status "next" :rev 5))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (null incoming))))
+
+(ert-deftest mindwtr-sync-incoming-excludes-own-create ()
+  "A locally-created entity (present in WIRE, absent from SHADOW, merged ==
+wire) is the user's own accepted create, not a remote `created'."
+  (let* ((shadow '(:tasks ((:id "t0" :title "anchor" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t0" :title "anchor" :status "next")
+                         (:id "t1" :title "i made this" :status "next"))
+                 :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t0" :title "anchor" :status "next")
+                           (:id "t1" :title "i made this" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (null incoming))))
+
+(ert-deftest mindwtr-sync-incoming-reports-empty-content-remote-create ()
+  "A remote create whose content fields are all empty is still `created' -- the
+merged-vs-shadow gate must not run against the nil shadow entity and skip it."
+  (let* ((shadow '(:tasks ((:id "t0" :title "anchor" :status "next"))
+                   :projects nil :sections nil :areas nil))
+         (wire '(:tasks ((:id "t0" :title "anchor" :status "next"))
+                 :projects nil :sections nil :areas nil))
+         ;; t9 carries only identity + server-managed fields, no content.
+         (merged '(:tasks ((:id "t0" :title "anchor" :status "next")
+                           (:id "t9" :rev 1 :createdAt "Z" :updatedAt "Z"))
+                   :projects nil :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (= (length incoming) 1))
+    (let ((e (car incoming)))
+      (should (string= (plist-get e :id) "t9"))
+      (should (eq (plist-get e :change) 'created))
+      (should (null (plist-get e :title))))))
+
+(ert-deftest mindwtr-sync-incoming-cold-start-returns-nil ()
+  "Covers KTD3.  An empty pre-sync shadow yields no incoming changes even when
+merged is populated -- the first sync is an initial population."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil))
+         (wire '(:tasks nil :projects nil :sections nil :areas nil))
+         (merged '(:tasks ((:id "t1" :title "x" :status "next"))
+                   :projects ((:id "p1" :title "P" :status "active"))
+                   :sections nil :areas nil))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (null incoming))))
+
+(ert-deftest mindwtr-sync-incoming-sets-kind-per-entity-list ()
+  "Each entity list maps to the correct singular :kind."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil
+                   :areas ((:id "a0" :name "anchor"))))
+         (wire '(:tasks nil :projects nil :sections nil
+                 :areas ((:id "a0" :name "anchor"))))
+         (merged '(:tasks ((:id "t1" :title "T" :status "next"))
+                   :projects ((:id "p1" :title "P" :status "active"))
+                   :sections ((:id "s1" :title "S" :projectId "p1"))
+                   :areas ((:id "a0" :name "anchor") (:id "a1" :name "A"))))
+         (incoming (mindwtr-sync--incoming-changes wire merged shadow nil)))
+    (should (eq (plist-get (mindwtr-sync-test--incoming-find incoming "t1") :kind) 'task))
+    (should (eq (plist-get (mindwtr-sync-test--incoming-find incoming "p1") :kind) 'project))
+    (should (eq (plist-get (mindwtr-sync-test--incoming-find incoming "s1") :kind) 'section))
+    (should (eq (plist-get (mindwtr-sync-test--incoming-find incoming "a1") :kind) 'area))))
 
 ;;; U1: echo-suppression infrastructure --------------------------------------
 

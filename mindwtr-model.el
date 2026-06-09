@@ -186,6 +186,13 @@ rather than three divergent per-kind checks across render/parse/reconcile.")
 task/section -> `:description'; project -> `:supportNotes'; area -> nil."
   (cdr (assq kind mindwtr-model--notes-fields)))
 
+(defun mindwtr-model-entity-title (entity)
+  "Return ENTITY's human-readable label, or nil when it carries neither key.
+task/project/section carry `:title'; area carries `:name'.  One place for the
+kind-agnostic title lookup so callers (the sync report, incoming-changes) do
+not each re-spell the `(or :title :name)' idiom."
+  (or (plist-get entity :title) (plist-get entity :name)))
+
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate
                 :assignedTo :taskMode :startTime :dueDate :recurrence

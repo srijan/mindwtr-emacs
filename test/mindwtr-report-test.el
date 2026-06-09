@@ -114,6 +114,153 @@ the synced buffer so the next sync will push it."
               (should-not (save-excursion (search-forward "theirs version" nil t)))))
         (kill-buffer report)))))
 
+(defun mindwtr-report-test--count-headings ()
+  "Return the number of top-level `* ' sync headings in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((n 0))
+      (while (re-search-forward "^\\* " nil t) (setq n (1+ n)))
+      n)))
+
+(ert-deftest mindwtr-report-renders-incoming-line ()
+  "Covers AE1.  An incoming change renders one per-entity line under the
+incoming-from-remote section."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 0 :deleted 0)
+              nil nil nil nil nil
+              '((:id "t1" :kind task :title "Renamed on phone" :change updated)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "Incoming from remote:" nil t))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "↓ Renamed on phone (task) — updated" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-appends-rather-than-replaces ()
+  "Covers AE5 / R5.  Two reportable syncs produce two timestamped top-level
+headings in one buffer, not a replaced single entry."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let (buf)
+    (unwind-protect
+        (progn
+          (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
+                               nil nil nil nil "sync-one")
+          (setq buf (mindwtr-report-show '(:created 0 :updated 1 :deleted 0) nil nil
+                                         nil nil nil nil "sync-two"))
+          (with-current-buffer buf
+            (should (= (mindwtr-report-test--count-headings) 2))
+            (goto-char (point-min))
+            (should (search-forward "* sync-one" nil t))
+            (should (search-forward "* sync-two" nil t))))
+      (when buf (kill-buffer buf)))))
+
+(ert-deftest mindwtr-report-restore-live-only-on-newest-entry ()
+  "Covers AE5 / R8.  After a second append carrying a conflict, the first
+entry's conflict block no longer carries `mindwtr-conflict'; the newest does."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let (buf)
+    (unwind-protect
+        (progn
+          (mindwtr-report-show
+           '(:created 0 :updated 0 :deleted 0)
+           '((:id "old1" :kind task :mine (:title "A") :theirs (:title "B")))
+           nil nil nil nil nil "sync-one")
+          (setq buf (mindwtr-report-show
+                     '(:created 0 :updated 0 :deleted 0)
+                     '((:id "new2" :kind task :mine (:title "C") :theirs (:title "D")))
+                     nil nil nil nil nil "sync-two"))
+          (with-current-buffer buf
+            ;; The older entry's conflict block has been de-tagged.
+            (goto-char (point-min))
+            (should (search-forward "old1" nil t))
+            (should (null (get-text-property (point) 'mindwtr-conflict)))
+            ;; Pressing `r' there hits the not-on-a-conflict guard.
+            (should-error (mindwtr-report-restore-conflict) :type 'user-error)
+            ;; The newest entry's conflict block is still actionable.
+            (goto-char (point-min))
+            (should (search-forward "new2" nil t))
+            (should (get-text-property (point) 'mindwtr-conflict))))
+      (when buf (kill-buffer buf)))))
+
+(ert-deftest mindwtr-report-no-heading-when-nothing-reportable ()
+  "Covers R6.  A sync with no proposed/incoming/conflict/skew/warning content
+appends no heading."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show '(:created 0 :updated 0 :deleted 0)
+                                  nil nil nil nil nil nil "quiet")))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (= (mindwtr-report-test--count-headings) 0))
+          (should (= (buffer-size) 0)))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-fresh-log-after-buffer-killed ()
+  "Covers R7.  Killing the report buffer starts a fresh log (one entry, fresh
+title header) on the next sync rather than resurrecting prior history."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((first (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
+                                    nil nil nil nil "sync-one")))
+    (kill-buffer first))
+  (let ((buf (mindwtr-report-show '(:created 0 :updated 1 :deleted 0) nil nil
+                                  nil nil nil nil "sync-two")))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (= (mindwtr-report-test--count-headings) 1))
+          (goto-char (point-min))
+          (should (search-forward "* sync-two" nil t))
+          (should-not (save-excursion (goto-char (point-min))
+                                      (search-forward "* sync-one" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-incoming-appends-quietly-conflict-pops ()
+  "An incoming-only sync does not pop a window; a sync with a conflict does."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let (popped buf)
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (b &rest _) (setq popped t) (get-buffer-window b))))
+      (unwind-protect
+          (progn
+            ;; Incoming-only: quiet.
+            (setq popped nil)
+            (setq buf (mindwtr-report-show
+                       '(:created 0 :updated 0 :deleted 0) nil nil nil nil nil
+                       '((:id "t1" :kind task :title "x" :change updated))
+                       "sync-one"))
+            (should-not popped)
+            ;; Conflict: pops.
+            (setq popped nil)
+            (mindwtr-report-show
+             '(:created 0 :updated 0 :deleted 0)
+             '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B")))
+             nil nil nil nil nil "sync-two")
+            (should popped))
+        (when buf (kill-buffer buf))))))
+
+(ert-deftest mindwtr-report-actionable-pop-points-at-newest-entry ()
+  "Covers R9.  On an actionable pop, point lands on the newest sync entry."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let (buf)
+    (unwind-protect
+        (progn
+          (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
+                               nil nil nil nil "sync-one")
+          (setq buf (mindwtr-report-show
+                     '(:created 0 :updated 0 :deleted 0)
+                     '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B")))
+                     nil nil nil nil nil "sync-two"))
+          (with-current-buffer buf
+            (should (looking-at-p "\\* sync-two"))))
+      (when buf (kill-buffer buf)))))
+
 (ert-deftest mindwtr-report-shows-parse-warnings ()
   "Type-invalid keyword warnings are surfaced in the report buffer."
   (let ((buf (mindwtr-report-show
