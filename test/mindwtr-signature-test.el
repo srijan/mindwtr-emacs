@@ -75,3 +75,29 @@ detection."
         (b '(:id "1" :title "x" :status "next"
              :checklist ((:title "a" :isCompleted :false)))))
     (should-not (string= (mindwtr-signature a) (mindwtr-signature b)))))
+
+(ert-deftest mindwtr-signature-canonical-value-folds-booleans ()
+  "Covers R4 (mechanism).  A boolean field's canonical value is `t' only for a
+genuine `t'; `:false' and nil fold to nil so they later drop as absent."
+  (should (eq (mindwtr-signature-canonical-value :isFocusedToday t) t))
+  (should (null (mindwtr-signature-canonical-value :isFocusedToday :false)))
+  (should (null (mindwtr-signature-canonical-value :isFocusedToday nil)))
+  (should (eq (mindwtr-signature-canonical-value :isSequential t) t))
+  (should (null (mindwtr-signature-canonical-value :isFocused :false))))
+
+(ert-deftest mindwtr-signature-canonical-value-coarsens-review-at ()
+  "Covers R5 (mechanism).  :reviewAt routes through minute coarsening so
+sub-minute deltas collapse to one canonical form."
+  (should (string= (mindwtr-signature-canonical-value :reviewAt "2026-06-09T14:30:45Z")
+                   (mindwtr-signature-canonical-value :reviewAt "2026-06-09T14:30:00.123Z")))
+  ;; a different minute stays distinct
+  (should-not (string= (mindwtr-signature-canonical-value :reviewAt "2026-06-09T14:30:00Z")
+                       (mindwtr-signature-canonical-value :reviewAt "2026-06-09T14:31:00Z"))))
+
+(ert-deftest mindwtr-signature-review-at-nil-not-serialized-as-null ()
+  "Covers R5.  A nil :reviewAt is dropped on the wire (not emitted as null/[]),
+because the server 422s on a null ISO field.  :reviewAt is a scalar, so it must
+not be in `mindwtr-util-json-array-fields'."
+  (should-not (memq :reviewAt mindwtr-util-json-array-fields))
+  (let ((json (mindwtr-util-json-encode '(:id "t1" :reviewAt nil :title "x"))))
+    (should-not (string-match-p "reviewAt" json))))
