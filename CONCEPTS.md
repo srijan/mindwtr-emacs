@@ -17,6 +17,14 @@ A cloud-side data partition keyed to a user/account that holds exactly one AppDa
 ### Shadow
 The client's locally persisted copy of the last-known-server AppData. It is the baseline for change detection (the buffer is compared against it, not against the server directly) and the holding place for server-only fields that the org buffer cannot represent — those are preserved verbatim in the Shadow and merged back on write rather than being dropped.
 
+### Candidate
+The AppData this client proposes to the server on a sync: the local buffer's parsed state merged with the server-only fields preserved from the Shadow, then stamped and PUT as the client's bid. It is distinct from the Shadow it is built from (the last-known-server baseline) and from the merged AppData the server returns, which the buffer is then Reconciled to. The stripped-for-transport form of the Candidate — internal-only keys removed before the PUT — is sometimes called the wire form.
+
+### Tombstone
+A deleted entity that still travels in AppData — a soft-delete marker carrying a deletion timestamp rather than an absent record — so every client learns of the deletion on its next sync instead of having to infer it from absence.
+
+A tombstone retains its content fields and adds only the deletion marker, and that marker is a server-only field outside the Allow-list — so a tombstoned entity has the same Content signature as its live form. Deletion is therefore invisible to signature comparison and must be detected from the tombstone marker directly, never inferred from a signature difference. A delete this client pushed is told apart from one pulled from the server by whether the deletion marker is present in the Candidate it sent.
+
 ## Change detection
 
 ### Content signature
