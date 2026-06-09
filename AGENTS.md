@@ -64,3 +64,6 @@ category with YAML frontmatter (`module`, `tags`, `problem_type`, `component`). 
 implementing or debugging in documented areas (e.g. reconcile view-state, untyped-heading data
 loss, org↔markdown link conversion). `docs/plans/` and `docs/superpowers/specs/` hold the
 implementation plans and design specs those solutions came from.
+
+`CONCEPTS.md` (repo root) — shared domain vocabulary (Shadow, Content signature, Reconcile,
+Migration latch, …); relevant when orienting to the sync engine or discussing domain concepts.

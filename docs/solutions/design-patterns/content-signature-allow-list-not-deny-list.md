@@ -12,6 +12,7 @@ applies_when:
   - "Implementing change detection for an entity that projects through a lossy format"
   - "The server schema gains fields the client cannot round-trip"
 tags: [change-detection, signature, allow-list, sync-storm, round-trip]
+last_updated: 2026-06-09
 ---
 
 # Content signature must be an allow-list of synced fields, not a deny-list
@@ -79,6 +80,17 @@ field to `mindwtr-model-content-fields` means the round-trip suite
 ## When to Apply
 - Adding a field to `mindwtr-model-content-fields`: first verify `mindwtr-parse.el` **and**
   `mindwtr-render.el` handle it.
+- **Allow-list-LAST.** Promote a field to the allow-list only *after* a byte-stability
+  round-trip oracle proves it survives parse→render→parse unchanged — never before. When
+  `:supportNotes` was added (PR #36, commit `9dc380f`), the order was deliberate: the
+  round-trip oracle (U2) had to be green first, because a field that does not yet round-trip
+  byte-stably will phantom-churn its signature the moment it is signed. Promoting first and
+  proving later is how the original deny-list incident drove 30/32 entities to false drift.
+- **Mind the deploy seam.** Signing a field that *existing on-disk buffers were written
+  without rendering* opens a first-post-upgrade data-loss path: the old buffer parses the
+  field as empty, change detection reads empty-vs-server as a clear, and last-write-wins
+  PUTs over server-authored data. Guard that first sync with a one-way migration latch —
+  see [[migration-latch-for-newly-signed-fields]].
 - Server schema gains fields: add to `mindwtr-model-known-fields` (drift detection) but **not** to
   `mindwtr-model-content-fields` unless explicitly mapped to org syntax.
 - Any change-detection over a lossy intermediate (text file, form, restricted schema): hash only
@@ -96,3 +108,5 @@ A future boolean `:pinned`, not mapped to org:
 - `mindwtr-sync.el:42` `--merge-content` (same allow-list); commit `4a3c677`.
 - The same false-drift session also fixed [[parser-single-most-specific-container-id]]. The
   byte-stability sibling of this idea is [[org-markdown-link-conversion-roundtrip]].
+- [[migration-latch-for-newly-signed-fields]] — the deploy-seam guard for the first sync
+  after a field is promoted onto this allow-list (the downstream half of allow-list-LAST).
