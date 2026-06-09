@@ -18,7 +18,7 @@
 (defun mindwtr-reconcile--id-markers ()
   "Return a hash MW_ID -> marker at heading start for every entity heading."
   (let ((h (make-hash-table :test 'equal)))
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        ;; Use the parser's own drawer scan rather than `org-entry-get': the
        ;; latter fails to associate a PROPERTIES drawer with its heading when
@@ -120,7 +120,7 @@ region and are left untouched."
 This is collected for every MW_ID heading in the current buffer, so a full
 rebuild can carry it across."
   (let ((h (make-hash-table :test 'equal)))
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        (let ((id (mindwtr-parse--prop "MW_ID"))
              (kind (mindwtr-parse--prop "MW_TYPE")))
@@ -252,7 +252,7 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
   (let ((folds (make-hash-table :test 'equal))
         (win (get-buffer-window (current-buffer)))
         top-id anchor-line)
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        (let ((key (or (mindwtr-parse--prop "MW_ID")
                       (mindwtr-parse--prop "MW_LIST"))))
@@ -308,7 +308,7 @@ visual state is touched (fold overlays, `window-start'), never content, so
         ;;    -- the recenter step below anchors on that point.
         (when folds
           (save-excursion
-            (org-map-entries
+            (mindwtr-util--map-entries
              (lambda ()
                (let* ((key (or (mindwtr-parse--prop "MW_ID")
                                (mindwtr-parse--prop "MW_LIST")))

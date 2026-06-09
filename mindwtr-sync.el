@@ -160,6 +160,9 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
 
 (defun mindwtr-sync-build-candidate (local shadow device-id now)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW."
+  ;; Guarantee non-null settings up front: a fresh namespace has none in its
+  ;; shadow yet, and the server's settings merge 500s on a null blob.
+  (setq shadow (mindwtr-model-ensure-settings shadow))
   (let ((cand (list :settings (plist-get shadow :settings)))
         (live (mindwtr-sync--live-container-ids shadow)))
     (dolist (key mindwtr-sync--entity-keys)
@@ -352,7 +355,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
           (let* ((put-resp (mindwtr-api-put-data wire))
                  (skew (plist-get put-resp :clockSkewWarning))
                  (got (mindwtr-api-get-data))
-                 (merged (plist-get got :appdata))
+                 ;; Normalize settings on the way in too: should the server ever
+                 ;; return a null/absent blob, keep the shadow consistent now
+                 ;; rather than relying on build-candidate to re-synthesize next
+                 ;; cycle.
+                 (merged (mindwtr-model-ensure-settings (plist-get got :appdata)))
                  (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
                  (backup-file nil))
             (unless (= tick (buffer-chars-modified-tick))

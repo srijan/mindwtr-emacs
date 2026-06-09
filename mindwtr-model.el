@@ -196,6 +196,26 @@ Extend it deliberately when a new server field is intentionally adopted.
 Settings is excluded on purpose -- it is a large, deeply-nested blob
 passed through verbatim and never rendered to org.")
 
+(defun mindwtr-model-default-settings ()
+  "Return a fresh, minimal non-null `settings' object for a new namespace.
+A freshly provisioned server namespace has no `settings', so the client must
+create initial ones: the Cloud server's settings merge dereferences the
+incoming `settings.syncPreferences' without a null guard and 500s when the
+client sends an absent/null settings blob.  A single non-empty key keeps the
+object from collapsing back to JSON null through the encoder (empty objects
+do); `syncPreferences' is the field the server's merge reads first."
+  (list :syncPreferences (list :initialized t)))
+
+(defun mindwtr-model-ensure-settings (appdata)
+  "Return APPDATA with a guaranteed non-null `settings'.
+Substitutes `mindwtr-model-default-settings' when APPDATA carries no settings
+(a freshly provisioned namespace), so the server's settings merge is never
+handed a null blob -- it dereferences `settings.syncPreferences' without a
+null guard and 500s otherwise.  Present settings are returned unchanged; the
+substitution copies APPDATA rather than mutating the caller's structure."
+  (if (plist-get appdata :settings) appdata
+    (plist-put (copy-sequence appdata) :settings (mindwtr-model-default-settings))))
+
 (defun mindwtr-model-shadow-only-field-p (field)
   "Non-nil if FIELD (a keyword) is shadow-only."
   (and (memq field mindwtr-model-shadow-only-fields) t))

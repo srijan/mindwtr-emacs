@@ -259,7 +259,10 @@ refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
   (when (or (not (file-exists-p mindwtr-file))
             (yes-or-no-p "Overwrite local mindwtr file from server? "))
     (let* ((got (mindwtr-api-get-data))
-           (appdata (plist-get got :appdata)))
+           ;; Create initial settings when a freshly provisioned namespace has
+           ;; none, so the first sync's settings merge is never handed a null
+           ;; blob (the Cloud server 500s on that).
+           (appdata (mindwtr-model-ensure-settings (plist-get got :appdata))))
       (with-current-buffer (find-file-noselect mindwtr-file)
         (erase-buffer)
         (mindwtr-mode)

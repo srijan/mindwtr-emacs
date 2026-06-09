@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every pull request, and on pushes to main (which includes PR merges).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: the jobs only read the repo and pull a public image.
+permissions:
+  contents: read
+
+# One in-flight run per ref; a new push cancels the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: compile + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10   # safety net: a batch-mode hang (e.g. an interactive
+                          # prompt with no stdin) fails fast instead of stalling
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships Emacs 29 (>= the package's 28.1 floor). The suite
+      # needs no external ELPA packages: plz is soft-required and falls back to
+      # the built-in url.el; iso8601/time-date are built in.
+      - name: Install Emacs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends emacs-nox
+          emacs --version | head -1
+
+      - name: Byte-compile (error on warnings)
+        run: make compile
+
+      - name: Run ERT unit tests
+        run: make test
+
+  integration:
+    name: dockerized smoke + curl cross-check
+    needs: unit            # don't spin up Docker if the fast checks are red
+    runs-on: ubuntu-latest # GitHub-hosted runners have Docker preinstalled
+    timeout-minutes: 20    # safety net for a hung server/pull or batch prompt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Emacs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends emacs-nox
+          emacs --version | head -1
+
+      # Provisions ghcr.io/dongdongbh/mindwtr-cloud, runs the Emacs smoke suite
+      # against it, and cross-validates /v1/data with curl. See
+      # test/integration/README.md. The server version is pinned in run.sh
+      # (DEFAULT_CLOUD_TAG); set MINDWTR_CLOUD_TAG below only to override.
+      - name: Integration test against a real Mindwtr cloud server
+        env:
+          # On CI, Docker + Emacs are present, so a SKIP would hide a real
+          # problem -- require the prerequisites and fail loudly if missing.
+          MINDWTR_DOCKER_REQUIRE: "1"
+          # The pinned server version lives in one place -- DEFAULT_CLOUD_TAG in
+          # test/integration/run.sh -- so CI inherits it rather than duplicating
+          # it here. Set MINDWTR_CLOUD_TAG here only to override for a one-off run.
+        run: make smoke-docker

@@ -164,7 +164,7 @@ the parse was clean."
   "Scan the current buffer for area headings, returning a name->id hash.
 Warns on a duplicate name (keeps the first id)."
   (let ((h (make-hash-table :test 'equal)))
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "area")
          (let ((name (org-get-heading t t t t)) (id (mindwtr-parse--prop "MW_ID")))
@@ -309,7 +309,7 @@ container's :MW_LIST: plus project/section ancestry:
   (mindwtr-parse-ensure-keywords)
   (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
         tasks projects sections areas)
-    (org-map-entries
+    (mindwtr-util--map-entries
      (lambda ()
        ;; A heading's kind comes from its :MW_TYPE: property; a `container'
        ;; is structural, not an entity.  When :MW_TYPE: is absent (org-capture,

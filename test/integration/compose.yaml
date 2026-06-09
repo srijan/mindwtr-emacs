@@ -1,0 +1,37 @@
+# Self-contained Compose for the integration test (test/integration/run.sh).
+#
+# Mirrors the upstream docker/compose.yaml service (image, port 8787, auth-token
+# + CORS env, /health healthcheck) but with test-friendly defaults so it runs
+# standalone -- no upstream checkout required -- and a faster healthcheck cadence
+# than the production 90s interval.  State lives in a named volume that the
+# harness removes with `down -v`, so every run starts from an empty namespace
+# and no host-permission juggling on a bind mount is needed.
+services:
+  mindwtr-cloud:
+    # The version lives in run.sh (DEFAULT_CLOUD_TAG), which exports
+    # MINDWTR_CLOUD_TAG before invoking compose -- so it is required here (like
+    # the auth token below) rather than defaulted, keeping the pinned version in
+    # one place.  Run via test/integration/run.sh; override the whole ref with
+    # MINDWTR_CLOUD_IMAGE.
+    image: ${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG:?set MINDWTR_CLOUD_TAG (run via test/integration/run.sh)}}
+    ports:
+      - "${MINDWTR_DOCKER_PORT:-8787}:8787"
+    environment:
+      # Bearer token the client must present (Authorization: Bearer <token>).
+      # The harness generates one and exports it as MINDWTR_TOKEN too, so the
+      # Emacs client and the curl cross-check use the identical secret.
+      MINDWTR_CLOUD_AUTH_TOKENS: ${MINDWTR_CLOUD_AUTH_TOKENS:?set MINDWTR_CLOUD_AUTH_TOKENS (run via test/integration/run.sh)}
+      # CORS only constrains browser clients; server-to-server callers (Emacs,
+      # curl) send no Origin header, so the value is irrelevant to this test.
+      MINDWTR_CLOUD_CORS_ORIGIN: ${MINDWTR_CLOUD_CORS_ORIGIN:-http://localhost:5173}
+    volumes:
+      - mindwtr_cloud_data:/app/cloud_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8787/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  mindwtr_cloud_data:
