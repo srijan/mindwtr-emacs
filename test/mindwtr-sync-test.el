@@ -219,6 +219,81 @@ field on the candidate (an empty local note is a genuine clear)."
     (should-not (plist-get proj :supportNotes))
     (should (= (plist-get proj :rev) 4))))
 
+(ert-deftest mindwtr-sync-protect-fields-preserves-task-boolean-pre-migration ()
+  "Covers R6 (post-promotion).  Pre-migration, an empty local :isFocusedToday
+against a shadow that has it `t' keeps the shadow value -- the false-empty seam
+the fields latch guards.  Without protection the value is clobbered."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :isFocusedToday t :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         ;; old buffer never rendered the boolean, so parse omits it
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil)))
+    ;; WITHOUT protection (5th/6th args nil) -> clobbered to absent
+    (let ((unprot (car (plist-get (mindwtr-sync-build-candidate
+                                   local shadow "dev" "NOW" nil nil) :tasks))))
+      (should-not (plist-get unprot :isFocusedToday)))
+    ;; WITH fields protection (6th arg t) -> shadow t preserved
+    (let ((prot (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev" "NOW" nil t) :tasks))))
+      (should (eq (plist-get prot :isFocusedToday) t)))))
+
+(ert-deftest mindwtr-sync-protect-fields-preserves-project-booleans-pre-migration ()
+  "Covers R6 (post-promotion).  A project's :isSequential/:isFocused are
+protected the same way as a task's boolean pre-migration."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "P" :status "active" :rev 3
+                               :isSequential t :isFocused t
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "P"
+                                        :status "active"))
+                      :sections nil :areas nil))
+         (prot (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil t) :projects))))
+    (should (eq (plist-get prot :isSequential) t))
+    (should (eq (plist-get prot :isFocused) t))))
+
+(ert-deftest mindwtr-sync-protect-fields-still-adopts-real-boolean-edit ()
+  "Covers R6.  Protection only suppresses an EMPTY local boolean; a genuine
+local `t' (shadow had it absent) is adopted even pre-migration."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"
+                                     :isFocusedToday t))
+                      :projects nil :sections nil :areas nil))
+         (cand (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil t) :tasks))))
+    (should (eq (plist-get cand :isFocusedToday) t))))
+
+(ert-deftest mindwtr-sync-review-at-not-protected-clears-pre-migration ()
+  "Covers R6.  :reviewAt is excluded from the protected set -- even with both
+latches' protection on, an empty local :reviewAt against a non-empty shadow
+clears (a genuine deletion, because :reviewAt always rendered)."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :reviewAt "2026-06-09T14:30:00Z"
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil))
+         (prot (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" t t) :tasks))))
+    (should-not (plist-get prot :reviewAt))))
+
+(ert-deftest mindwtr-sync-boolean-clears-post-migration ()
+  "Covers R6.  Post-migration (protection off), an empty local boolean against a
+non-empty shadow clears normally."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :isFocusedToday t :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil))
+         (post (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil nil) :tasks))))
+    (should-not (plist-get post :isFocusedToday))))
+
 (ert-deftest mindwtr-sync-project-note-unchanged-echoes-rev ()
   "Covers R4.  An untouched project note classifies unchanged: rev is echoed,
 no spurious change."
@@ -371,6 +446,25 @@ would actually alter a field."
       (setq i (+ i 2)))
     ;; an unmapped server field is preserved verbatim, never dropped
     (should (string= (plist-get merged :weirdServerField) "keep"))))
+
+(ert-deftest mindwtr-sync-merge-content-protected-set-is-a-list ()
+  "Covers R6 (mechanism).  merge-content's protected-set is a LIST: any listed
+field whose local value is empty but shadow's is not keeps the shadow value,
+while an unlisted field clears.  This is the generalization of the former
+single protected-field to the shared field-set guard."
+  (let ((se '(:id "p1" :status "active" :supportNotes "server note"))
+        (le '(:id "p1" :mw-kind project :status "active" :supportNotes "")))
+    ;; listed -> protected (kept)
+    (should (string= (plist-get (mindwtr-sync--merge-content le se '(:supportNotes))
+                                :supportNotes)
+                     "server note"))
+    ;; not listed -> cleared
+    (should-not (plist-get (mindwtr-sync--merge-content le se nil) :supportNotes))
+    ;; a real (non-empty) edit is adopted regardless of protection
+    (let ((le2 '(:id "p1" :mw-kind project :status "active" :supportNotes "edit")))
+      (should (string= (plist-get (mindwtr-sync--merge-content le2 se '(:supportNotes))
+                                  :supportNotes)
+                       "edit")))))
 
 (ert-deftest mindwtr-sync-once-noop-when-clean-and-etag-matches ()
   "No local edits + a remote ETag matching the shadow => HEAD only, no PUT/GET."
@@ -1268,6 +1362,81 @@ notes migration, so subsequent syncs stop protecting empty notes."
             (should (plist-get res :ok))
             (should-not (plist-get res :save-failed))
             (should (mindwtr-shadow-notes-migrated-p))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-save-failure-does-not-latch-fields-migration ()
+  "Covers R6.  The fields-migration latch must NOT be set when the post-reconcile
+save fails: a later reload from the stale (boolean-less) file would parse empty
+booleans with protection OFF and clobber server-authored values via LWW.  Gated
+on a confirmed save, exactly like the notes latch."
+  (let* ((dir (make-temp-file "mw-fl" t))
+         (f (make-temp-file "mw-fl-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-fields-migrated-p))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (plist-get res :save-failed))
+              (should-not (mindwtr-shadow-fields-migrated-p)))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-latches-fields-migration-after-successful-save ()
+  "Covers R6.  A full cycle that durably saves the boolean-capable render latches
+the fields migration, so subsequent syncs stop protecting empty booleans."
+  (let* ((dir (make-temp-file "mw-fm" t))
+         (f (make-temp-file "mw-fm-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-fields-migrated-p))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+            (should (plist-get res :ok))
+            (should-not (plist-get res :save-failed))
+            (should (mindwtr-shadow-fields-migrated-p))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))

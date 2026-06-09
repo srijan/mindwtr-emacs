@@ -43,6 +43,42 @@ task or a project to the container matching its new status."
           (save-excursion (org-back-to-heading t) (org-todo kw))
           (mindwtr-commands--relocate kind))))))
 
+(defun mindwtr-set-area--names ()
+  "Return the area names defined in the current buffer (for completion)."
+  (let (names)
+    (maphash (lambda (k _v) (push k names))
+             (mindwtr-parse--build-area-names))
+    (nreverse names)))
+
+;;;###autoload
+(defun mindwtr-set-area ()
+  "Set the area of the task or project at point, choosing an existing area.
+Prompts with `completing-read' over the buffer's area names (require-match) and
+writes the chosen name to the MW_AREA property; `:areaId' already round-trips,
+so there is no sync-seam work.  Creating a new area is out of scope.
+
+Refuses on a task that already sits under a project or section: `MW_AREA' is
+stamped to `:areaId' unconditionally for every kind, while a task's `:projectId'
+comes from outline nesting, so setting an area there would parse the task with
+BOTH a project and an area -- the dual-container over-stamp that silently
+re-parents on the next PUT.  No-ops off a task/project heading."
+  (interactive)
+  (let ((kind (mindwtr-commands--kind-at-point)))
+    (cond
+     ((not (memq kind '(task project)))
+      (message "mindwtr-set-area: point is not on a task or project"))
+     ((and (eq kind 'task) (mindwtr-commands--in-project-p))
+      (message "mindwtr-set-area: a task under a project takes its area from the project; not setting"))
+     (t
+      (let ((names (mindwtr-set-area--names)))
+        (if (null names)
+            (message "mindwtr-set-area: no areas defined in this buffer")
+          (let ((name (completing-read "Area: " names nil t)))
+            (when (and name (not (string-empty-p name)))
+              (save-excursion
+                (org-back-to-heading t)
+                (org-set-property "MW_AREA" name))))))))))
+
 (defun mindwtr-commands--status-at-point (kind)
   "Status string for the KIND entity at point, derived from its TODO keyword."
   (let ((kw (save-excursion (org-back-to-heading t) (org-get-todo-state))))

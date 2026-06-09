@@ -76,7 +76,7 @@ change detection agree on what \"the same content\" means."
       (setq i (+ i 2)))
     out))
 
-(defun mindwtr-sync--merge-content (le se &optional protected-field)
+(defun mindwtr-sync--merge-content (le se &optional protected-set)
   "Overlay LE's genuinely-changed content onto SE (the full shadow entity).
 LE is the lossy org projection (no checklist item ids, minute-precision
 timestamps); SE carries full fidelity plus server-managed and unmapped
@@ -87,16 +87,18 @@ adopts LE's value (clearing the field when LE emptied it).  LE's identity
 and internal keys are carried through (internal keys are stripped before
 the wire).
 
-PROTECTED-FIELD, when non-nil, is a single content field whose clearing is
+PROTECTED-SET, when non-nil, is a list of content fields whose clearing is
 suppressed when LE's value is empty but SE's is not.  Used for the first
-post-upgrade sync: a buffer written by a renderer that did not emit
-project/section note bodies parses to an empty notes value, which must not be
-read as the user clearing a server-authored note.  The caller passes the
-kind's notes field (project `:supportNotes', section `:description') only while
-the migration latch is unset (see `mindwtr-shadow-notes-migrated-p'); once set,
-this is nil and an empty note clears normally.  Note `:mw-kind' is stripped from
-LE by `mindwtr-parse-buffer', so the kind cannot be recovered here -- the caller
-resolves the field."
+post-upgrade sync: a buffer written by an older renderer that did not emit
+project/section note bodies (or the reserved boolean drawer fields) parses to
+an empty value, which must not be read as the user clearing server-authored
+data.  The caller passes the kind's protectable fields -- its notes field
+(project `:supportNotes', section `:description') and its newly-signed booleans
+-- only while the corresponding migration latch is unset (see
+`mindwtr-shadow-notes-migrated-p' / `mindwtr-shadow-fields-migrated-p'); once
+set, the field drops from the set and an empty value clears normally.  Note
+`:mw-kind' is stripped from LE by `mindwtr-parse-buffer', so the kind cannot be
+recovered here -- the caller resolves the set."
   (let ((out (copy-sequence (or se '()))))
     (dolist (k '(:id :mw-kind :mw-extra-props))
       (when (plist-member le k)
@@ -109,10 +111,10 @@ resolves the field."
               ;; `:status' is mandatory for task/project; an empty local value
               ;; means the parser could not determine it (a type-invalid or
               ;; missing keyword), never an intentional clear -- so keep SV.
-              ;; PROTECTED-FIELD: a non-task notes field the buffer could not
-              ;; yet render must likewise keep SV (pre-migration), never clear.
+              ;; PROTECTED-SET: a field the buffer could not yet render must
+              ;; likewise keep SV (pre-migration), never clear.
               (unless (or (eq k :status)
-                          (and (eq k protected-field)
+                          (and (memq k protected-set)
                                (not (mindwtr-sync--empty-p sv))))
                 (setq out (mindwtr-sync--plist-remove out k)))
             (setq out (plist-put out k lv))))))
@@ -173,12 +175,19 @@ kind's default (task -> inbox, project -> active) so validation does not abort."
     (plist-put (copy-sequence entity)
                :status (if (eq kind 'task) "inbox" "active"))))
 
-(defun mindwtr-sync-build-candidate (local shadow device-id now &optional protect-empty-notes)
+(defun mindwtr-sync-build-candidate (local shadow device-id now
+                                           &optional protect-empty-notes
+                                           protect-empty-fields)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW.
-PROTECT-EMPTY-NOTES is forwarded to `mindwtr-sync--merge-content' so the
-first post-upgrade sync does not clear a server-authored project/section
-note the old renderer never wrote into the buffer (see
-`mindwtr-shadow-notes-migrated-p')."
+PROTECT-EMPTY-NOTES and PROTECT-EMPTY-FIELDS gate the first-post-upgrade
+empty-protection passed to `mindwtr-sync--merge-content'.  PROTECT-EMPTY-NOTES
+guards a kind's notes field (project `:supportNotes', section `:description')
+so an old renderer's note-less buffer does not clear a server-authored note
+(see `mindwtr-shadow-notes-migrated-p').  PROTECT-EMPTY-FIELDS guards a kind's
+newly-signed booleans (task `:isFocusedToday'; project `:isSequential'
+/`:isFocused') against the same false-empty seam (see
+`mindwtr-shadow-fields-migrated-p').  The two latches are independent; the
+union of their per-kind fields is passed to `merge-content'."
   ;; Guarantee non-null settings up front: a fresh namespace has none in its
   ;; shadow yet, and the server's settings merge 500s on a null blob.
   (setq shadow (mindwtr-model-ensure-settings shadow))
@@ -187,12 +196,21 @@ note the old renderer never wrote into the buffer (see
     (dolist (key mindwtr-sync--entity-keys)
       (let* ((shadow-idx (mindwtr-shadow-index shadow key))
              (kind (mindwtr-sync--key->kind key))
-             ;; Pre-migration, protect this kind's notes field from being read
-             ;; as a clear (project :supportNotes, section :description); task
-             ;; notes always rendered, so they are never protected.
-             (protected-field (and protect-empty-notes
-                                   (not (eq kind 'task))
-                                   (mindwtr-model-notes-field kind)))
+             ;; Pre-migration, protect this kind's empty values from being read
+             ;; as clears: its notes field (project :supportNotes, section
+             ;; :description; task notes always rendered, so never protected)
+             ;; and its newly-signed booleans.  Each latch is independent, so a
+             ;; client mid-migration on one but not the other still protects the
+             ;; right subset.  The two contribute disjoint fields, so a plain
+             ;; append is the union.
+             (protected-set
+              (append
+               (and protect-empty-notes
+                    (not (eq kind 'task))
+                    (let ((nf (mindwtr-model-notes-field kind)))
+                      (and nf (list nf))))
+               (and protect-empty-fields
+                    (mindwtr-model-protected-boolean-fields kind))))
              (seen (make-hash-table :test 'equal))
              out)
         (dolist (le (plist-get local key))
@@ -208,13 +226,13 @@ note the old renderer never wrote into the buffer (see
                     ('unchanged (copy-sequence se))
                     ('create
                      (let ((m (mindwtr-sync--ensure-status
-                               (mindwtr-sync--merge-content le se protected-field) kind)))
+                               (mindwtr-sync--merge-content le se protected-set) kind)))
                        (setq m (plist-put m :rev 1))
                        (setq m (plist-put m :createdAt now))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id)))
                     ('update
-                     (let ((m (mindwtr-sync--merge-content le se protected-field)))
+                     (let ((m (mindwtr-sync--merge-content le se protected-set)))
                        (setq m (plist-put m :rev (1+ (or (plist-get se :rev) 0))))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id))))))
@@ -468,8 +486,10 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             (list :ok t :noop t :conflicts nil :stats stats :skew nil
                   :warnings parse-warnings :incoming nil))
         (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
+               (protect-empty-fields (not (mindwtr-shadow-fields-migrated-p)))
                (candidate (mindwtr-sync-build-candidate local shadow device now
-                                                        protect-empty-notes))
+                                                        protect-empty-notes
+                                                        protect-empty-fields))
                (wire (mindwtr-sync--strip-internal-keys candidate)))
           (mindwtr-model-validate-appdata wire)
           ;; The PUT response carries {ok, stats, clockSkewWarning}; surface
@@ -530,6 +550,13 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                 (condition-case err
                     (mindwtr-shadow-set-notes-migrated)
                   (error (message "mindwtr: notes-migrated latch write failed: %s"
+                                  (error-message-string err))))
+                ;; Same reasoning, parallel latch for the reserved boolean
+                ;; fields: only after the boolean-capable render is durably on
+                ;; disk is a future empty boolean a genuine clear.
+                (condition-case err
+                    (mindwtr-shadow-set-fields-migrated)
+                  (error (message "mindwtr: fields-migrated latch write failed: %s"
                                   (error-message-string err)))))
               (mindwtr-report-show stats conflicts skew backup-file (current-buffer)
                                    parse-warnings incoming)

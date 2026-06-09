@@ -59,6 +59,23 @@ post-upgrade cycle (see `mindwtr-sync-build-candidate')."
   (mindwtr-shadow--ensure-dir)
   (mindwtr-util-atomic-write (mindwtr-shadow--path "notes-migrated") "1"))
 
+(defun mindwtr-shadow-fields-migrated-p ()
+  "Non-nil once this client has rendered the reserved boolean drawer fields.
+Before the first reconcile by a client that renders MW_FOCUS_TODAY/
+MW_SEQUENTIAL/MW_FOCUSED, the on-disk buffer was written by an older renderer
+whose render-key mismatch never emitted those properties, so parse yields an
+empty boolean value that does NOT mean the user cleared a server-authored
+value.  Sync uses this marker to avoid clobbering those values on the first
+post-upgrade cycle (see `mindwtr-sync-build-candidate').  Parallel to
+`mindwtr-shadow-notes-migrated-p'; `:reviewAt' is deliberately NOT covered
+\(it always rendered)."
+  (and (mindwtr-util-read-file (mindwtr-shadow--path "fields-migrated")) t))
+
+(defun mindwtr-shadow-set-fields-migrated ()
+  "Record that this client has rendered the reserved booleans (one-way latch)."
+  (mindwtr-shadow--ensure-dir)
+  (mindwtr-util-atomic-write (mindwtr-shadow--path "fields-migrated") "1"))
+
 (defun mindwtr-shadow-device-id ()
   "Return the stable device id, generating and persisting one if needed."
   (let ((path (mindwtr-shadow--path "device-id")))

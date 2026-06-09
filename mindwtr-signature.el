@@ -10,10 +10,18 @@
 (defconst mindwtr-signature--set-fields '(:tags :contexts)
   "Fields whose list value is a set (order-insensitive).")
 
-(defconst mindwtr-signature--datetime-fields '(:startTime :dueDate :completedAt)
+(defconst mindwtr-signature--datetime-fields '(:startTime :dueDate :completedAt :reviewAt)
   "Content fields holding ISO datetimes.
 Coarsened to minute precision for signing, because org timestamps cannot
 represent sub-minute values and so the seconds never round-trip.")
+
+(defconst mindwtr-signature--boolean-fields '(:isFocusedToday :isSequential :isFocused)
+  "Content fields holding a server boolean.
+Canonicalized so a genuine `t' signs as `t' and everything else (`:false',
+nil) folds to nil -- which `--canonical-plist' then drops -- so a server
+`:false', a parsed nil, and an omitted key all sign identically (no phantom
+drift).  Server false is the symbol `:false', non-nil in elisp, so without
+this fold it would sign as a distinct present value.")
 
 (defun mindwtr-signature--norm-checklist (items)
   "Normalize checklist ITEMS to a stable signable form.
@@ -39,6 +47,8 @@ definition of \"the same content\"."
     (sort (copy-sequence v) #'string<))
    ((memq k mindwtr-signature--datetime-fields)
     (mindwtr-util-iso-coarsen-minute v))
+   ((memq k mindwtr-signature--boolean-fields)
+    (if (eq v t) t nil))
    ((eq k :checklist)
     (mindwtr-signature--norm-checklist v))
    (t v)))
@@ -59,7 +69,15 @@ after a render/parse cycle and trigger a phantom `rev' bump."
     (dolist (k mindwtr-model-content-fields)
       (let ((v (plist-get entity k)))
         (unless (or (null v) (and (stringp v) (string-empty-p v)))
-          (push (cons k (mindwtr-signature-canonical-value k v)) pairs))))
+          ;; Re-test emptiness on the CANONICAL value, not the raw one: a
+          ;; boolean `:false' is a non-nil symbol that passes the raw check
+          ;; above but folds to nil in `canonical-value', and it must drop out
+          ;; exactly like an absent key so `:false'/nil/absent sign identically
+          ;; (KTD-4).  Datetime/set fields with a non-empty raw value never
+          ;; canonicalize to nil, so this only fires for the boolean fold.
+          (let ((cv (mindwtr-signature-canonical-value k v)))
+            (unless (or (null cv) (and (stringp cv) (string-empty-p cv)))
+              (push (cons k cv) pairs))))))
     (setq pairs (sort pairs (lambda (a b)
                               (string< (symbol-name (car a))
                                        (symbol-name (car b))))))

@@ -151,15 +151,21 @@ each keyword is paired with its fast-access char from the shared sequence."
   '(:name :title :status :priority :contexts :tags :description :supportNotes
     :checklist :startTime :dueDate :completedAt
     :areaId :projectId :sectionId
-    :energyLevel :timeEstimate :assignedTo :location :taskMode)
+    :energyLevel :timeEstimate :assignedTo :location :taskMode
+    :isFocusedToday :isSequential :isFocused :reviewAt)
   "Editable fields that round-trip through org and define the content signature.
 This is an allow-list: any server field not named here (e.g.
-`:isFocusedToday', `:isSequential', `:tagIds', `:areaTitle', `:reviewAt')
+`:tagIds', `:areaTitle', `:sequentialScope', `:recurrence', `:attachments')
 is excluded from change detection by construction, so it can neither drift a
 signature nor be lost -- it is preserved verbatim in the shadow and merged
 back on write.  `:supportNotes' (project notes) and `:description'
 \(task/section notes) both round-trip as inline body prose and so are
-allow-listed.  This list is kind-agnostic -- it is iterated for every
+allow-listed.  The reserved drawer fields `:isFocusedToday' (task),
+`:isSequential'/`:isFocused' (project), and `:reviewAt' (task+project) are
+allow-listed too: they render to the MW_FOCUS_TODAY/MW_SEQUENTIAL/MW_FOCUSED/
+MW_REVIEW_AT drawer properties and round-trip (the booleans normalize so
+`:false'/nil/absent sign identically; `:reviewAt' coarsens to minute
+precision).  This list is kind-agnostic -- it is iterated for every
 entity regardless of kind -- so a field only affects an entity's signature
 when that entity actually carries the key (e.g. `:supportNotes' is inert on
 areas, which never carry it).  Excludes
@@ -185,6 +191,20 @@ rather than three divergent per-kind checks across render/parse/reconcile.")
   "Return the inline body-prose (notes) field keyword for entity KIND, or nil.
 task/section -> `:description'; project -> `:supportNotes'; area -> nil."
   (cdr (assq kind mindwtr-model--notes-fields)))
+
+(defconst mindwtr-model--protected-boolean-fields
+  '((task . (:isFocusedToday)) (project . (:isSequential :isFocused)))
+  "Alist of entity-kind -> the newly-signed boolean fields whose empty value
+must be protected from clobbering server data on the first post-upgrade sync.
+These are exactly the booleans that never rendered before the render-key fix,
+so an old on-disk buffer parses them as empty (a false-empty, not a clear).
+`:reviewAt' is absent on purpose: it always rendered, so an empty local value
+is a genuine clear, not a false-empty (see the migration-latch reasoning).")
+
+(defun mindwtr-model-protected-boolean-fields (kind)
+  "Return the list of migration-protected boolean fields for entity KIND.
+Empty for kinds that carry none (section, area)."
+  (cdr (assq kind mindwtr-model--protected-boolean-fields)))
 
 (defun mindwtr-model-entity-title (entity)
   "Return ENTITY's human-readable label, or nil when it carries neither key.

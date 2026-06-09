@@ -621,3 +621,88 @@ More prose.
       (should-not (plist-member sec :checklist))
       (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
                               (plist-get sec :description))))))
+
+(ert-deftest mindwtr-parse-focus-today-true ()
+  ":MW_FOCUS_TODAY: t parses to :isFocusedToday t."
+  (mindwtr-parse-test--with
+      "* NEXT Focused task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_FOCUS_TODAY: t
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (eq (plist-get e :isFocusedToday) t)))))
+
+(ert-deftest mindwtr-parse-focus-today-blank-omits ()
+  "A blank :MW_FOCUS_TODAY: value yields no :isFocusedToday key."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_FOCUS_TODAY:
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should-not (plist-member e :isFocusedToday)))))
+
+(ert-deftest mindwtr-parse-focus-today-absent-omits ()
+  "An absent MW_FOCUS_TODAY yields no :isFocusedToday key."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should-not (plist-member e :isFocusedToday)))))
+
+(ert-deftest mindwtr-parse-review-at-raw-iso ()
+  ":MW_REVIEW_AT: parses to :reviewAt as the raw ISO string."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_REVIEW_AT: 2026-06-09T14:30:00.000Z
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :reviewAt) "2026-06-09T14:30:00.000Z")))))
+
+(ert-deftest mindwtr-parse-project-booleans-and-review ()
+  "A project heading parses MW_SEQUENTIAL, MW_FOCUSED, and MW_REVIEW_AT.
+Guards against the task-only-block regression -- project-side fields must parse."
+  (mindwtr-parse-test--with
+      "* ACTIVE Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:MW_SEQUENTIAL: t
+:MW_FOCUSED: t
+:MW_REVIEW_AT: 2026-06-09T14:30:00.000Z
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (eq (plist-get e :mw-kind) 'project))
+      (should (eq (plist-get e :isSequential) t))
+      (should (eq (plist-get e :isFocused) t))
+      (should (string= (plist-get e :reviewAt) "2026-06-09T14:30:00.000Z")))))
+
+(ert-deftest mindwtr-parse-no-reserved-fields ()
+  "A task carrying none of the four fields parses without any of their keys."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should-not (plist-member e :isFocusedToday))
+      (should-not (plist-member e :isSequential))
+      (should-not (plist-member e :isFocused))
+      (should-not (plist-member e :reviewAt)))))

@@ -367,5 +367,89 @@ point even when the markdown normalizes on the first pass."
     (let ((r (mindwtr-roundtrip--project-note-cycle note)))
       (should (string= (plist-get r :org1) (plist-get r :org2))))))
 
+;; U4 -- reserved drawer fields: representational byte-stability BEFORE the
+;; fields join the allow-list (these assert render fixed-points, not signature
+;; stability; the signature assertions live in U6 after promotion).
+
+(ert-deftest mindwtr-roundtrip-focused-task-render-stable ()
+  "Covers R3.  render == render(parse(render(x))) for a task with
+:isFocusedToday t and :reviewAt."
+  (let* ((task '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :isFocusedToday t :reviewAt "2026-06-09T14:30:00.000Z"
+                 :mw-extra-props nil))
+         (t1 (mindwtr-render-heading task 2 nil)))
+    (should (string-match-p "^:MW_FOCUS_TODAY: t$" t1))
+    (should (string-match-p ":MW_REVIEW_AT: 2026-06-09T14:30:00.000Z" t1))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert (mindwtr-roundtrip--wrap t1)) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :tasks)))
+             (t2 (mindwtr-render-heading
+                  (plist-put (copy-sequence parsed) :mw-kind 'task) 2 nil)))
+        (should (string= t1 t2))))))
+
+(ert-deftest mindwtr-roundtrip-sequential-focused-project-render-stable ()
+  "Covers R3.  render == render(parse(render(x))) for a project with
+:isSequential t, :isFocused t, and :reviewAt."
+  (let* ((proj '(:id "p1" :mw-kind project :title "x" :status "active"
+                 :isSequential t :isFocused t :reviewAt "2026-06-09T14:30:00.000Z"
+                 :mw-extra-props nil))
+         (t1 (mindwtr-render-heading proj 2 nil))
+         (text (mindwtr-roundtrip--wrap-project t1)))
+    (should (string-match-p "^:MW_SEQUENTIAL: t$" t1))
+    (should (string-match-p "^:MW_FOCUSED: t$" t1))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :projects)))
+             (t2 (mindwtr-render-heading
+                  (plist-put (copy-sequence parsed) :mw-kind 'project) 2 nil)))
+        (should (string= t1 t2))))))
+
+(ert-deftest mindwtr-roundtrip-boolean-false-and-absent-render-identically ()
+  "Covers R3/R4.  A boolean `:false' and an absent boolean render to identical
+bytes and parse to the same (key-less) entity shape."
+  (let ((false-task '(:id "t1" :mw-kind task :title "x" :status "next"
+                      :isFocusedToday :false :mw-extra-props nil))
+        (absent-task '(:id "t1" :mw-kind task :title "x" :status "next"
+                       :mw-extra-props nil)))
+    (should (string= (mindwtr-render-heading false-task 2 nil)
+                     (mindwtr-render-heading absent-task 2 nil)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert (mindwtr-roundtrip--wrap
+                 (mindwtr-render-heading false-task 2 nil)))
+        (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should-not (plist-member parsed :isFocusedToday))))))
+
+;; U6 -- now that the fields are allow-listed, render->parse must preserve the
+;; signature (no phantom :rev bump from the newly-signed fields).
+
+(ert-deftest mindwtr-roundtrip-focused-task-signature-stable ()
+  "Covers R3/R4.  A focused task with reviewAt survives render->parse with an
+unchanged signature (the fields are signed but do not drift)."
+  (let* ((task '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :isFocusedToday t :reviewAt "2026-06-09T14:30:00Z"
+                 :mw-extra-props nil))
+         (sig-before (mindwtr-signature task))
+         (text (mindwtr-roundtrip--render-wrapped task)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (mindwtr-signature parsed) sig-before))))))
+
+(ert-deftest mindwtr-roundtrip-sequential-focused-project-signature-stable ()
+  "Covers R3/R4.  A sequential+focused project with reviewAt survives
+render->parse with an unchanged signature."
+  (let* ((proj '(:id "p1" :mw-kind project :title "x" :status "active"
+                 :isSequential t :isFocused t :reviewAt "2026-06-09T14:30:00Z"
+                 :mw-extra-props nil))
+         (sig-before (mindwtr-signature proj))
+         (text (mindwtr-roundtrip--wrap-project (mindwtr-render-heading proj 2 nil))))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :projects))))
+        (should (string= (mindwtr-signature parsed) sig-before))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here

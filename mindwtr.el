@@ -96,6 +96,7 @@ stops such a re-entrant trigger from launching a second concurrent cycle.")
   (setq-local org-priority-default ?C))
 
 (define-key mindwtr-mode-map (kbd "C-c C-t") #'mindwtr-set-status)
+(define-key mindwtr-mode-map (kbd "C-c C-a") #'mindwtr-set-area)
 (define-key mindwtr-mode-map (kbd "S-<right>") #'mindwtr-cycle-status-forward)
 (define-key mindwtr-mode-map (kbd "S-<left>") #'mindwtr-cycle-status-backward)
 
