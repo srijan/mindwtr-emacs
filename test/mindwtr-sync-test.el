@@ -219,6 +219,81 @@ field on the candidate (an empty local note is a genuine clear)."
     (should-not (plist-get proj :supportNotes))
     (should (= (plist-get proj :rev) 4))))
 
+(ert-deftest mindwtr-sync-protect-fields-preserves-task-boolean-pre-migration ()
+  "Covers R6 (post-promotion).  Pre-migration, an empty local :isFocusedToday
+against a shadow that has it `t' keeps the shadow value -- the false-empty seam
+the fields latch guards.  Without protection the value is clobbered."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :isFocusedToday t :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         ;; old buffer never rendered the boolean, so parse omits it
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil)))
+    ;; WITHOUT protection (5th/6th args nil) -> clobbered to absent
+    (let ((unprot (car (plist-get (mindwtr-sync-build-candidate
+                                   local shadow "dev" "NOW" nil nil) :tasks))))
+      (should-not (plist-get unprot :isFocusedToday)))
+    ;; WITH fields protection (6th arg t) -> shadow t preserved
+    (let ((prot (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev" "NOW" nil t) :tasks))))
+      (should (eq (plist-get prot :isFocusedToday) t)))))
+
+(ert-deftest mindwtr-sync-protect-fields-preserves-project-booleans-pre-migration ()
+  "Covers R6 (post-promotion).  A project's :isSequential/:isFocused are
+protected the same way as a task's boolean pre-migration."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "P" :status "active" :rev 3
+                               :isSequential t :isFocused t
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "P"
+                                        :status "active"))
+                      :sections nil :areas nil))
+         (prot (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil t) :projects))))
+    (should (eq (plist-get prot :isSequential) t))
+    (should (eq (plist-get prot :isFocused) t))))
+
+(ert-deftest mindwtr-sync-protect-fields-still-adopts-real-boolean-edit ()
+  "Covers R6.  Protection only suppresses an EMPTY local boolean; a genuine
+local `t' (shadow had it absent) is adopted even pre-migration."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"
+                                     :isFocusedToday t))
+                      :projects nil :sections nil :areas nil))
+         (cand (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil t) :tasks))))
+    (should (eq (plist-get cand :isFocusedToday) t))))
+
+(ert-deftest mindwtr-sync-review-at-not-protected-clears-pre-migration ()
+  "Covers R6.  :reviewAt is excluded from the protected set -- even with both
+latches' protection on, an empty local :reviewAt against a non-empty shadow
+clears (a genuine deletion, because :reviewAt always rendered)."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :reviewAt "2026-06-09T14:30:00Z"
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil))
+         (prot (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" t t) :tasks))))
+    (should-not (plist-get prot :reviewAt))))
+
+(ert-deftest mindwtr-sync-boolean-clears-post-migration ()
+  "Covers R6.  Post-migration (protection off), an empty local boolean against a
+non-empty shadow clears normally."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :isFocusedToday t :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"))
+                      :projects nil :sections nil :areas nil))
+         (post (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev" "NOW" nil nil) :tasks))))
+    (should-not (plist-get post :isFocusedToday))))
+
 (ert-deftest mindwtr-sync-project-note-unchanged-echoes-rev ()
   "Covers R4.  An untouched project note classifies unchanged: rev is echoed,
 no spurious change."

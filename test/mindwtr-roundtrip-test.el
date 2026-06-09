@@ -422,5 +422,34 @@ bytes and parse to the same (key-less) entity shape."
       (let ((parsed (car (plist-get (mindwtr-parse-buffer) :tasks))))
         (should-not (plist-member parsed :isFocusedToday))))))
 
+;; U6 -- now that the fields are allow-listed, render->parse must preserve the
+;; signature (no phantom :rev bump from the newly-signed fields).
+
+(ert-deftest mindwtr-roundtrip-focused-task-signature-stable ()
+  "Covers R3/R4.  A focused task with reviewAt survives render->parse with an
+unchanged signature (the fields are signed but do not drift)."
+  (let* ((task '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :isFocusedToday t :reviewAt "2026-06-09T14:30:00Z"
+                 :mw-extra-props nil))
+         (sig-before (mindwtr-signature task))
+         (text (mindwtr-roundtrip--render-wrapped task)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (mindwtr-signature parsed) sig-before))))))
+
+(ert-deftest mindwtr-roundtrip-sequential-focused-project-signature-stable ()
+  "Covers R3/R4.  A sequential+focused project with reviewAt survives
+render->parse with an unchanged signature."
+  (let* ((proj '(:id "p1" :mw-kind project :title "x" :status "active"
+                 :isSequential t :isFocused t :reviewAt "2026-06-09T14:30:00Z"
+                 :mw-extra-props nil))
+         (sig-before (mindwtr-signature proj))
+         (text (mindwtr-roundtrip--wrap-project (mindwtr-render-heading proj 2 nil))))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :projects))))
+        (should (string= (mindwtr-signature parsed) sig-before))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here
