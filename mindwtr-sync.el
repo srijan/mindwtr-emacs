@@ -274,6 +274,94 @@ the report's restore action rebuild the entity in the buffer."
                 conflicts))))
     (nreverse conflicts)))
 
+(defun mindwtr-sync--appdata-empty-p (appdata)
+  "Non-nil when APPDATA carries no entities across any entity list."
+  (catch 'found
+    (dolist (key mindwtr-sync--entity-keys)
+      (when (plist-get appdata key) (throw 'found nil)))
+    t))
+
+(defun mindwtr-sync--incoming-changes (wire merged shadow conflicts)
+  "Return the incoming remote changes pulled by this sync.
+Each element is (:id ID :kind KIND :title TITLE :change CHANGE), where CHANGE
+is one of `created'/`updated'/`deleted' -- a remote change to an entity this
+device did not push, surfaced so a benign merge is not silent.
+
+WIRE is the candidate this device PUT, MERGED the server's GET result, SHADOW
+the pre-sync baseline, and CONFLICTS the lost-edit set from
+`mindwtr-sync-detect-conflicts'.  Returns nil on a cold start (SHADOW carries
+no entities): the first sync is an initial population, not changes since a
+prior sync (KTD3).
+
+Classification per entity, in this order:
+- An id already in CONFLICTS is excluded -- it is shown only as a conflict (R4).
+- A delete in MERGED (`:deletedAt' set, or the entity absent entirely) is
+  incoming only when this device did not also push the tombstone -- a local
+  delete carries `:deletedAt' in WIRE.  This delete test runs BEFORE the
+  signature gate below: a server tombstone keeps its content fields and
+  `:deletedAt' is shadow-only, so a remote delete has an unchanged content
+  signature and the own-edit gate would otherwise mis-skip it.
+- The own-edit gate (MERGED signature == WIRE signature) then excludes the
+  device's own accepted creates and updates, including its own creates, which
+  are present in WIRE (R3, KTD2).
+- The remaining MERGED-vs-SHADOW divergence is a remote create (absent from
+  SHADOW) or a remote update.  The MERGED-vs-SHADOW comparison runs only on the
+  present-in-shadow branch, so it never compares against a nil shadow entity."
+  (if (mindwtr-sync--appdata-empty-p shadow)
+      nil
+    (let ((conflict-ids (make-hash-table :test 'equal))
+          out)
+      (dolist (c conflicts)
+        (puthash (plist-get c :id) t conflict-ids))
+      (dolist (key mindwtr-sync--entity-keys)
+        (let ((kind (mindwtr-sync--key->kind key))
+              (s-idx (mindwtr-shadow-index shadow key))
+              (w-idx (mindwtr-shadow-index wire key))
+              (seen (make-hash-table :test 'equal)))
+          ;; Pass 1 -- every entity the server returned: create / update /
+          ;; tombstone-delete, with the device's own accepted edits gated out.
+          (dolist (m (plist-get merged key))
+            (let* ((id (plist-get m :id)))
+              (puthash id t seen)
+              (unless (gethash id conflict-ids)
+                (let* ((s (gethash id s-idx))
+                       (w (gethash id w-idx))
+                       (s-live (and s (not (plist-get s :deletedAt)))))
+                  (cond
+                   ((plist-get m :deletedAt)
+                    (when (and s-live (not (and w (plist-get w :deletedAt))))
+                      (push (list :id id :kind kind
+                                  :title (mindwtr-model-entity-title s)
+                                  :change 'deleted)
+                            out)))
+                   ((and w (string= (mindwtr-signature m) (mindwtr-signature w)))
+                    nil)
+                   ((null s)
+                    (push (list :id id :kind kind
+                                :title (mindwtr-model-entity-title m)
+                                :change 'created)
+                          out))
+                   ((not (string= (mindwtr-signature m) (mindwtr-signature s)))
+                    (push (list :id id :kind kind
+                                :title (mindwtr-model-entity-title m)
+                                :change 'updated)
+                          out)))))))
+          ;; Pass 2 -- shadow entities the server dropped entirely (hard purge,
+          ;; no lingering tombstone): a live shadow entity gone from MERGED is a
+          ;; remote delete unless this device pushed the delete.
+          (dolist (s (plist-get shadow key))
+            (let ((id (plist-get s :id)))
+              (when (and (not (gethash id seen))
+                         (not (gethash id conflict-ids))
+                         (not (plist-get s :deletedAt)))
+                (let ((w (gethash id w-idx)))
+                  (unless (and w (plist-get w :deletedAt))
+                    (push (list :id id :kind kind
+                                :title (mindwtr-model-entity-title s)
+                                :change 'deleted)
+                          out))))))))
+      (nreverse out))))
+
 (require 'mindwtr-parse)
 (require 'mindwtr-api)
 (require 'mindwtr-reconcile)
