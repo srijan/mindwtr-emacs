@@ -148,16 +148,21 @@ each keyword is paired with its fast-access char from the shared sequence."
   "Fields rendered read-only into org; authoritative in the shadow.")
 
 (defconst mindwtr-model-content-fields
-  '(:name :title :status :priority :contexts :tags :description :checklist
-    :startTime :dueDate :completedAt
+  '(:name :title :status :priority :contexts :tags :description :supportNotes
+    :checklist :startTime :dueDate :completedAt
     :areaId :projectId :sectionId
     :energyLevel :timeEstimate :assignedTo :location :taskMode)
   "Editable fields that round-trip through org and define the content signature.
 This is an allow-list: any server field not named here (e.g.
-`:isFocusedToday', `:isSequential', `:supportNotes', `:tagIds',
-`:areaTitle', `:reviewAt') is excluded from change detection by
-construction, so it can neither drift a signature nor be lost -- it is
-preserved verbatim in the shadow and merged back on write.  Excludes
+`:isFocusedToday', `:isSequential', `:tagIds', `:areaTitle', `:reviewAt')
+is excluded from change detection by construction, so it can neither drift a
+signature nor be lost -- it is preserved verbatim in the shadow and merged
+back on write.  `:supportNotes' (project notes) and `:description'
+\(task/section notes) both round-trip as inline body prose and so are
+allow-listed.  This list is kind-agnostic -- it is iterated for every
+entity regardless of kind -- so a field only affects an entity's signature
+when that entity actually carries the key (e.g. `:supportNotes' is inert on
+areas, which never carry it).  Excludes
 `:id' (identity, matched separately), shadow-only fields, display
 mirrors, and internal parse keys.  Containment IDs ARE included: refiling
 a heading equals re-parenting in Mindwtr, so a changed parent must change
@@ -167,6 +172,19 @@ the signature.")
   '(:lastSyncStats :lastSyncHistory :localStatus
     :pendingRemoteWriteAt :pendingRemoteWriteRetryAt :pendingRemoteWriteAttempts)
   "Fields that must be stripped before sending to the server.")
+
+(defconst mindwtr-model--notes-fields
+  '((task . :description) (section . :description) (project . :supportNotes))
+  "Alist of entity-kind -> the body-prose (notes) field that renders inline.
+`area' has no notes field and is omitted.  Render, parse, and reconcile all
+read this through `mindwtr-model-notes-field' so the kind->field mapping
+lives in one place -- adding a new note-bearing kind is a single edit here
+rather than three divergent per-kind checks across render/parse/reconcile.")
+
+(defun mindwtr-model-notes-field (kind)
+  "Return the inline body-prose (notes) field keyword for entity KIND, or nil.
+task/section -> `:description'; project -> `:supportNotes'; area -> nil."
+  (cdr (assq kind mindwtr-model--notes-fields)))
 
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate

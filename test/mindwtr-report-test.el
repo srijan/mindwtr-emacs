@@ -47,6 +47,17 @@
     (should (= (length d) 1))
     (should (eq (car (car d)) :title))))
 
+(ert-deftest mindwtr-report-field-diff-includes-support-notes ()
+  "Covers R11 / AE4.  Now that :supportNotes is an allow-listed content field, a
+server-overridden project note appears in the override report's field diff."
+  (let ((d (mindwtr-report--field-diff
+            '(:title "Proj" :status "active" :supportNotes "my local note")
+            '(:title "Proj" :status "active" :supportNotes "server note"))))
+    (should (= (length d) 1))
+    (should (eq (car (car d)) :supportNotes))
+    (should (string= (nth 1 (car d)) "my local note"))
+    (should (string= (nth 2 (car d)) "server note"))))
+
 (ert-deftest mindwtr-report-field-diff-ignores-noncontent-and-empty ()
   "Equal-after-canonicalization values (e.g. tag order) and rev/updatedAt
 \(non-content) do not appear in the diff."

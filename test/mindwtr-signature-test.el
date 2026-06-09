@@ -26,13 +26,29 @@
 (ert-deftest mindwtr-signature-ignores-unmapped-server-fields ()
   "Allow-list: server fields we do not map to org never affect the signature.
 Regression for live drift where `:isFocusedToday :false' (and the rest of
-the unmodeled field tail) diverged from a parsed entity that omits them."
+the unmodeled field tail) diverged from a parsed entity that omits them.
+\(`:supportNotes' is NOT in this list anymore -- it is now an allow-listed
+content field; see `mindwtr-signature-includes-support-notes'.)"
   (let ((server '(:id "1" :title "x" :status "next"
-                  :isFocusedToday :false :isSequential t :supportNotes "s"
+                  :isFocusedToday :false :isSequential t
                   :tagIds ("g1") :areaTitle "Personal" :reviewAt "2026-01-01"
                   :orderNum 3 :pushCount 0 :showFutureRecurrence :false))
         (parsed '(:id "1" :title "x" :status "next")))
     (should (string= (mindwtr-signature server) (mindwtr-signature parsed)))))
+
+(ert-deftest mindwtr-signature-includes-support-notes ()
+  "Covers R4.  `:supportNotes' is an allow-listed content field: a project with
+notes signs differently from one without, editing the note changes the
+signature, and an unedited note does not."
+  (let ((with-notes '(:id "p1" :title "x" :status "active" :supportNotes "hello"))
+        (without     '(:id "p1" :title "x" :status "active"))
+        (edited      '(:id "p1" :title "x" :status "active" :supportNotes "hello there")))
+    (should-not (string= (mindwtr-signature with-notes) (mindwtr-signature without)))
+    (should-not (string= (mindwtr-signature with-notes) (mindwtr-signature edited)))
+    ;; empty-string note signs the same as no note (empty == absent)
+    (should (string= (mindwtr-signature without)
+                     (mindwtr-signature '(:id "p1" :title "x" :status "active"
+                                          :supportNotes ""))))))
 
 (ert-deftest mindwtr-signature-coarsens-sub-minute-datetimes ()
   "Datetimes differing only below the minute sign identically.

@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'org)
 (require 'mindwtr-parse)
+(require 'mindwtr-render)
 
 (defmacro mindwtr-parse-test--with (text &rest body)
   "Insert TEXT in an org buffer, move to first heading, run BODY."
@@ -415,6 +416,28 @@ must stay un-inferable so its children keep round-tripping through quarantine."
               (should (null (mindwtr-parse--infer-kind)))
             (should (mindwtr-parse--infer-kind))))))))
 
+(ert-deftest mindwtr-parse-notes-field-round-trips-for-every-note-bearing-kind ()
+  "Drift guard: every kind in `mindwtr-model--notes-fields' must render its notes
+field as inline body prose and parse it back into the same field.  Adding a new
+note-bearing kind to the registry without teaching render/parse fails loudly
+here instead of silently dropping that kind's body on the next sync.  Mirrors
+`mindwtr-parse-infer-kind-covers-every-entity-role'."
+  (dolist (pair mindwtr-model--notes-fields)
+    (let* ((kind (car pair))
+           (field (cdr pair))
+           (status (pcase kind ('task "next") ('project "active") (_ nil)))
+           (entity (append (list :id "x" :mw-kind kind :title "H"
+                                 field "drift sentinel." :mw-extra-props nil)
+                           (and status (list :status status))))
+           (text (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
+                   (mindwtr-render-heading entity 2 nil))))
+      (should (string-match-p "drift sentinel\\." text))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (goto-char (point-min))
+        (let ((parsed (mindwtr-parse-heading kind)))
+          (should (string= (plist-get parsed field) "drift sentinel.")))))))
+
 (ert-deftest mindwtr-parse-explicit-mw-type-not-overridden-by-inference ()
   "Inference is a pure fallback: an explicit MW_TYPE always wins, even when the
 context would imply a different kind."
@@ -484,3 +507,117 @@ Check [[https://example.com][the site]] later.
     (let ((e (mindwtr-parse-heading)))
       (should (string= (plist-get e :description)
                        "Check [the site](https://example.com) later.")))))
+
+(ert-deftest mindwtr-parse-project-notes-into-support-notes ()
+  "Covers R3 (project parse half).  A project's body prose parses into
+:supportNotes, and a child subtree is NOT swallowed into the notes."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+Project planning notes.
+Second line.
+*** NEXT child task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+Task body, not project notes.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects))))
+      (should (string= (plist-get proj :supportNotes)
+                       "Project planning notes.\nSecond line."))
+      ;; the child task's body did not leak into the project notes
+      (should-not (string-match-p "Task body" (plist-get proj :supportNotes)))
+      ;; project has no :description / :checklist key
+      (should-not (plist-member proj :checklist)))))
+
+(ert-deftest mindwtr-parse-section-notes-into-description ()
+  "Covers R2/R3 (section parse half).  A section's body prose parses into
+:description."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** Planning
+:PROPERTIES:
+:MW_TYPE: section
+:MW_ID: s1
+:END:
+Section notes here.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (sec (car (plist-get ad :sections))))
+      (should (string= (plist-get sec :description) "Section notes here."))
+      (should-not (plist-member sec :checklist)))))
+
+(ert-deftest mindwtr-parse-project-checkbox-stays-prose ()
+  "Covers R9 / AE2.  A `- [ ]' line in project notes is preserved as literal
+prose and is NOT reclassified into a :checklist (projects have no such field)."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+Intro line.
+- [ ] a literal checkbox line
+More prose.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (proj (car (plist-get ad :projects))))
+      (should-not (plist-member proj :checklist))
+      (should (string-match-p "- \\[ \\] a literal checkbox line"
+                              (plist-get proj :supportNotes)))
+      (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
+                              (plist-get proj :supportNotes))))))
+
+(ert-deftest mindwtr-parse-section-checkbox-stays-prose ()
+  "Covers R9 for sections.  Sections route through the same registry-gated
+note path as projects, so a `- [ ]' line in section notes must likewise stay
+literal prose in :description and NOT be reclassified into a :checklist."
+  (mindwtr-parse-test--with
+      "* Projects
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: projects
+:END:
+** ACTIVE Big Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** Planning
+:PROPERTIES:
+:MW_TYPE: section
+:MW_ID: s1
+:END:
+Intro line.
+- [ ] a literal checkbox line
+More prose.
+"
+    (let* ((ad (mindwtr-parse-buffer))
+           (sec (car (plist-get ad :sections))))
+      (should-not (plist-member sec :checklist))
+      (should (string-match-p "Intro line\\.\n- \\[ \\] a literal checkbox line\nMore prose\\."
+                              (plist-get sec :description))))))

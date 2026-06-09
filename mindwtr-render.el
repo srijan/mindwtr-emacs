@@ -52,23 +52,38 @@ to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
       "")))
 
 (defun mindwtr-render--mw->org-text (text)
-  "Convert mindwtr (markdown) link syntax in TEXT to org link syntax.
-`[label](url)' becomes `[[url][label]]'; when the label equals the url (the
-form a label-less org link round-trips through) -- or the label is empty --
-it collapses back to the canonical `[[url]]' so the org buffer stays
+  "Convert mindwtr (markdown) body syntax in TEXT to org syntax.
+
+Bullets: a line whose first non-blank content is a run of `*' or a `+'
+followed by a space becomes an org `- ' bullet.  This is the
+heading-injection guard -- a body line beginning with `*'+space is an org
+HEADING, which would split the note into a phantom sibling/child entity on
+the next parse -- and it normalizes markdown's `*'/`+' bullet markers to the
+single marker org can carry in a body (`-'; `*' at column 0 is a heading).
+Inline emphasis (`**bold**', `*italic*', `_x_') is deliberately left verbatim:
+it does not collide with org block structure (an org heading needs a space
+after the stars), and a naive regex conversion would corrupt ordinary prose
+\(`snake_case', `2 * 3').
+
+Links: `[label](url)' becomes `[[url][label]]'; when the label equals the url
+\(the form a label-less org link round-trips through) -- or the label is
+empty -- it collapses back to the canonical `[[url]]' so the org buffer stays
 byte-stable across a sync.  The url group tolerates one level of balanced
-parens so URLs like `https://x/Foo_(bar)' survive intact.  Text with no
-markdown links is returned unchanged; non-link markdown is untouched."
+parens so URLs like `https://x/Foo_(bar)' survive intact.
+
+Text with no convertible syntax is returned unchanged."
   (when text
-    (replace-regexp-in-string
-     "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
-     (lambda (m)
-       (let ((label (match-string 1 m))
-             (url (match-string 2 m)))
-         (if (or (string= label url) (string-empty-p label))
-             (format "[[%s]]" url)
-           (format "[[%s][%s]]" url label))))
-     text t t)))
+    (let ((s (replace-regexp-in-string
+              "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
+      (replace-regexp-in-string
+       "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
+       (lambda (m)
+         (let ((label (match-string 1 m))
+               (url (match-string 2 m)))
+           (if (or (string= label url) (string-empty-p label))
+               (format "[[%s]]" url)
+             (format "[[%s][%s]]" url label))))
+       s t t))))
 
 (defun mindwtr-render--checklist (task)
   "Render TASK checklist items as org checkboxes."
@@ -173,12 +188,17 @@ Returns a string ending with a newline."
         (push (format ":%s: %s" (nth i extra) (nth (1+ i) extra)) lines)
         (setq i (+ i 2))))
     (push ":END:" lines)
-    ;; body: description then checklist (tasks)
+    ;; body: notes prose then checklist.  The notes field is per-kind
+    ;; (`mindwtr-model-notes-field': task/section -> :description, project ->
+    ;; :supportNotes, area -> none); checklist stays task-only.  This is the
+    ;; sole prose serializer, so reconcile's preserved-body must NOT also carry
+    ;; the note for any kind whose field renders here, or it double-grafts.
+    (let* ((field (mindwtr-model-notes-field kind))
+           (notes (and field (plist-get entity field))))
+      (when (and notes (> (length notes) 0))
+        (push (mindwtr-render--mw->org-text notes) lines)))
     (when (eq kind 'task)
-      (let ((desc (plist-get entity :description))
-            (cl (mindwtr-render--checklist entity)))
-        (when (and desc (> (length desc) 0))
-          (push (mindwtr-render--mw->org-text desc) lines))
+      (let ((cl (mindwtr-render--checklist entity)))
         (when (> (length cl) 0) (push cl lines))))
     (concat (mapconcat #'identity (nreverse lines) "\n") "\n")))
 

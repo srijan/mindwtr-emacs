@@ -29,6 +29,39 @@
     (should (string= (plist-get task :revBy) "phone"))
     (should (string= (plist-get task :updatedAt) "U"))))
 
+(ert-deftest mindwtr-sync-section-populated-description-not-clobbered ()
+  "Covers R3 (section).  A section with a server-authored :description that the
+user did not touch must round-trip as UNCHANGED -- the first post-U1 sync must
+not PUT an empty description over the mobile value.
+
+Pre-U1 this clobbered: render emitted no section body, parse left :description
+absent, classify saw a diff (shadow had it, local did not) and merge-content
+cleared it.  U1 renders + parses the description, so the parsed value now
+equals the server value and the section classifies unchanged."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :order 0
+                               :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :sections ((:id "s1" :projectId "p1" :title "Sec" :order 0
+                               :description "Mobile-authored note." :rev 5
+                               :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :areas nil :settings nil))
+         ;; The buffer is what render produces from the shadow; parse it back
+         ;; to get the local projection a real sync would compute.
+         (text (mindwtr-render-appdata shadow))
+         (local (with-temp-buffer
+                  (let ((org-inhibit-startup t)) (insert text) (org-mode))
+                  (mindwtr-parse-buffer)))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (sec (car (plist-get cand :sections))))
+    ;; parse recovered the description from the rendered body
+    (should (string= (plist-get (car (plist-get local :sections)) :description)
+                     "Mobile-authored note."))
+    ;; candidate keeps the server value and does NOT bump rev (unchanged echo)
+    (should (string= (plist-get sec :description) "Mobile-authored note."))
+    (should (= (plist-get sec :rev) 5))))
+
 (ert-deftest mindwtr-sync-build-candidate-update-bumps-rev ()
   (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 7
                             :createdAt "C" :updatedAt "U"))
@@ -94,6 +127,114 @@ timestamp of fields the user did not change."
     (should (= (plist-get task :rev) 5))                      ; bumped
     (should (string= (plist-get task :startTime) "2026-02-09T14:30:45.500Z"))
     (should (string= (plist-get (car (plist-get task :checklist)) :id) "c1"))))
+
+(ert-deftest mindwtr-sync-deploy-transition-preserves-project-note ()
+  "Finding A regression.  On the first sync after upgrade, the on-disk buffer was
+written by the OLD renderer (no project-note body), so parse yields an empty
+:supportNotes.  With protect-empty-notes on, build-candidate must NOT clear the
+server-authored note -- it preserves the shadow value instead of clobbering it."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :order 0
+                               :supportNotes "Mobile-authored note." :rev 5
+                               :createdAt "2026-01-01T00:00:00Z"
+                               :updatedAt "2026-06-01T00:00:00Z"))
+                   :sections nil :areas nil :settings nil))
+         ;; stale buffer: project with NO body (old renderer never emitted it)
+         (stale "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+         (local (with-temp-buffer
+                  (let ((org-inhibit-startup t)) (insert stale) (org-mode))
+                  (mindwtr-parse-buffer))))
+    ;; the parsed local note IS empty (the bug's precondition)
+    (should (mindwtr-sync--empty-p
+             (plist-get (car (plist-get local :projects)) :supportNotes)))
+    ;; WITHOUT protection the note is clobbered (documents the hazard)
+    (let ((proj (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev-1" "NOW" nil) :projects))))
+      (should (null (plist-get proj :supportNotes))))
+    ;; WITH protection (pre-migration) the server note is preserved
+    (let ((proj (car (plist-get (mindwtr-sync-build-candidate
+                                 local shadow "dev-1" "NOW" t) :projects))))
+      (should (string= (plist-get proj :supportNotes) "Mobile-authored note.")))))
+
+(ert-deftest mindwtr-sync-protect-notes-does-not-block-task-description-clear ()
+  "protect-empty-notes guards only NON-task notes (project :supportNotes, section
+:description).  A genuinely emptied task :description still clears -- tasks always
+rendered their description, so an empty one is a real edit, never a pre-render
+artifact."
+  (let* ((shadow '(:tasks ((:id "t1" :title "t" :status "next" :rev 3
+                            :description "old desc" :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "t" :status "next"
+                                     :description ""))
+                      :projects nil :sections nil :areas nil))
+         (proj (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev-1" "NOW" t) :tasks))))
+    (should (null (plist-get proj :description)))))
+
+(ert-deftest mindwtr-sync-protect-notes-still-adopts-a-real-edit ()
+  "protect-empty-notes only suppresses clearing on an EMPTY local note; a real
+edited note value is always adopted, even pre-migration."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "edited"))
+                      :sections nil :areas nil))
+         (proj (car (plist-get (mindwtr-sync-build-candidate
+                                local shadow "dev-1" "NOW" t) :projects))))
+    (should (string= (plist-get proj :supportNotes) "edited"))))
+
+(ert-deftest mindwtr-sync-project-note-edit-adopted ()
+  "Covers R3/R4 (project).  After :supportNotes joins the allow-list, a buffer
+edit to a project's notes is detected and adopted into the candidate; the
+project's rev bumps."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old note" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "new note"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should (string= (plist-get proj :supportNotes) "new note"))
+    (should (= (plist-get proj :rev) 4))))
+
+(ert-deftest mindwtr-sync-project-note-emptied-clears ()
+  "Covers R3 (project).  Emptying a project's notes in the buffer clears the
+field on the candidate (an empty local note is a genuine clear)."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 3
+                               :supportNotes "old note" :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes ""))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should-not (plist-get proj :supportNotes))
+    (should (= (plist-get proj :rev) 4))))
+
+(ert-deftest mindwtr-sync-project-note-unchanged-echoes-rev ()
+  "Covers R4.  An untouched project note classifies unchanged: rev is echoed,
+no spurious change."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Proj" :status "active" :rev 9
+                               :revBy "phone" :supportNotes "stable note"
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "Proj"
+                                        :status "active" :supportNotes "stable note"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (proj (car (plist-get cand :projects))))
+    (should (= (plist-get proj :rev) 9))
+    (should (string= (plist-get proj :revBy) "phone"))))
 
 (ert-deftest mindwtr-sync-update-adopts-genuine-checklist-change ()
   "When the checklist content actually changes, the new value is taken."
@@ -776,6 +917,83 @@ write already committed, so a disk-write hiccup must not fail the sync."
               (should (string= (mindwtr-shadow-get-etag) "v2"))
               (let ((task (car (plist-get (mindwtr-shadow-load) :tasks))))
                 (should (string= (plist-get task :title) "do it"))))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-save-failure-does-not-latch-notes-migration ()
+  "Regression: the notes-migration latch must NOT be set when the post-reconcile
+save fails.  If it were, a later reload from the stale (note-less) file would
+parse empty notes with protection OFF and clear a server note via LWW.  The
+latch is gated on a confirmed save (see `mindwtr-sync-once')."
+  (let* ((dir (make-temp-file "mw-nl" t))
+         (f (make-temp-file "mw-nl-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-notes-migrated-p))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _) (error "disk full"))))
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+              (should (plist-get res :save-failed))
+              ;; The save failed, so the on-disk file is stale -- protection
+              ;; must remain on for the next sync.
+              (should-not (mindwtr-shadow-notes-migrated-p)))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-latches-notes-migration-after-successful-save ()
+  "A full cycle that saves the rendered buffer to disk durably latches the
+notes migration, so subsequent syncs stop protecting empty notes."
+  (let* ((dir (make-temp-file "mw-ml" t))
+         (f (make-temp-file "mw-ml-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should-not (mindwtr-shadow-notes-migrated-p))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+            (should (plist-get res :ok))
+            (should-not (plist-get res :save-failed))
+            (should (mindwtr-shadow-notes-migrated-p))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))

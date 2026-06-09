@@ -190,10 +190,19 @@ silently reverting the remote edit."
       (should (search-forward "renamed" nil t))
       (should (save-excursion (goto-char (point-min)) (search-forward "keepme" nil t))))))
 
+(defun mindwtr-reconcile-test--count (needle)
+  "Return the number of occurrences of NEEDLE in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((n 0))
+      (while (search-forward needle nil t) (setq n (1+ n)))
+      n)))
+
 (ert-deftest mindwtr-reconcile-update-preserves-project-prose ()
-  "Renaming a project (non-task) keeps its free-prose body.
-The renderer emits no body for non-task kinds, so the whole body is
-org-only content and must survive a full-content rebuild."
+  "Renaming a project carries its notes through the rebuild, emitted exactly
+once.  Project notes now round-trip via :supportNotes (rendered by the sole
+serializer), so the merged entity -- not a verbatim-preserved body -- is the
+source of the prose, and render must not double-graft it with preserved-body."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
@@ -202,16 +211,124 @@ org-only content and must survive a full-content rebuild."
       (org-mode))
     (let ((merged '(:tasks nil
                     :projects ((:id "p1" :title "Renamed Proj" :status "active"
-                                :areaId "a1" :rev 4 :createdAt "2026-01-01T00:00:00Z"
+                                :areaId "a1" :supportNotes "Important planning notes.\nSecond line."
+                                :rev 4 :createdAt "2026-01-01T00:00:00Z"
                                 :updatedAt "2026-06-01T00:00:00Z"))
                     :sections nil
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged)
-      (goto-char (point-min))
-      (should (search-forward "Renamed Proj" nil t))
-      (should (save-excursion (goto-char (point-min)) (search-forward "Important planning notes." nil t)))
-      (should (save-excursion (goto-char (point-min)) (search-forward "Second line." nil t)))
-      (should-not (save-excursion (goto-char (point-min)) (search-forward "ACTIVE Proj\n" nil t))))))
+      (should (= 1 (mindwtr-reconcile-test--count "Renamed Proj")))
+      ;; the note appears exactly once -- no double-graft from preserved-body
+      (should (= 1 (mindwtr-reconcile-test--count "Important planning notes.")))
+      (should (= 1 (mindwtr-reconcile-test--count "Second line.")))
+      (should (= 0 (mindwtr-reconcile-test--count "ACTIVE Proj\n"))))))
+
+(ert-deftest mindwtr-reconcile-project-logbook-and-notes-coexist ()
+  "Covers R10 / AE3.  A project heading with a LOGBOOK drawer and notes: after a
+rebuild the drawer survives intact and the notes (from :supportNotes) render
+once -- the drawer is preserved org-only content, the prose is regenerated."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+              ":LOGBOOK:\n- note KEEPME\n:END:\n"
+              "Old note text.\n")
+      (org-mode))
+    (let ((merged '(:tasks nil
+                    :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"
+                                :supportNotes "Updated note text."
+                                :rev 4 :createdAt "2026-01-01T00:00:00Z"
+                                :updatedAt "2026-06-01T00:00:00Z"))
+                    :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (should (= 1 (mindwtr-reconcile-test--count "KEEPME")))
+      (should (= 1 (mindwtr-reconcile-test--count "Updated note text.")))
+      ;; the stale buffer prose was replaced by the merged note, not duplicated
+      (should (= 0 (mindwtr-reconcile-test--count "Old note text."))))))
+
+(ert-deftest mindwtr-reconcile-area-body-preserved-verbatim ()
+  "Regression: an area has no notes field, so its entire free-prose body is
+still preserved verbatim across a rebuild (the area branch is unchanged)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "Free-form area reference notes.\n- [ ] even a checkbox\n")
+      (org-mode))
+    (let ((merged '(:tasks nil :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work" :rev 2
+                             :createdAt "2026-01-01T00:00:00Z"
+                             :updatedAt "2026-06-01T00:00:00Z"))
+                    :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (should (= 1 (mindwtr-reconcile-test--count "Free-form area reference notes.")))
+      (should (= 1 (mindwtr-reconcile-test--count "- [ ] even a checkbox"))))))
+
+(ert-deftest mindwtr-reconcile-project-note-no-double-graft-across-two-syncs ()
+  "Covers R12 (no-double-graft).  Two reconciles in a row leave the project note
+emitted exactly once.  After the first reconcile the note is in the buffer as
+rendered prose; the second reconcile must NOT re-capture it as org-only and graft
+a second copy -- preserved-body skips prose for note-bearing kinds, so the note
+is re-rendered from the merged entity, not duplicated."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+      (org-mode))
+    (let ((merged '(:tasks nil
+                    :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"
+                                :supportNotes "Persistent project note."
+                                :rev 4 :createdAt "2026-01-01T00:00:00Z"
+                                :updatedAt "2026-06-01T00:00:00Z"))
+                    :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (should (= 1 (mindwtr-reconcile-test--count "Persistent project note.")))
+      (mindwtr-reconcile-buffer merged)
+      (should (= 1 (mindwtr-reconcile-test--count "Persistent project note."))))))
+
+(ert-deftest mindwtr-reconcile-growing-note-keeps-anchor-row ()
+  "View-state regression: when a project note grows by several lines, the heading
+the cursor was on returns to its exact prior screen row.  The :anchor-line
+screen-row path (PR #28/#29) re-derives the heading after the rebuild and
+recenters, so it absorbs the body-length change from the inline note above it."
+  (let ((buf (generate-new-buffer " *mw-note-reflow*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buf)
+          (with-current-buffer buf
+            (let ((org-inhibit-startup t))
+              (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+                      "** ACTIVE P1\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+                      "short note.\n"
+                      "** ACTIVE P2\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p2\n:END:\n")
+              (org-mode))
+            (let ((win (get-buffer-window buf)))
+              (skip-unless (window-live-p win))
+              (set-window-start win (point-min))
+              ;; cursor on P2, which sits below P1's note and would shift down
+              ;; as the note grows if the row anchor did not absorb it.
+              (mindwtr-reconcile--goto-id "p2")
+              (let ((row-before (count-screen-lines (window-start win)
+                                                    (line-beginning-position) nil win))
+                    (merged '(:tasks nil
+                              :projects ((:id "p1" :title "P1" :status "active"
+                                          :supportNotes "line a\nline b\nline c\nline d\nline e"
+                                          :order 0 :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                                          :updatedAt "2026-06-01T00:00:00Z")
+                                         (:id "p2" :title "P2" :status "active" :order 1
+                                          :rev 2 :createdAt "2026-01-01T00:00:00Z"
+                                          :updatedAt "2026-06-01T00:00:00Z"))
+                              :sections nil :areas nil :settings nil)))
+                (mindwtr-reconcile-buffer merged)
+                ;; P2 grew its distance from buffer top (5-line note vs 1) but its
+                ;; SCREEN row is unchanged -- the anchor absorbed the reflow.
+                (mindwtr-reconcile--goto-id "p2")
+                (should (= row-before
+                           (count-screen-lines (window-start win)
+                                               (line-beginning-position) nil win)))))))
+      (kill-buffer buf))))
 
 (ert-deftest mindwtr-reconcile-update-preserves-bare-clock ()
   "A bare CLOCK line (org-clock-into-drawer disabled) survives a task rebuild."

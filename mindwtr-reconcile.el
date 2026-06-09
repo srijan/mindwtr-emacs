@@ -44,13 +44,18 @@ when there is no PROPERTIES drawer (so the body scan still has a start)."
 
 (defun mindwtr-reconcile--preserved-body (kind body-start end)
   "Return org-only body text between BODY-START and END to carry across a rebuild.
-The renderer emits a body (description + checklist) only for tasks, so for
-a NON-task entity the entire body is org-only content and is preserved
-verbatim.  For a task, description and checklist are regenerated from the
-merged entity, so only org-only lines are preserved: drawer blocks
-\(LOGBOOK and CLOCK-in-drawer) and bare CLOCK lines.  Returns nil when
-there is nothing to preserve."
-  (if (not (eq kind 'task))
+The renderer emits notes prose (+ checklist for tasks) for every kind that has
+a notes field (`mindwtr-model-notes-field': task, project, section), so for
+those the prose is regenerated from the merged entity and only genuinely
+org-only lines are preserved: drawer blocks (LOGBOOK and CLOCK-in-drawer) and
+bare CLOCK lines.  A kind with no notes field (`area') has its entire body
+treated as org-only and preserved verbatim.  Returns nil when there is nothing
+to preserve.
+
+Note: for project/section this MUST narrow in lockstep with render starting to
+emit the note -- if it kept carrying the whole body, render and preserved-body
+would both claim the note bytes and it would appear twice (double-graft)."
+  (if (not (mindwtr-model-notes-field kind))
       (let ((s (buffer-substring-no-properties body-start end)))
         (unless (string-empty-p (string-trim s)) s))
     (save-excursion
@@ -82,9 +87,11 @@ drawer, description and checklist from ENTITY by reusing the canonical
 renderer -- so a remote change to ANY mapped field (dates, description,
 checklist, drawer props, tags) reaches the buffer instead of silently
 reverting on the next sync.  Preserves the heading's outline level,
-unknown PROPERTIES, and org-only body content (LOGBOOK/CLOCK and, for
-non-task entities, all free prose).  Child headings are outside the entry
-region and are left untouched."
+unknown PROPERTIES, and org-only body content: LOGBOOK/CLOCK for any
+note-bearing kind (task/project/section, whose prose is regenerated from the
+merged entity), and the entire free-prose body only for `area' (which has no
+notes field).  Child headings are outside the entry region and are left
+untouched."
   (org-back-to-heading t)
   (let* ((level (org-current-level))
          (extra (mindwtr-parse--extra-props))
