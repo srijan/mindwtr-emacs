@@ -14,7 +14,7 @@
 #   MINDWTR_CLOUD_TAG=0.9.7 test/integration/run.sh   # validate a target version
 #
 # Knobs (environment):
-#   MINDWTR_CLOUD_TAG        image tag to test           (default: latest)
+#   MINDWTR_CLOUD_TAG        image tag to test           (default: 0.9.7)
 #   MINDWTR_CLOUD_IMAGE      full image ref override      (default: ghcr.io/dongdongbh/mindwtr-cloud:<tag>)
 #   MINDWTR_DOCKER_PORT      host port to bind            (default: 8787)
 #   MINDWTR_SKIP_WRITE=1     skip the Emacs write lifecycle (read-only phases only)
@@ -34,6 +34,14 @@ BASE_URL="http://127.0.0.1:${PORT}"
 EMACS_BIN="${EMACS:-emacs}"
 PROJECT="mindwtr-itest"
 export COMPOSE_PROJECT_NAME="$PROJECT"
+
+# Pin a concrete server version by default so the suite is reproducible and CI
+# never drifts when a newer image is published (`:latest' floats -- e.g. it is
+# already ahead of 0.9.7).  Override with MINDWTR_CLOUD_TAG (=latest, =0.9.9, ...)
+# or MINDWTR_CLOUD_IMAGE for the whole ref.  Exported so compose.yaml resolves
+# the same value.  Keep this in sync with .github/workflows/ci.yml.
+export MINDWTR_CLOUD_TAG="${MINDWTR_CLOUD_TAG:-0.9.7}"
+CLOUD_IMAGE="${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG}}"
 
 note()  { printf '\n=== %s ===\n' "$*"; }
 info()  { printf '    %s\n' "$*"; }
@@ -61,7 +69,7 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v jq   >/dev/null 2>&1 || die "jq is required for the cross-check assertions"
 info "docker: $(docker --version)"
 info "emacs:  $("$EMACS_BIN" --version | head -1)"
-info "image:  ${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG:-latest}}"
+info "image:  ${CLOUD_IMAGE}"
 info "port:   ${PORT}"
 
 # --- secrets / config ---------------------------------------------------------
@@ -208,4 +216,4 @@ run_make smoke || die "Emacs failed to ingest/round-trip the curl-written entity
 
 note "ALL CHECKS PASSED"
 info "Emacs client and curl client both exercised /v1/data on the same"
-info "$(echo "${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG:-latest}}") server, and agree on the wire."
+info "${CLOUD_IMAGE} server, and agree on the wire."

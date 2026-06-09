@@ -62,5 +62,8 @@ jobs:
           # On CI, Docker + Emacs are present, so a SKIP would hide a real
           # problem -- require the prerequisites and fail loudly if missing.
           MINDWTR_DOCKER_REQUIRE: "1"
-          # MINDWTR_CLOUD_TAG: "0.9.7"
+          # Pin the server version explicitly so CI is reproducible and never
+          # drifts when a newer image ships (`:latest' floats ahead of this).
+          # Bump deliberately to validate an upgrade; mirrors the run.sh default.
+          MINDWTR_CLOUD_TAG: "0.9.7"
         run: make smoke-docker

@@ -11,9 +11,10 @@ down for you, against a version you choose.
 ## Quick start
 
 ```sh
-make smoke-docker                      # test the :latest cloud image
-MINDWTR_CLOUD_TAG=0.9.7 make smoke-docker   # validate a specific version
-MINDWTR_SKIP_WRITE=1 make smoke-docker      # read-only phases only (no PUTs)
+make smoke-docker                       # test the pinned default (0.9.7)
+MINDWTR_CLOUD_TAG=0.9.9 make smoke-docker    # validate a different version
+MINDWTR_CLOUD_TAG=latest make smoke-docker   # test the floating latest tag
+MINDWTR_SKIP_WRITE=1 make smoke-docker       # read-only phases only (no PUTs)
 ```
 
 Or directly: `test/integration/run.sh`.
@@ -49,7 +50,7 @@ phase or curl assertion fails the whole run, teardown still happens.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `MINDWTR_CLOUD_TAG` | `latest` | Image tag to test (e.g. `0.9.7`). |
+| `MINDWTR_CLOUD_TAG` | `0.9.7` | Image tag to test. Pinned so runs are reproducible; set `latest` or another version to override. |
 | `MINDWTR_CLOUD_IMAGE` | — | Full image ref override. |
 | `MINDWTR_DOCKER_PORT` | `8787` | Host port to bind. |
 | `MINDWTR_SKIP_WRITE` | unset | `1` = read-only phases only (no PUTs). |
