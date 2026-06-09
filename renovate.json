@@ -1,8 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "description": "The only dependency tracked is the Mindwtr cloud server image used by the dockerized integration test. Its version is a bash variable (DEFAULT_CLOUD_TAG in test/integration/run.sh), not a manifest entry, so a custom regex manager extracts it from the '# renovate:' annotation above that line. Renovate opens a PR per new tag; the CI integration job then runs the smoke suite against that version, so upgrades are validated before merge. To also track GitHub Actions versions, drop the enabledManagers restriction below (or add 'github-actions').",
-  "enabledManagers": ["custom.regex"],
+  "description": "Tracks two things: (1) the Mindwtr cloud server image used by the dockerized integration test -- its version is a bash variable (DEFAULT_CLOUD_TAG in test/integration/run.sh), not a manifest entry, so the custom regex manager extracts it from the '# renovate:' annotation above that line; (2) GitHub Actions versions in .github/workflows. A new cloud tag opens a PR whose CI runs the smoke suite against that version, so the upgrade is validated before merge. enabledManagers keeps Renovate scoped to just these two; remove it to enable every detected manager.",
+  "enabledManagers": ["custom.regex", "github-actions"],
   "customManagers": [
     {
       "customType": "regex",
