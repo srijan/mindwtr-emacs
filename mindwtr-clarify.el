@@ -44,7 +44,14 @@
   "Name of the clarify WIP buffer.  Its liveness marks an active session.")
 
 (defvar mindwtr-clarify--pending nil
-  "Markers at the inbox items still to clarify in the current session.")
+  "MW_IDs of the inbox items still to clarify in the current session.
+IDs, not markers: the write-back replaces an item's subtree up to the next
+heading, and a marker sitting on that boundary collapses onto the replaced
+item -- an outcome that leaves the item in place (trash) would then be
+re-opened instead of the real next item.")
+
+(defvar mindwtr-clarify--source nil
+  "The synced buffer the current clarify session walks.")
 
 (defvar mindwtr-clarify--window-config nil
   "Window configuration to restore when the clarify session ends.")
@@ -131,21 +138,15 @@ the pass with \\[mindwtr-clarify-stop]."
 (define-key mindwtr-clarify-mode-map (kbd "C-c C-n") #'mindwtr-clarify-skip)
 (define-key mindwtr-clarify-mode-map (kbd "C-c C-k") #'mindwtr-clarify-stop)
 
-(defun mindwtr-clarify--open-wip (marker)
-  "Load the inbox item at MARKER into the WIP buffer and display it.
-Stamps an MW_ID on the source item first when it has none (a hand-written
-heading would get one on the next sync anyway, and the write-back needs a
-stable handle that survives the item moving while the WIP is open)."
-  (let ((source (marker-buffer marker))
-        id text)
+(defun mindwtr-clarify--open-wip (id pos)
+  "Load the inbox item with MW_ID ID at POS (in the session's source buffer)
+into the WIP buffer and display it."
+  (let ((source mindwtr-clarify--source)
+        text)
     (with-current-buffer source
       (save-excursion
-        (goto-char marker)
+        (goto-char pos)
         (org-back-to-heading t)
-        (setq id (or (mindwtr-parse--prop "MW_ID")
-                     (let ((new (mindwtr-util-uuid)))
-                       (org-set-property "MW_ID" new)
-                       new)))
         (setq text (buffer-substring-no-properties
                     (point)
                     (save-excursion (org-end-of-subtree t t) (point))))))
@@ -203,9 +204,9 @@ heading carries ID anymore."
 ;;; Session plumbing
 
 (defun mindwtr-clarify--finish (msg)
-  "End the clarify session: drop pending markers, kill the WIP, restore windows."
-  (dolist (m mindwtr-clarify--pending) (set-marker m nil))
-  (setq mindwtr-clarify--pending nil)
+  "End the clarify session: drop the queue, kill the WIP, restore windows."
+  (setq mindwtr-clarify--pending nil
+        mindwtr-clarify--source nil)
   (let ((buf (get-buffer mindwtr-clarify--wip-buffer-name)))
     (when buf (kill-buffer buf)))
   (when mindwtr-clarify--window-config
@@ -215,31 +216,46 @@ heading carries ID anymore."
 
 (defun mindwtr-clarify--advance ()
   "Open the WIP for the next pending inbox item, or end the session.
-A pending marker can collapse onto the next sibling when its item was
-relocated meanwhile; only positions that still hold an inbox heading are
-clarified."
+A pending id whose heading vanished or already left the inbox (clarified
+by other means meanwhile) is dropped silently."
   (let (found)
     (while (and mindwtr-clarify--pending (not found))
-      (let ((m (pop mindwtr-clarify--pending)))
-        (if (and (marker-buffer m)
-                 (with-current-buffer (marker-buffer m)
-                   (save-excursion
-                     (goto-char m)
-                     (and (org-at-heading-p) (mindwtr-clarify--in-inbox-p)))))
-            (setq found m)
-          (set-marker m nil))))
+      (let ((id (pop mindwtr-clarify--pending)))
+        (when (buffer-live-p mindwtr-clarify--source)
+          (with-current-buffer mindwtr-clarify--source
+            (let ((pos (mindwtr-clarify--find-heading-by-id id)))
+              (when (and pos
+                         (save-excursion
+                           (goto-char pos)
+                           (mindwtr-clarify--in-inbox-p)))
+                (setq found (cons id pos))))))))
     (if (not found)
         (mindwtr-clarify--finish "done")
-      (unwind-protect
-          (mindwtr-clarify--open-wip found)
-        (set-marker found nil)))))
+      (mindwtr-clarify--open-wip (car found) (cdr found)))))
 
 (defun mindwtr-clarify--start (markers)
-  "Begin a clarify session over MARKERS (inbox item positions, in order)."
+  "Begin a clarify session over MARKERS (inbox item positions, in order).
+The queue is kept as MW_IDs (see `mindwtr-clarify--pending'); an item that
+has none yet is stamped one here -- a hand-written heading would get an id
+on the next sync anyway, and the session needs a handle that survives the
+buffer rewrites between items."
   (when (get-buffer mindwtr-clarify--wip-buffer-name)
     (user-error "mindwtr-clarify: a session is already in progress (C-c C-k in %s to stop)"
                 mindwtr-clarify--wip-buffer-name))
-  (setq mindwtr-clarify--pending markers
+  (setq mindwtr-clarify--source (and markers (marker-buffer (car markers)))
+        mindwtr-clarify--pending
+        (mapcar (lambda (m)
+                  (prog1
+                      (with-current-buffer (marker-buffer m)
+                        (save-excursion
+                          (goto-char m)
+                          (org-back-to-heading t)
+                          (or (mindwtr-parse--prop "MW_ID")
+                              (let ((new (mindwtr-util-uuid)))
+                                (org-set-property "MW_ID" new)
+                                new))))
+                    (set-marker m nil)))
+                markers)
         mindwtr-clarify--window-config (current-window-configuration))
   (mindwtr-clarify--advance))
 

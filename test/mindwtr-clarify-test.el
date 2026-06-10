@@ -9,8 +9,8 @@
   "Kill a leftover WIP buffer and reset session state between tests."
   (let ((buf (get-buffer mindwtr-clarify--wip-buffer-name)))
     (when buf (kill-buffer buf)))
-  (dolist (m mindwtr-clarify--pending) (set-marker m nil))
   (setq mindwtr-clarify--pending nil
+        mindwtr-clarify--source nil
         mindwtr-clarify--window-config nil))
 
 (defmacro mindwtr-clarify-test--with-appdata (appdata &rest body)
@@ -243,6 +243,26 @@ covers calendar items too -- same NEXT + startTime shape in the model)."
       (with-current-buffer src
         (should (string= (mindwtr-clarify-test--parent-list-of "One") list))
         (should (string= (mindwtr-clarify-test--keyword-of "One") kw))))))
+
+(ert-deftest mindwtr-clarify-trash-advances-to-next-item ()
+  "Trashing advances to the real next item.  Regression: the write-back
+rewrites the item's subtree up to the next heading, so a marker-based
+queue collapsed onto the trashed item -- which, uniquely, stays in place
+(ARCH has no bucket) -- and re-opened it instead of the next one."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox")
+                (:id "t2" :title "Two" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (mindwtr-clarify-test--press ?x)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (goto-char (point-min))
+      (outline-next-heading)
+      (should (looking-at-p "\\* INBOX Two"))
+      (should (string= mindwtr-clarify--source-id "t2")))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "ARCH")))))
 
 (ert-deftest mindwtr-clarify-wip-edits-written-back-on-decide ()
   "Rewording the item in the WIP buffer lands in the source on decide."
