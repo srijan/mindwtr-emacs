@@ -292,3 +292,6 @@ The scroll-anchor regex was widened the same way: `:MW_ID:` → `:MW_\(?:ID\|LIS
   before the PR shipped. *(session history)*
 - Adjacent reconcile/sync-integrity work: [[silent-deletion-untyped-org-headings]] (quarantine
   before erase) and [[org-markdown-link-conversion-roundtrip]] (signature byte-stability).
+- [[clarify-queue-markers-collapse-on-write-back]] applies this doc's "key to stable IDs, never
+  buffer positions" principle to a session queue: the clarify loop tracks pending items by MW_ID
+  and re-resolves position on demand, instead of holding markers that collapse on write-back.

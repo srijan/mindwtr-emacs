@@ -107,3 +107,7 @@ headings lie outside the entry region (`outline-next-heading` excludes them) and
   full syncs.
 - Shares the signature-equality requirement with
   [[content-signature-allow-list-not-deny-list]].
+- [[clarify-queue-markers-collapse-on-write-back]] is the **sibling** marker-collapse bug: the
+  clarify session queue hit the same boundary-collapse on subtree replacement, but fixed it by
+  abandoning markers for stable MW_IDs rather than by insert-before-delete. Two remedies for one
+  class — order your mutations, or stop using markers.

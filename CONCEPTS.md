@@ -45,3 +45,16 @@ The latch must flip only *after* a confirmed durable save of the re-rendered buf
 
 ### Reconcile
 The step that rebuilds the buffer from merged server data: it erases the buffer, re-renders the canonical AppData, and restores view state (folds, point). Because it is destructive-then-rebuild, it must collect anything it cannot represent *before* erasing, and it is the commit point that durable post-sync side effects (Shadow save, Migration latch) are sequenced after.
+
+## Inbox triage
+
+### Inbox
+The capture bucket holding items that have not yet been clarified — the un-triaged entries that Clarify drains. An item leaves the Inbox when an Outcome relocates it (under a project, onto a someday list, into the calendar); trashing instead archives it in place, so it stays in the buffer but is no longer an Inbox item.
+
+### Clarify
+The guided session that walks the Inbox one item at a time, loading each into a working buffer so the user can decide and apply a single Outcome before the session advances to the next item.
+
+Each item receives exactly one Outcome per pass. The session tracks its remaining queue by stable entity identity, not by buffer position, so an Outcome that leaves an item in place (trash) still advances correctly, and an item that has left the Inbox by other means is skipped rather than re-presented.
+
+### Outcome
+The decision applied to one Inbox item during Clarify, drawn from a fixed set that mirrors the GTD next-action question — make it a next action, file it under a project, defer it to someday, schedule it onto the calendar, mark it reference, delegate it, or trash it. Most Outcomes relocate the item out of the Inbox; trash is the one that leaves it in place.
