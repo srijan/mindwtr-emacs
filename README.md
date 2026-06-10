@@ -176,28 +176,51 @@ correctness requirement.
 
 ### Clarify (inbox triage)
 
-**`M-x mindwtr-clarify`** is a guided pass over the `* Inbox` items — the
-org-gtd clarify/organize wizard, rebuilt on the existing type-aware commands
-instead of a new state machine. It visits each inbox item in turn and offers a
-single-key action loop:
+**`M-x mindwtr-clarify`** walks the `* Inbox` items one at a time, following
+the org-gtd clarify/organize workflow. Each item is copied into a dedicated
+WIP buffer (`mindwtr-clarify-mode`, derived from org-mode) where you can
+reword the fuzzy capture, flesh out the body, or sketch subtasks — the copy
+in the synced file stays untouched until you commit to a decision. From the
+WIP buffer:
 
 | Key | Action |
 |---|---|
-| `s` | Set a type-valid status (`mindwtr-set-status`); the item immediately relocates to the bucket matching its new status |
-| `c` | Set contexts (`mindwtr-set-context`; completion over the buffer's @contexts, hashtags preserved) |
-| `a` | Set an area (`mindwtr-set-area`) |
-| `r` | Refile under a project (native `org-refile`, offered only mindwtr project headings as targets) |
-| `p` | Promote: the item becomes the **first NEXT action** of a new ACTIVE project (`mindwtr-promote-to-project`) |
-| `n` | Skip to the next inbox item |
-| `q` | Stop the pass |
+| `C-c C-c` | Decide what the item is (the menu below), file it, load the next item |
+| `C-c C-n` | Skip this item (WIP edits discarded), load the next |
+| `C-c C-k` | Stop the pass; the remaining inbox is untouched |
 
-An item is finished when it leaves the inbox (status change, refile, or
-promotion) or is skipped; the loop then advances to the next item until the
-inbox is empty.
+`C-c C-c` asks the one clarify question — *what is this thing?* — with the
+GTD flowchart's outcomes as the answers:
 
-**`M-x mindwtr-clarify-this-item`** runs the same action loop for just the
-inbox item at point (from a heading nested inside an item, it acts on the
-containing item) — handy for triaging one capture without a full pass.
+| Key | Outcome | What happens |
+|---|---|---|
+| `q` | Quick action | Already done (the two-minute rule): marked `DONE` with a `CLOSED` stamp |
+| `n` | Next action | `NEXT`, into Single Actions |
+| `d` | Delegate | Prompts who (`MW_ASSIGNED_TO`) and a check-in date (`DEADLINE`); `WAIT` |
+| `t` | Tickler | Prompts the date (`SCHEDULED`); `NEXT`. Also the home for calendar items — "happens at a date" and "resurface on a date" are the same `NEXT` + `SCHEDULED` shape in this model |
+| `p` | New project | `mindwtr-promote-to-project` (see below) |
+| `a` | Add to existing project | Native `org-refile`, project headings as the only targets |
+| `s` | Someday/Maybe | `SOMEDAY`, into the Someday bucket |
+| `r` | Reference | `REF`, into Reference |
+| `x` | Trash | `ARCH`; the heading keeps its place until the next sync drops archived tasks |
+
+A decision first writes the WIP edits back onto the source item (matched by
+`MW_ID`), runs the outcome's own prompts, then the shared post-decision
+prompts — contexts always (`RET` keeps them), an area when the item has
+none and the buffer defines areas — and finally relocates the item to its
+status bucket. Adding to an existing project (`a`) skips the area prompt:
+a task under a project takes its area from the project. An outcome that
+fails (say, promoting with no `* Projects` container) keeps the WIP buffer
+open so the item can be re-decided.
+
+One outcome is deliberately absent: **habit** needs `MW_RECURRENCE`, which
+is still read-only (see deferred items). And **tickler** is a plain `NEXT`
++ future `SCHEDULED` rather than a separate dormant state, since the model
+has no writable review-at yet.
+
+**`M-x mindwtr-clarify-this-item`** runs the same WIP-buffer flow for just
+the inbox item at point (from a heading nested inside an item, it acts on
+the containing item) — handy for triaging one capture without a full pass.
 
 **Promoting to a project.** `p` (also standalone as
 `M-x mindwtr-promote-to-project`) mirrors the Mindwtr app's "make this a
@@ -426,7 +449,7 @@ edited).
 - **Refile-target wiring** — re-parenting leans on `org-refile`, but nothing
   sets `org-refile-targets` to mindwtr projects globally, so a bare `C-c C-w`
   won't offer the right destinations out of the box. The clarify flow already
-  binds project-only targets around its own `r` action
+  binds project-only targets around its add-to-project outcome
   (`mindwtr-clarify--refile`); what remains is wiring the same targets into
   `mindwtr-mode` for direct `C-c C-w` use. (Emacs-native editing track.)
 - **`mindwtr-lint` / pre-sync validation command** — an on-demand command that

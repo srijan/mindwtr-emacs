@@ -5,8 +5,19 @@
 (require 'mindwtr-clarify)
 (require 'mindwtr-render)
 
+(defun mindwtr-clarify-test--teardown ()
+  "Kill a leftover WIP buffer and reset session state between tests."
+  (let ((buf (get-buffer mindwtr-clarify--wip-buffer-name)))
+    (when buf (kill-buffer buf)))
+  (dolist (m mindwtr-clarify--pending) (set-marker m nil))
+  (setq mindwtr-clarify--pending nil
+        mindwtr-clarify--window-config nil))
+
 (defmacro mindwtr-clarify-test--with-appdata (appdata &rest body)
-  "Render APPDATA into an org buffer with Mindwtr keywords registered, run BODY."
+  "Render APPDATA into an org buffer with Mindwtr keywords registered, run BODY.
+BODY runs with the source buffer current AND bound to `src' -- the clarify
+session switches the current buffer to the WIP, so assertions on the source
+go through (with-current-buffer src ...)."
   (declare (indent 1))
   `(with-temp-buffer
      (let ((org-todo-keywords mindwtr-model-todo-keywords)
@@ -14,19 +25,26 @@
        (insert (mindwtr-render-appdata ,appdata))
        (org-mode))
      (goto-char (point-min))
-     ,@body))
+     (let ((src (current-buffer)))
+       (ignore src)
+       (unwind-protect
+           (progn ,@body)
+         (mindwtr-clarify-test--teardown)))))
 
-(defun mindwtr-clarify-test--feed (keys thunk)
-  "Call THUNK with `read-char-choice' stubbed to return KEYS in order.
-Every prompt in the flow (the clarify menu AND the status picker inside
-`mindwtr-set-status') consumes from the same feed.  Errors when a prompt
-fires after the feed is exhausted."
-  (let ((feed (copy-sequence keys)))
-    (cl-letf (((symbol-function 'read-char-choice)
-               (lambda (&rest _)
-                 (or (pop feed)
-                     (error "clarify test: key feed exhausted")))))
-      (funcall thunk))))
+(defun mindwtr-clarify-test--wip ()
+  "Return the live WIP buffer, or nil."
+  (get-buffer mindwtr-clarify--wip-buffer-name))
+
+(defun mindwtr-clarify-test--press (key)
+  "Choose KEY at the decide menu of the live WIP buffer.
+Stubs only the menu read (and `sit-for'); outcome prompts must be stubbed
+by the caller, so an unexpected prompt fails loudly in batch."
+  (let ((buf (mindwtr-clarify-test--wip)))
+    (should buf)
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) key))
+                ((symbol-function 'sit-for) (lambda (&rest _) t)))
+        (mindwtr-clarify-decide)))))
 
 (defun mindwtr-clarify-test--parent-list-of (title)
   "Return the MW_LIST role of the container the heading named TITLE sits under.
@@ -37,6 +55,26 @@ inside \"DONE(d)\" on the #+TODO: header line."
     (let ((case-fold-search nil))
       (re-search-forward (regexp-quote title)))
     (mindwtr-commands--parent-list-role)))
+
+(defun mindwtr-clarify-test--keyword-of (title)
+  "Return the TODO keyword of the heading named TITLE."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search nil))
+      (re-search-forward (regexp-quote title)))
+    (org-back-to-heading t)
+    (org-get-todo-state)))
+
+(defconst mindwtr-clarify-test--date (encode-time 0 0 0 20 6 2026)
+  "The fixed date the `org-read-date' stub returns (2026-06-20).")
+
+(defun mindwtr-clarify-test--read-date-stub (&rest _)
+  "Stand-in for `org-read-date' under `org-schedule'/`org-deadline'.
+Both call it with TO-TIME, so an encoded time is the right return shape."
+  (setq org-time-was-given nil)
+  mindwtr-clarify-test--date)
+
+;;; Structure helpers (unchanged surface)
 
 (ert-deftest mindwtr-clarify-inbox-items-in-order ()
   "Markers cover exactly the inbox's direct children, in buffer order."
@@ -63,86 +101,269 @@ inside \"DONE(d)\" on the #+TODO: header line."
       (org-mode))
     (should-error (mindwtr-clarify--inbox-items) :type 'user-error)))
 
-(ert-deftest mindwtr-clarify-empty-inbox-prompts-nothing ()
-  "An empty inbox ends the pass without ever prompting."
+(ert-deftest mindwtr-clarify-empty-inbox-opens-no-wip ()
+  "An empty inbox ends the pass without opening a WIP buffer."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil :tasks nil :settings nil)
-    (mindwtr-clarify-test--feed '() (lambda () (mindwtr-clarify)))))
+    (mindwtr-clarify)
+    (should (null (mindwtr-clarify-test--wip)))))
 
-(ert-deftest mindwtr-clarify-status-relocates-and-advances ()
-  "Setting a status that leaves the inbox finishes the item and moves on:
-`s' `n' (NEXT) clarifies One into single-actions; `n' skips Two in place."
+;;; WIP buffer
+
+(ert-deftest mindwtr-clarify-opens-wip-with-item-copy ()
+  "The session copies the first inbox item into the WIP buffer at level 1,
+in `mindwtr-clarify-mode', pointing back at the source."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (should (derived-mode-p 'mindwtr-clarify-mode))
+      (goto-char (point-min))
+      (outline-next-heading)
+      (should (looking-at-p "\\* INBOX One"))
+      (should (eq mindwtr-clarify--source-buffer src))
+      (should (string= mindwtr-clarify--source-id "t1")))))
+
+(ert-deftest mindwtr-clarify-rejects-second-session ()
+  "Starting a clarify while a WIP buffer is live is a user-error."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (should-error (with-current-buffer src (mindwtr-clarify))
+                  :type 'user-error)))
+
+;;; Outcomes
+
+(ert-deftest mindwtr-clarify-next-action-relocates-and-advances ()
+  "Deciding [n] files One as NEXT under single-actions and loads Two; the
+skip then leaves Two in the inbox and ends the session."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "t1" :title "One" :status "inbox")
                 (:id "t2" :title "Two" :status "inbox"))
         :settings nil)
-    (mindwtr-clarify-test--feed '(?s ?n ?n) (lambda () (mindwtr-clarify)))
-    (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox"))))
-
-(ert-deftest mindwtr-clarify-keeping-inbox-status-stays-in-loop ()
-  "Choosing INBOX from the status picker keeps the item's loop alive (the
-item did not leave the inbox), so a further key is needed to move on."
-  (mindwtr-clarify-test--with-appdata
-      '(:areas nil :projects nil :sections nil
-        :tasks ((:id "t1" :title "One" :status "inbox"))
-        :settings nil)
-    ;; s -> i (INBOX, stays) -> n (skip)
-    (mindwtr-clarify-test--feed '(?s ?i ?n) (lambda () (mindwtr-clarify)))
-    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))))
-
-(ert-deftest mindwtr-clarify-contexts-and-area-stay-on-item ()
-  "Context and area edits act on the item and keep its loop running.
-The `c' action goes through `mindwtr-set-context' (stubbed at its
-completing-read-multiple prompt)."
-  (mindwtr-clarify-test--with-appdata
-      '(:areas ((:id "a1" :name "Personal" :order 0))
-        :projects nil :sections nil
-        :tasks ((:id "t1" :title "One" :status "inbox"))
-        :settings nil)
     (cl-letf (((symbol-function 'completing-read-multiple)
-               (lambda (&rest _) '("@home")))
+               (lambda (&rest _) nil))
               ((symbol-function 'completing-read)
-               (lambda (&rest _) "Personal")))
-      (mindwtr-clarify-test--feed '(?c ?a ?n) (lambda () (mindwtr-clarify))))
-    (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
-      (should (equal (plist-get task :contexts) '("@home")))
-      (should (string= (plist-get task :areaId) "a1"))
-      (should (string= (plist-get task :status) "inbox")))))
+               (lambda (&rest _) (error "unexpected area prompt"))))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?n))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "NEXT")))
+    ;; The WIP now holds Two; skipping it ends the session.
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (goto-char (point-min))
+      (outline-next-heading)
+      (should (looking-at-p "\\* INBOX Two"))
+      (mindwtr-clarify-skip))
+    (should (null (mindwtr-clarify-test--wip)))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox")))))
 
-(ert-deftest mindwtr-clarify-invalid-context-input-keeps-pass-alive ()
-  "A `user-error' from the `c' action (org-unrepresentable typed context)
-is caught like the r/p arms: the loop re-prompts instead of aborting the
-whole pass."
+(ert-deftest mindwtr-clarify-quick-action-marks-done ()
+  "[q] marks the item DONE with a CLOSED stamp and files it in single-actions."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (mindwtr-clarify-test--press ?q)
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "DONE"))
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "DONE One"))
+      (should (re-search-forward
+               "CLOSED:" (save-excursion (org-end-of-subtree t t) (point)) t)))))
+
+(ert-deftest mindwtr-clarify-delegate-sets-who-checkin-and-waits ()
+  "[d] records the delegate, a check-in DEADLINE, and files the item WAIT."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Alice"))
+              ((symbol-function 'org-read-date)
+               #'mindwtr-clarify-test--read-date-stub)
+              ((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil)))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?d))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "WAIT"))
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "WAIT One"))
+      (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_ASSIGNED_TO") "Alice"))
+      (should (re-search-forward
+               "DEADLINE: <2026-06-20"
+               (save-excursion (org-end-of-subtree t t) (point)) t)))))
+
+(ert-deftest mindwtr-clarify-tickler-schedules-next ()
+  "[t] files the item NEXT with the chosen SCHEDULED date (this one outcome
+covers calendar items too -- same NEXT + startTime shape in the model)."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'org-read-date)
+               #'mindwtr-clarify-test--read-date-stub)
+              ((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil)))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?t))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "NEXT"))
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "NEXT One"))
+      (should (re-search-forward
+               "SCHEDULED: <2026-06-20"
+               (save-excursion (org-end-of-subtree t t) (point)) t)))))
+
+(ert-deftest mindwtr-clarify-someday-reference-trash ()
+  "[s] -> someday bucket, [r] -> reference bucket, [x] -> ARCH in place
+(archived has no bucket on purpose; the next sync drops it)."
+  (pcase-dolist (`(,key ,list ,kw)
+                 '((?s "someday-single-actions" "SOMEDAY")
+                   (?r "reference" "REF")
+                   (?x "inbox" "ARCH")))
+    (mindwtr-clarify-test--with-appdata
+        '(:areas nil :projects nil :sections nil
+          :tasks ((:id "t1" :title "One" :status "inbox"))
+          :settings nil)
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press key)
+      (with-current-buffer src
+        (should (string= (mindwtr-clarify-test--parent-list-of "One") list))
+        (should (string= (mindwtr-clarify-test--keyword-of "One") kw))))))
+
+(ert-deftest mindwtr-clarify-wip-edits-written-back-on-decide ()
+  "Rewording the item in the WIP buffer lands in the source on decide."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "One"))
+      (insert " refined"))
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil)))
+      (mindwtr-clarify-test--press ?n))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One refined")
+                       "single-actions"))
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :id) "t1"))
+        (should (string= (plist-get task :title) "One refined"))))))
+
+(ert-deftest mindwtr-clarify-skip-discards-wip-edits ()
+  "Skipping leaves the source item untouched, edits and all."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (mindwtr-clarify)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "One"))
+      (insert " refined")
+      (mindwtr-clarify-skip))
+    (should (null (mindwtr-clarify-test--wip)))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
+      (goto-char (point-min))
+      (should-not (let ((case-fold-search nil))
+                    (re-search-forward "refined" nil t))))))
+
+(ert-deftest mindwtr-clarify-stop-ends-the-pass ()
+  "Stopping in the first item's WIP leaves the rest of the inbox untouched."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "t1" :title "One" :status "inbox")
                 (:id "t2" :title "Two" :status "inbox"))
         :settings nil)
-    (cl-letf (((symbol-function 'completing-read-multiple)
-               (lambda (&rest _) '("bad context")))
-              ((symbol-function 'sit-for) (lambda (&rest _) t)))
-      ;; c (space fails normalize) -> n (skip One) -> s n (NEXT clarifies Two)
-      (mindwtr-clarify-test--feed '(?c ?n ?s ?n) (lambda () (mindwtr-clarify))))
-    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "single-actions"))))
+    (mindwtr-clarify)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (mindwtr-clarify-stop))
+    (should (null (mindwtr-clarify-test--wip)))
+    (should (null mindwtr-clarify--pending))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
+      (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox")))))
 
-(ert-deftest mindwtr-clarify-status-works-on-drawerless-item ()
-  "A hand-written inbox heading without an MW_TYPE drawer still gets the
-type-valid status picker via kind inference, so `s' NEXT relocates it to
-single-actions instead of falling through to plain `org-todo'."
+(ert-deftest mindwtr-clarify-project-outcome-promotes ()
+  "[p] makes the item the first NEXT action of a new ACTIVE project (the
+task keeps its id; the project is a fresh entity)."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Plan party" :status "inbox"))
+        :settings nil)
+    ;; RET through both prompts (project title and next action keep defaults)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &optional init &rest _) (or init ""))))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?p))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "Plan party") "projects"))
+      (let* ((ad (mindwtr-parse-buffer))
+             (proj (car (plist-get ad :projects)))
+             (task (car (plist-get ad :tasks))))
+        (should (string= (plist-get proj :title) "Plan party"))
+        (should (string= (plist-get proj :status) "active"))
+        (should (string= (plist-get task :id) "t1"))
+        (should (string= (plist-get task :status) "next"))
+        (should (string= (plist-get task :projectId) (plist-get proj :id)))))))
+
+(ert-deftest mindwtr-clarify-failed-outcome-keeps-wip-alive ()
+  "An outcome that errors (promote with no `* Projects' container) keeps
+the WIP buffer open for a re-decision instead of advancing."
   (with-temp-buffer
     (let ((org-todo-keywords mindwtr-model-todo-keywords)
           (org-inhibit-startup t))
       (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
-              "** Some idea\n"
-              "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n")
+              "** INBOX Plan party\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
       (org-mode))
     (goto-char (point-min))
-    (mindwtr-clarify-test--feed '(?s ?n) (lambda () (mindwtr-clarify)))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Some idea")
-                     "single-actions"))))
+    (let ((src (current-buffer)))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'read-string)
+                       (lambda (_prompt &optional init &rest _) (or init ""))))
+              (mindwtr-clarify)
+              (mindwtr-clarify-test--press ?p))
+            (should (mindwtr-clarify-test--wip))
+            (with-current-buffer src
+              (should (string= (mindwtr-clarify-test--parent-list-of "Plan party")
+                               "inbox"))))
+        (mindwtr-clarify-test--teardown)))))
+
+(ert-deftest mindwtr-clarify-add-to-project-refiles ()
+  "[a] hands off to `org-refile' with the project-only wiring bound."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "MyProj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (let (seen-verify)
+      (cl-letf (((symbol-function 'org-refile)
+                 (lambda (&rest _)
+                   (setq seen-verify org-refile-target-verify-function)))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) nil)))
+        (mindwtr-clarify)
+        (mindwtr-clarify-test--press ?a))
+      (should (eq seen-verify #'mindwtr-clarify--project-target-p))
+      (should (null (mindwtr-clarify-test--wip))))))
 
 (ert-deftest mindwtr-clarify-refile-targets-only-projects ()
   "The refile wiring offers exactly the buffer's project headings."
@@ -161,58 +382,64 @@ single-actions instead of falling through to plain `org-todo'."
       (should (cl-some (lambda (s) (string-match-p "MyProj" s)) targets))
       (should (cl-some (lambda (s) (string-match-p "LaterProj" s)) targets)))))
 
-(ert-deftest mindwtr-clarify-refile-finishes-item ()
-  "`r' hands off to `org-refile' (with the project wiring bound) and counts
-the item as clarified."
-  (mindwtr-clarify-test--with-appdata
-      '(:areas nil
-        :projects ((:id "p1" :title "MyProj" :status "active"))
-        :sections nil
-        :tasks ((:id "t1" :title "One" :status "inbox")
-                (:id "t2" :title "Two" :status "inbox"))
-        :settings nil)
-    (let (seen-verify)
-      (cl-letf (((symbol-function 'org-refile)
-                 (lambda (&rest _)
-                   (setq seen-verify org-refile-target-verify-function))))
-        (mindwtr-clarify-test--feed '(?r ?n) (lambda () (mindwtr-clarify))))
-      (should (eq seen-verify #'mindwtr-clarify--project-target-p)))))
+;;; Post-decision prompts
 
-(ert-deftest mindwtr-clarify-quit-stops-the-pass ()
-  "`q' on the first item leaves the rest of the inbox untouched and unprompted."
+(ert-deftest mindwtr-clarify-post-prompts-set-contexts-and-area ()
+  "An actionable decision is followed by the contexts prompt and -- when
+the buffer has areas and the item none -- the area prompt."
   (mindwtr-clarify-test--with-appdata
-      '(:areas nil :projects nil :sections nil
-        :tasks ((:id "t1" :title "One" :status "inbox")
-                (:id "t2" :title "Two" :status "inbox"))
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
         :settings nil)
-    (mindwtr-clarify-test--feed '(?q) (lambda () (mindwtr-clarify)))
-    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "inbox"))))
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) '("@home")))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "Personal")))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?n))
+    (with-current-buffer src
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (equal (plist-get task :contexts) '("@home")))
+        (should (string= (plist-get task :areaId) "a1"))
+        (should (string= (plist-get task :status) "next"))))))
 
-(ert-deftest mindwtr-clarify-promote-action-creates-project ()
-  "`p' makes the item the first NEXT action of a new ACTIVE project (the
-task keeps its id; the project is a fresh entity) and finishes the item."
-  (mindwtr-clarify-test--with-appdata
-      '(:areas nil :projects nil :sections nil
-        :tasks ((:id "t1" :title "Plan party" :status "inbox"))
-        :settings nil)
-    ;; RET through both prompts (project title and next action keep defaults)
-    (cl-letf (((symbol-function 'read-string)
-               (lambda (_prompt &optional init &rest _) (or init ""))))
-      (mindwtr-clarify-test--feed '(?p) (lambda () (mindwtr-clarify))))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Plan party") "projects"))
-    (let* ((ad (mindwtr-parse-buffer))
-           (proj (car (plist-get ad :projects)))
-           (task (car (plist-get ad :tasks))))
-      (should (string= (plist-get proj :title) "Plan party"))
-      (should (string= (plist-get proj :status) "active"))
-      (should (string= (plist-get task :id) "t1"))
-      (should (string= (plist-get task :status) "next"))
-      (should (string= (plist-get task :projectId) (plist-get proj :id))))))
+;;; Hand-written items
+
+(ert-deftest mindwtr-clarify-drawerless-item-gets-id-and-clarifies ()
+  "A hand-written inbox heading without a drawer is stamped an MW_ID when
+its WIP opens, so the write-back has a stable handle; [n] then files it."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** Some idea\n"
+              "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((src (current-buffer)))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'completing-read-multiple)
+                       (lambda (&rest _) nil)))
+              (mindwtr-clarify)
+              (with-current-buffer (mindwtr-clarify-test--wip)
+                (should mindwtr-clarify--source-id))
+              (mindwtr-clarify-test--press ?n))
+            (with-current-buffer src
+              (should (string= (mindwtr-clarify-test--parent-list-of "Some idea")
+                               "single-actions"))
+              (goto-char (point-min))
+              (let ((case-fold-search nil)) (re-search-forward "Some idea"))
+              (org-back-to-heading t)
+              (should (org-entry-get nil "MW_ID"))))
+        (mindwtr-clarify-test--teardown)))))
+
+;;; Single-item entry point
 
 (ert-deftest mindwtr-clarify-this-item-only-touches-item-at-point ()
   "`mindwtr-clarify-this-item' triages exactly the item at point: Two is
-clarified to single-actions, One is neither prompted for nor moved."
+clarified to single-actions, One is neither loaded nor moved."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "t1" :title "One" :status "inbox")
@@ -220,11 +447,18 @@ clarified to single-actions, One is neither prompted for nor moved."
         :settings nil)
     (goto-char (point-min))
     (let ((case-fold-search nil)) (re-search-forward "Two"))
-    ;; s -> n (NEXT); the feed has nothing further, so a prompt for One
-    ;; would error out the test.
-    (mindwtr-clarify-test--feed '(?s ?n) (lambda () (mindwtr-clarify-this-item)))
-    (should (string= (mindwtr-clarify-test--parent-list-of "Two") "single-actions"))
-    (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox"))))
+    (mindwtr-clarify-this-item)
+    (with-current-buffer (mindwtr-clarify-test--wip)
+      (goto-char (point-min))
+      (outline-next-heading)
+      (should (looking-at-p "\\* INBOX Two")))
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil)))
+      (mindwtr-clarify-test--press ?n))
+    (should (null (mindwtr-clarify-test--wip)))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "Two") "single-actions"))
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "inbox")))))
 
 (ert-deftest mindwtr-clarify-this-item-climbs-to-inbox-item ()
   "From a heading nested inside an inbox item, this-item acts on the item."
@@ -236,13 +470,16 @@ clarified to single-actions, One is neither prompted for nor moved."
               "*** Book venue\n")
       (org-mode))
     (goto-char (point-min))
-    (let ((case-fold-search nil)) (re-search-forward "Book venue"))
-    (let (prompts)
-      (cl-letf (((symbol-function 'read-char-choice)
-                 (lambda (prompt &rest _) (push prompt prompts) ?n)))
-        (mindwtr-clarify-this-item))
-      (should (= (length prompts) 1))
-      (should (string-match-p "Plan party" (car prompts))))))
+    (unwind-protect
+        (progn
+          (let ((case-fold-search nil)) (re-search-forward "Book venue"))
+          (mindwtr-clarify-this-item)
+          (with-current-buffer (mindwtr-clarify-test--wip)
+            (goto-char (point-min))
+            (outline-next-heading)
+            (should (looking-at-p "\\* INBOX Plan party"))
+            (should (string= mindwtr-clarify--source-id "t1"))))
+      (mindwtr-clarify-test--teardown))))
 
 (ert-deftest mindwtr-clarify-this-item-errors-off-inbox ()
   "Off an inbox item (a single-actions task), this-item is a user-error."

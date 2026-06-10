@@ -1,27 +1,66 @@
 ;;; mindwtr-clarify.el --- Guided inbox triage (clarify workflow) -*- lexical-binding: t; -*-
 ;;; Commentary:
-;; A guided pass over the `* Inbox' items -- the org-gtd clarify/organize
-;; wizard, rebuilt on the existing type-aware commands instead of a new
-;; state machine.  `mindwtr-clarify' visits each inbox item in turn and
-;; runs a single-key action loop: set a type-valid status
-;; (`mindwtr-set-status', which also relocates the item to its status
-;; bucket), set contexts (`mindwtr-set-context'), set an area
-;; (`mindwtr-set-area'), refile under a project (native `org-refile',
-;; offered only mindwtr project headings as targets), or promote the item
-;; into the first NEXT action of a brand new project
-;; (`mindwtr-promote-to-project', mirroring the app's convert-to-project:
-;; the task keeps its MW_ID).  An item is finished when it leaves the inbox
-;; (status change, refile, or promotion) or is skipped; the loop then
-;; advances to the next item.
-;; `mindwtr-clarify-this-item' runs the same action loop for just the inbox
-;; item at point.
+;; The org-gtd clarify/organize workflow, rebuilt on mindwtr's data model.
+;; `mindwtr-clarify' walks the `* Inbox' items one at a time.  Each item is
+;; copied into a dedicated WIP buffer (`mindwtr-clarify-mode', an org-mode
+;; derivative) where it can be reworded and fleshed out freely -- the copy
+;; in the synced buffer stays untouched until a decision is made.  `C-c C-c'
+;; then asks the one clarify question -- what IS this thing? -- with the GTD
+;; flowchart's leaf outcomes as the answers:
+;;
+;;   q  quick action: already done (the two-minute rule) -> DONE
+;;   n  next action -> NEXT, into Single Actions
+;;   d  delegate -> who + check-in date -> WAIT
+;;   t  tickler: defer to a date (incl. calendar items) -> NEXT + SCHEDULED
+;;   p  new project (`mindwtr-promote-to-project'; the task keeps its MW_ID)
+;;   a  add to an existing project (native `org-refile', project targets)
+;;   s  someday/maybe -> SOMEDAY
+;;   r  reference -> REF
+;;   x  trash -> ARCH (dropped from the file on the next sync)
+;;
+;; A decision writes the WIP edits back to the source item (matched by
+;; MW_ID), runs the outcome's own prompts, then the shared post-decision
+;; prompts (contexts always; area when the item has none), sets the keyword,
+;; and relocates the item to its status bucket.  The WIP buffer then loads
+;; the next inbox item.  `C-c C-n' skips an item (WIP edits discarded);
+;; `C-c C-k' stops the pass.  `mindwtr-clarify-this-item' runs the same flow
+;; for just the inbox item at point.
+;;
+;; Deliberately absent from the menu: habit (needs MW_RECURRENCE, still
+;; read-only), and a separate calendar outcome -- in this model both
+;; "happens at a date" and "resurface on a date" are NEXT + SCHEDULED, so
+;; tickler covers them.  Tickler is plain NEXT + future SCHEDULED rather
+;; than a dormant state, since the model has no writable review-at yet.
 ;;; Code:
 
 (require 'org)
 (require 'org-refile)
+(require 'mindwtr-util)
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-commands)
+
+(defconst mindwtr-clarify--wip-buffer-name "*mindwtr-clarify*"
+  "Name of the clarify WIP buffer.  Its liveness marks an active session.")
+
+(defvar mindwtr-clarify--pending nil
+  "Markers at the inbox items still to clarify in the current session.")
+
+(defvar mindwtr-clarify--window-config nil
+  "Window configuration to restore when the clarify session ends.")
+
+(defvar-local mindwtr-clarify--source-buffer nil
+  "The synced buffer the WIP buffer's item came from.")
+
+(defvar-local mindwtr-clarify--source-id nil
+  "MW_ID of the source item the WIP buffer holds a copy of.")
+
+(defconst mindwtr-clarify--outcome-keys '(?q ?n ?d ?t ?p ?a ?s ?r ?x))
+
+(defconst mindwtr-clarify--outcome-menu
+  (concat "What is it?  [q]uick done  [n]ext action  [d]elegate  [t]ickler  "
+          "[p]roject  [a]dd to project  |  [s]omeday  [r]eference  "
+          "[x] trash "))
 
 (defun mindwtr-clarify--show-entry ()
   "Reveal the body of the heading at point (cross-version).
@@ -30,6 +69,12 @@ Emacs 28.1 / Org 9.5, where legacy `outline-*' is the equivalent."
   (if (fboundp 'org-fold-show-entry)
       (org-fold-show-entry)
     (outline-show-entry)))
+
+(defun mindwtr-clarify--show-all ()
+  "Unfold the whole buffer (cross-version, same floor as `--show-entry')."
+  (if (fboundp 'org-fold-show-all)
+      (org-fold-show-all)
+    (outline-show-all)))
 
 (defun mindwtr-clarify--inbox-items ()
   "Return markers at each direct child heading of the inbox container, in order.
@@ -68,83 +113,267 @@ flow needs, without touching the user's global refile config."
         (org-refile-use-cache nil))
     (org-refile)))
 
-(defun mindwtr-clarify--item ()
-  "Run the single-key action loop for the inbox item at point.
-Returns normally when the item is dealt with (it left the inbox) or is
-skipped; throws `mindwtr-clarify--quit' when the user quits the whole pass."
-  (let (done)
-    (while (not done)
-      (org-back-to-heading t)
-      (mindwtr-clarify--show-entry)
-      (let ((ch (read-char-choice
-                 (format "Clarify \"%s\":  [s]tatus  [c]ontexts  [a]rea  [r]efile to project  [p]romote to project  [n]ext  [q]uit "
-                         (org-get-heading t t t t))
-                 '(?s ?c ?a ?r ?p ?n ?q))))
-        (pcase ch
-          (?s (mindwtr-set-status)
-              ;; A status change relocates the item to its bucket; if it left
-              ;; the inbox it is clarified.  Choosing INBOX keeps the loop.
-              (setq done (not (mindwtr-clarify--in-inbox-p))))
-          (?c (condition-case err
-                  (mindwtr-set-context)
-                ;; An org-unrepresentable typed context (or MW_CONTEXTS
-                ;; value) should not abort the whole pass either.
-                (user-error (message "%s" (error-message-string err))
-                            (sit-for 1))))
-          (?a (mindwtr-set-area))
-          (?r (condition-case err
-                  (progn (mindwtr-clarify--refile) (setq done t))
-                ;; e.g. "No refile targets" when the buffer has no projects;
-                ;; keep the loop alive instead of aborting the whole pass.
-                (error (message "%s" (error-message-string err))
-                       (sit-for 1))))
-          (?p (condition-case err
-                  (progn (mindwtr-promote-to-project)
-                         (setq done (not (mindwtr-clarify--in-inbox-p))))
-                ;; The promote guards (not a task, already in a project)
-                ;; should not abort the whole pass either.
-                (user-error (message "%s" (error-message-string err))
-                            (sit-for 1))))
-          (?n (setq done t))
-          (?q (throw 'mindwtr-clarify--quit nil)))))))
+;;; WIP buffer
+
+(define-derived-mode mindwtr-clarify-mode org-mode "Mw-Clarify"
+  "Major mode for the clarify WIP buffer: one inbox item, freely editable.
+\\<mindwtr-clarify-mode-map>Decide what the item is with \
+\\[mindwtr-clarify-decide], skip it with \\[mindwtr-clarify-skip], or stop \
+the pass with \\[mindwtr-clarify-stop]."
+  (setq header-line-format
+        (substitute-command-keys
+         (concat "Clarify item: edit freely · "
+                 "\\[mindwtr-clarify-decide] decide · "
+                 "\\[mindwtr-clarify-skip] skip · "
+                 "\\[mindwtr-clarify-stop] stop"))))
+
+(define-key mindwtr-clarify-mode-map (kbd "C-c C-c") #'mindwtr-clarify-decide)
+(define-key mindwtr-clarify-mode-map (kbd "C-c C-n") #'mindwtr-clarify-skip)
+(define-key mindwtr-clarify-mode-map (kbd "C-c C-k") #'mindwtr-clarify-stop)
+
+(defun mindwtr-clarify--open-wip (marker)
+  "Load the inbox item at MARKER into the WIP buffer and display it.
+Stamps an MW_ID on the source item first when it has none (a hand-written
+heading would get one on the next sync anyway, and the write-back needs a
+stable handle that survives the item moving while the WIP is open)."
+  (let ((source (marker-buffer marker))
+        id text)
+    (with-current-buffer source
+      (save-excursion
+        (goto-char marker)
+        (org-back-to-heading t)
+        (setq id (or (mindwtr-parse--prop "MW_ID")
+                     (let ((new (mindwtr-util-uuid)))
+                       (org-set-property "MW_ID" new)
+                       new)))
+        (setq text (buffer-substring-no-properties
+                    (point)
+                    (save-excursion (org-end-of-subtree t t) (point))))))
+    (let ((buf (get-buffer-create mindwtr-clarify--wip-buffer-name)))
+      (with-current-buffer buf
+        (erase-buffer)
+        ;; The keyword line makes org recognize INBOX/NEXT/... in the WIP
+        ;; buffer exactly as the rendered file does (same single source).
+        (insert (mindwtr-model-todo-keyword-line) "\n")
+        (mindwtr-clarify-mode)
+        (goto-char (point-max))
+        (org-paste-subtree 1 text)
+        (setq mindwtr-clarify--source-buffer source
+              mindwtr-clarify--source-id id)
+        (goto-char (point-min))
+        (outline-next-heading)
+        (mindwtr-clarify--show-all)
+        (set-buffer-modified-p nil))
+      (pop-to-buffer buf))))
+
+(defun mindwtr-clarify--wip-text ()
+  "Return the WIP buffer's item subtree as a string (sans the #+TODO line).
+Signals a `user-error' when the buffer no longer holds a heading."
+  (save-excursion
+    (goto-char (point-min))
+    (unless (org-at-heading-p) (outline-next-heading))
+    (unless (org-at-heading-p)
+      (user-error "mindwtr-clarify: the WIP buffer has no heading left"))
+    (buffer-substring-no-properties (point) (point-max))))
+
+(defun mindwtr-clarify--find-heading-by-id (id)
+  "Return the position of the heading whose MW_ID is ID, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((re (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" (regexp-quote id))))
+      (when (re-search-forward re nil t)
+        (org-back-to-heading t)
+        (point)))))
+
+(defun mindwtr-clarify--write-back (id text)
+  "Replace the subtree of the heading with MW_ID ID by TEXT (level-adjusted).
+Leaves point on the replaced heading.  Signals a `user-error' when no
+heading carries ID anymore."
+  (let ((pos (mindwtr-clarify--find-heading-by-id id)))
+    (unless pos
+      (user-error "mindwtr-clarify: the item vanished from the source buffer"))
+    (goto-char pos)
+    (let ((level (org-current-level)))
+      (delete-region (point)
+                     (save-excursion (org-end-of-subtree t t) (point)))
+      (org-paste-subtree level text))
+    (goto-char pos)
+    (org-back-to-heading t)))
+
+;;; Session plumbing
+
+(defun mindwtr-clarify--finish (msg)
+  "End the clarify session: drop pending markers, kill the WIP, restore windows."
+  (dolist (m mindwtr-clarify--pending) (set-marker m nil))
+  (setq mindwtr-clarify--pending nil)
+  (let ((buf (get-buffer mindwtr-clarify--wip-buffer-name)))
+    (when buf (kill-buffer buf)))
+  (when mindwtr-clarify--window-config
+    (set-window-configuration mindwtr-clarify--window-config)
+    (setq mindwtr-clarify--window-config nil))
+  (message "mindwtr-clarify: %s" msg))
+
+(defun mindwtr-clarify--advance ()
+  "Open the WIP for the next pending inbox item, or end the session.
+A pending marker can collapse onto the next sibling when its item was
+relocated meanwhile; only positions that still hold an inbox heading are
+clarified."
+  (let (found)
+    (while (and mindwtr-clarify--pending (not found))
+      (let ((m (pop mindwtr-clarify--pending)))
+        (if (and (marker-buffer m)
+                 (with-current-buffer (marker-buffer m)
+                   (save-excursion
+                     (goto-char m)
+                     (and (org-at-heading-p) (mindwtr-clarify--in-inbox-p)))))
+            (setq found m)
+          (set-marker m nil))))
+    (if (not found)
+        (mindwtr-clarify--finish "done")
+      (unwind-protect
+          (mindwtr-clarify--open-wip found)
+        (set-marker found nil)))))
+
+(defun mindwtr-clarify--start (markers)
+  "Begin a clarify session over MARKERS (inbox item positions, in order)."
+  (when (get-buffer mindwtr-clarify--wip-buffer-name)
+    (user-error "mindwtr-clarify: a session is already in progress (C-c C-k in %s to stop)"
+                mindwtr-clarify--wip-buffer-name))
+  (setq mindwtr-clarify--pending markers
+        mindwtr-clarify--window-config (current-window-configuration))
+  (mindwtr-clarify--advance))
+
+;;; Outcomes
+
+(defun mindwtr-clarify--finalize (keyword)
+  "Set KEYWORD on the task at point and relocate it to its status bucket.
+DONE gets a CLOSED stamp regardless of the user's `org-log-done' (the app
+records a completion time on done tasks; quick actions should sync one)."
+  (let ((org-log-done (and (string= keyword "DONE") 'time)))
+    (org-todo keyword))
+  (mindwtr-commands--relocate 'task))
+
+(defun mindwtr-clarify--post-prompts (&optional contexts-only)
+  "Shared prompts after an actionable decision: contexts, then area.
+Contexts are always offered (RET keeps them; completion over the buffer's
+@contexts); an org-unrepresentable existing value is reported, not fatal.
+The area prompt fires only when the item has no MW_AREA yet, sits outside
+any project, and the buffer defines areas at all.  CONTEXTS-ONLY skips it --
+used before refiling under a project, where the task's area comes from the
+project."
+  (condition-case err
+      (mindwtr-set-context)
+    (user-error (message "%s" (error-message-string err)) (sit-for 1)))
+  (unless (or contexts-only
+              (mindwtr-parse--prop "MW_AREA")
+              (mindwtr-commands--in-project-p)
+              (null (mindwtr-set-area--names)))
+    (mindwtr-set-area)))
+
+(defun mindwtr-clarify--apply-outcome (ch)
+  "Apply outcome CH (a `mindwtr-clarify--outcome-keys' char) to the heading
+at point in the source buffer.  Point is on the freshly written-back item."
+  (pcase ch
+    ;; Quick action: it took under two minutes and is already done.
+    (?q (mindwtr-clarify--finalize "DONE"))
+    (?n (mindwtr-clarify--post-prompts)
+        (mindwtr-clarify--finalize "NEXT"))
+    (?d (let ((who (string-trim (read-string "Delegate to: "))))
+          (unless (string-empty-p who)
+            (org-set-property "MW_ASSIGNED_TO" who)))
+        ;; The check-in date rides on DEADLINE (dueDate): "when do I chase
+        ;; this up" is the one date a waiting-for item needs.
+        (org-deadline nil)
+        (mindwtr-clarify--post-prompts)
+        (mindwtr-clarify--finalize "WAIT"))
+    ;; Tickler: NEXT plus SCHEDULED (startTime).  Covers calendar items
+    ;; too -- "happens AT the date" and "resurface FROM the date" are the
+    ;; same shape in this model.  No writable review-at yet, so the tickler
+    ;; is a plain deferred next action rather than a dormant state.
+    (?t (org-schedule nil)
+        (mindwtr-clarify--post-prompts)
+        (mindwtr-clarify--finalize "NEXT"))
+    (?p (mindwtr-promote-to-project))
+    ;; Contexts-only post prompts: a task under a project takes its area
+    ;; from the project, so the area question would be noise here.
+    (?a (mindwtr-clarify--post-prompts t)
+        (mindwtr-clarify--refile))
+    (?s (mindwtr-clarify--finalize "SOMEDAY"))
+    (?r (mindwtr-clarify--finalize "REF"))
+    ;; Trash: ARCH has no render bucket on purpose -- the heading keeps its
+    ;; place until the next sync drops archived tasks from the file.
+    (?x (mindwtr-clarify--finalize "ARCH"))))
+
+;;; Commands
+
+(defun mindwtr-clarify-decide ()
+  "Decide what the WIP buffer's item is and file it accordingly.
+Asks the clarify question (see `mindwtr-clarify--outcome-menu'), writes the
+WIP edits back onto the source item, applies the chosen outcome with its
+prompts, and advances to the next inbox item.  An outcome that fails (say,
+promoting with no `* Projects' container) keeps the WIP buffer open so the
+item can be re-decided; the written-back edits are kept either way."
+  (interactive)
+  (unless (derived-mode-p 'mindwtr-clarify-mode)
+    (user-error "mindwtr-clarify-decide: not in a clarify WIP buffer"))
+  (let ((source mindwtr-clarify--source-buffer)
+        (id mindwtr-clarify--source-id)
+        (text (mindwtr-clarify--wip-text))
+        (ch (read-char-choice mindwtr-clarify--outcome-menu
+                              mindwtr-clarify--outcome-keys))
+        (ok t))
+    (unless (buffer-live-p source)
+      (user-error "mindwtr-clarify: the source buffer is gone"))
+    (with-current-buffer source
+      (mindwtr-clarify--write-back id text)
+      (condition-case err
+          (mindwtr-clarify--apply-outcome ch)
+        (error (setq ok nil)
+               (message "%s" (error-message-string err))
+               (sit-for 1))))
+    (when ok (mindwtr-clarify--advance))))
+
+(defun mindwtr-clarify-skip ()
+  "Skip the WIP buffer's item: discard the WIP edits, move to the next one."
+  (interactive)
+  (unless (derived-mode-p 'mindwtr-clarify-mode)
+    (user-error "mindwtr-clarify-skip: not in a clarify WIP buffer"))
+  (mindwtr-clarify--advance))
+
+(defun mindwtr-clarify-stop ()
+  "Stop the clarify pass: discard the WIP edits, leave the rest of the inbox."
+  (interactive)
+  (unless (derived-mode-p 'mindwtr-clarify-mode)
+    (user-error "mindwtr-clarify-stop: not in a clarify WIP buffer"))
+  (mindwtr-clarify--finish "stopped"))
 
 ;;;###autoload
 (defun mindwtr-clarify ()
-  "Triage the inbox: walk the `* Inbox' items one by one through a clarify loop.
-For each item, single keys apply the existing type-aware commands:
+  "Triage the inbox: clarify the `* Inbox' items one by one in a WIP buffer.
+Each item is copied into a `mindwtr-clarify-mode' buffer for free-form
+editing; `\\<mindwtr-clarify-mode-map>\\[mindwtr-clarify-decide]' then asks \
+what the item is:
 
-  s  set a type-valid status (`mindwtr-set-status'); the item immediately
-     relocates to the bucket matching the new status
-  c  set contexts (`mindwtr-set-context', completion over the buffer's
-     @contexts; hashtag tags are preserved)
-  a  set an area (`mindwtr-set-area')
-  r  refile under a project (native `org-refile', project targets only)
-  p  promote: the item becomes the first NEXT action of a new ACTIVE
-     project (`mindwtr-promote-to-project'); sketched child headings
-     become the project's tasks
-  n  skip to the next inbox item
-  q  stop the pass
+  q  quick action, already done       -> DONE
+  n  next action                      -> NEXT
+  d  delegate (who, check-in date)    -> WAIT
+  t  tickler (defer to a date)        -> NEXT + SCHEDULED
+  p  new project (`mindwtr-promote-to-project')
+  a  add to an existing project (refile)
+  s  someday/maybe                    -> SOMEDAY
+  r  reference                        -> REF
+  x  trash                            -> ARCH
 
-An item is finished when it leaves the inbox or is skipped.  To triage a
-single item instead of the whole inbox, use `mindwtr-clarify-this-item'."
+Actionable outcomes are followed by the shared prompts: contexts, and an
+area when the item has none.  The decided item relocates to its status
+bucket and the next inbox item loads.  `\\[mindwtr-clarify-skip]' skips an
+item; `\\[mindwtr-clarify-stop]' stops the pass.  To triage a single item,
+use `mindwtr-clarify-this-item'."
   (interactive)
   (let ((items (mindwtr-clarify--inbox-items)))
     (if (null items)
         (message "mindwtr-clarify: inbox is empty")
-      (unwind-protect
-          (if (catch 'mindwtr-clarify--quit
-                (dolist (m items)
-                  (goto-char m)
-                  ;; A marker can collapse onto the next sibling when its item
-                  ;; was relocated; only clarify positions that still hold an
-                  ;; inbox heading.
-                  (when (and (org-at-heading-p)
-                             (mindwtr-clarify--in-inbox-p))
-                    (mindwtr-clarify--item)))
-                t)
-              (message "mindwtr-clarify: inbox clarified")
-            (message "mindwtr-clarify: stopped"))
-        (dolist (m items) (set-marker m nil))))))
+      (mindwtr-clarify--start items))))
 
 (defun mindwtr-clarify--goto-inbox-item ()
   "Move point to the inbox item containing point.
@@ -161,14 +390,12 @@ when point is not within an inbox item."
 
 ;;;###autoload
 (defun mindwtr-clarify-this-item ()
-  "Run the clarify action loop for just the inbox item at point.
-Offers the same single-key actions as `mindwtr-clarify' (s/c/a/r/p/n/q)
-without advancing to other inbox items; `n' and `q' both simply end it.
-From a heading nested inside an item, acts on the containing item."
+  "Clarify just the inbox item at point, in the same WIP-buffer flow as
+`mindwtr-clarify'.  From a heading nested inside an item, acts on the
+containing item."
   (interactive)
   (mindwtr-clarify--goto-inbox-item)
-  (catch 'mindwtr-clarify--quit
-    (mindwtr-clarify--item)))
+  (mindwtr-clarify--start (list (point-marker))))
 
 (provide 'mindwtr-clarify)
 ;;; mindwtr-clarify.el ends here
