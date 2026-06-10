@@ -23,7 +23,8 @@ JSON snapshot lets changes be detected without re-fetching.
 | `mindwtr-signature.el` | Content signatures (drives change detection) |
 | `mindwtr-shadow.el` | Local shadow snapshot + sync state |
 | `mindwtr-commands.el` | Interactive type-aware status commands |
-| `mindwtr-capture.el` | org-capture entry point (stamps MW_TYPE + MW_ID) |
+| `mindwtr-clarify.el` | Guided inbox triage (`mindwtr-clarify`, the clarify workflow) |
+| `mindwtr-capture.el` | Inbox capture (`mindwtr-capture` + org-capture template; stamps MW_TYPE + MW_ID) |
 | `mindwtr-report.el` | Sync report buffer |
 | `mindwtr-util.el` | Utilities (UUID, etc.) |
 

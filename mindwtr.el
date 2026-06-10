@@ -17,6 +17,7 @@
 (require 'mindwtr-shadow)
 (require 'mindwtr-reconcile)
 (require 'mindwtr-commands)
+(require 'mindwtr-clarify)
 (require 'mindwtr-capture)
 
 (defgroup mindwtr nil "Sync org with Mindwtr Cloud." :group 'org)
@@ -97,6 +98,7 @@ stops such a re-entrant trigger from launching a second concurrent cycle.")
 
 (define-key mindwtr-mode-map (kbd "C-c C-t") #'mindwtr-set-status)
 (define-key mindwtr-mode-map (kbd "C-c C-a") #'mindwtr-set-area)
+(define-key mindwtr-mode-map (kbd "C-c C-q") #'mindwtr-set-context)
 (define-key mindwtr-mode-map (kbd "S-<right>") #'mindwtr-cycle-status-forward)
 (define-key mindwtr-mode-map (kbd "S-<left>") #'mindwtr-cycle-status-backward)
 
