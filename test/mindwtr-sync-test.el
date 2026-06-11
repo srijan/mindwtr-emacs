@@ -4,6 +4,12 @@
 (require 'mindwtr-sync)
 (require 'mindwtr)
 
+;; The archive surface auto-derives a sibling file beside any file-visiting
+;; buffer, so these pre-archive sync tests would each create and leak a shared
+;; `mindwtr_archive.org' buffer across the suite.  Default it OFF here; the
+;; archive-specific tests opt back in by let-binding `mindwtr-archive-file'.
+(setq mindwtr-archive-file (lambda () nil))
+
 (ert-deftest mindwtr-sync-build-candidate-create ()
   "A task absent from the shadow becomes a create: rev 1, gets id+createdAt."
   (let* ((local '(:tasks ((:id nil :mw-kind task :title "new" :status "next"))
@@ -1180,9 +1186,6 @@ when the buffer is modified -- it does not save edits it did not cause."
   (let* ((dir (make-temp-file "mw-noop-save" t))
          (f (make-temp-file "mw-noop-org" nil ".org"))
          (mindwtr-shadow-directory dir)
-         ;; Legacy single-surface scope: keep the archive surface inactive so
-         ;; this exercises the bare HEAD-match noop branch (R9).
-         (mindwtr-archive-file (lambda () nil))
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
          (mindwtr-api-http-function
@@ -1453,9 +1456,6 @@ server's version, and the report must surface that path."
   (let* ((dir (make-temp-file "mw-bak" t))
          (f (make-temp-file "mw-bak-org" nil ".org"))
          (mindwtr-shadow-directory dir)
-         ;; Legacy single-surface scope: the archive surface would add a second
-         ;; backup; keep it inactive so the "exactly one backup" invariant holds.
-         (mindwtr-archive-file (lambda () nil))
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
          ;; The GET deliberately does NOT echo the PUT: the server wins with a

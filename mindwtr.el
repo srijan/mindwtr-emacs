@@ -19,6 +19,7 @@
 (require 'mindwtr-commands)
 (require 'mindwtr-clarify)
 (require 'mindwtr-capture)
+(require 'mindwtr-archive)
 
 (defgroup mindwtr nil "Sync org with Mindwtr Cloud." :group 'org)
 
@@ -211,15 +212,21 @@ cycles never run concurrently."
          (mindwtr--reset-backoff)
          (message "mindwtr: %s" (error-message-string err)))))))
 
+(defun mindwtr--file-buffer-dirty-p (path)
+  "Non-nil when PATH is open in a buffer with unsaved edits.
+Nil when PATH is nil or not visited.  `find-buffer-visiting' gives
+truename/symlink-safe matching."
+  (and path
+       (let ((buf (find-buffer-visiting path)))
+         (and buf (buffer-modified-p buf)))))
+
 (defun mindwtr--buffer-has-unsaved-edits-p ()
-  "Non-nil when the synced file is open in a buffer with unsaved edits.
-Nil when `mindwtr-file' is unset or the file is not open in any buffer (no
-buffer means no in-progress edits, so an automatic sync is free to run and
-rebuild).  Uses `find-buffer-visiting' for truename/symlink-safe matching,
-consistent with the `file-equal-p' guard in `mindwtr--maybe-debounced-sync'."
-  (when mindwtr-file
-    (let ((buf (find-buffer-visiting mindwtr-file)))
-      (and buf (buffer-modified-p buf)))))
+  "Non-nil when the tasks file OR the archive file has unsaved edits open.
+Both are full rebuild targets, so either one dirty must stand down a background
+sync (R10).  Nil when neither is open-and-modified (no buffer means no
+in-progress edits, so an automatic sync is free to run and rebuild)."
+  (or (mindwtr--file-buffer-dirty-p mindwtr-file)
+      (mindwtr--file-buffer-dirty-p (mindwtr-archive-path))))
 
 (defun mindwtr--auto-sync ()
   "Entry point for automatic triggers (save/focus/periodic).
@@ -247,11 +254,12 @@ refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
   ;; pre-save must not separately arm the debounce) but WITHOUT content
   ;; protection: a manual sync is an ordinary user save, so the user's
   ;; before-save-hooks run, exactly as a real `C-x C-s' would (KTD-7).
-  (when mindwtr-file
-    (let ((buf (find-buffer-visiting mindwtr-file)))
-      (when (and buf (buffer-modified-p buf))
-        (with-current-buffer buf
-          (mindwtr-sync--save-buffer-quietly)))))
+  (dolist (path (list mindwtr-file (mindwtr-archive-path)))
+    (when path
+      (let ((buf (find-buffer-visiting path)))
+        (when (and buf (buffer-modified-p buf))
+          (with-current-buffer buf
+            (mindwtr-sync--save-buffer-quietly))))))
   (mindwtr--sync-attempt))
 
 ;;;###autoload
@@ -279,13 +287,17 @@ refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
       (message "mindwtr: bootstrapped from server"))))
 
 (defun mindwtr--maybe-debounced-sync ()
-  "Schedule a debounced auto-sync after saving the mindwtr file.
-A save the engine itself performed (`mindwtr--inhibit-save-sync' bound)
-is ignored outright: it leaves any pending debounce timer untouched, so
-the engine's own writes never echo a stray HEAD-only sync ~5s later."
+  "Schedule a debounced auto-sync after saving the tasks OR the archive file.
+Both are synced rebuild targets, so a save of either arms the debounce (R10);
+a save of any other file is ignored.  A save the engine itself performed
+(`mindwtr--inhibit-save-sync' bound) is ignored outright: it leaves any pending
+debounce timer untouched, so the engine's own writes never echo a stray
+HEAD-only sync ~5s later."
   (unless mindwtr--inhibit-save-sync
-    (when (and mindwtr-file buffer-file-name
-               (file-equal-p buffer-file-name mindwtr-file))
+    (when (and buffer-file-name
+               (or (and mindwtr-file (file-equal-p buffer-file-name mindwtr-file))
+                   (let ((ap (mindwtr-archive-path)))
+                     (and ap (file-equal-p buffer-file-name ap)))))
       (when mindwtr--debounce-timer (cancel-timer mindwtr--debounce-timer))
       (setq mindwtr--debounce-timer
             (run-with-idle-timer mindwtr-sync-idle-debounce nil #'mindwtr--auto-sync)))))

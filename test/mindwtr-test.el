@@ -3,6 +3,11 @@
 (require 'cl-lib)
 (require 'mindwtr)
 
+;; Default the archive surface OFF for the pre-archive trigger/gate tests (it
+;; auto-derives a sibling file beside any file-visiting buffer).  The R10
+;; archive-aware tests opt back in by let-binding `mindwtr-archive-file'.
+(setq mindwtr-archive-file (lambda () nil))
+
 (defun mindwtr-test--kill-file-buffer (f)
   "Kill the buffer visiting F without a modified-buffer prompt."
   (when (get-file-buffer f)
@@ -458,3 +463,67 @@ is never handed a null value (the Cloud server 500s on that).  Guards the
       (mindwtr-test--kill-file-buffer f)
       (when (file-exists-p f) (delete-file f))
       (delete-directory dir t))))
+
+;;; U7: auto-sync triggers + edit gates cover the archive file ---------------
+
+(ert-deftest mindwtr-debounce-arms-from-archive-buffer ()
+  "Covers R10.  A save of the archive file arms the debounce; a save of an
+unrelated org file in the same directory does not."
+  (let* ((root (make-temp-file "mw-r10-deb" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (other-file (expand-file-name "notes.org" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-sync-idle-debounce 5)
+         (mindwtr--debounce-timer nil)
+         (mindwtr--inhibit-save-sync nil))
+    (unwind-protect
+        (progn
+          ;; the files must exist so `file-equal-p' resolves truenames
+          (with-temp-file tasks-file (insert ""))
+          (with-temp-file archive-file (insert ""))
+          (with-temp-file other-file (insert ""))
+          ;; archive buffer save -> armed
+          (with-temp-buffer
+            (setq buffer-file-name archive-file)
+            (mindwtr--maybe-debounced-sync))
+          (should (timerp mindwtr--debounce-timer))
+          (cancel-timer mindwtr--debounce-timer)
+          (setq mindwtr--debounce-timer nil)
+          ;; unrelated file save -> NOT armed
+          (with-temp-buffer
+            (setq buffer-file-name other-file)
+            (mindwtr--maybe-debounced-sync))
+          (should-not mindwtr--debounce-timer))
+      (when (timerp mindwtr--debounce-timer) (cancel-timer mindwtr--debounce-timer))
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-unsaved-edits-gate-covers-archive-buffer ()
+  "Covers R10.  A dirty archive buffer (clean main) makes the gate report edits;
+both clean reports none."
+  (let* ((root (make-temp-file "mw-r10-gate" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file (insert "* x\n"))
+          (with-temp-file archive-file (insert "* Archive\n"))
+          (with-current-buffer (find-file-noselect tasks-file)
+            (with-current-buffer (find-file-noselect archive-file)
+              ;; both clean -> no edits
+              (should-not (mindwtr--buffer-has-unsaved-edits-p))
+              ;; dirty the archive buffer only
+              (goto-char (point-max))
+              (insert "** dirty\n")
+              (should (buffer-modified-p))
+              (should (mindwtr--buffer-has-unsaved-edits-p))
+              (set-buffer-modified-p nil))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(provide 'mindwtr-test)
+;;; mindwtr-test.el ends here
