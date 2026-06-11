@@ -435,8 +435,13 @@ with `mindwtr-reconcile--quarantine-note'."
         (insert s)
         (unless (string-suffix-p "\n" s) (insert "\n"))))))
 
-(defun mindwtr-reconcile-buffer (merged)
-  "Rebuild the current buffer to the canonical GTD-list layout of MERGED.
+(defun mindwtr-reconcile-buffer (merged &optional render-fn)
+  "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
+RENDER-FN is the (APPDATA &optional ORG-ONLY) -> string renderer, defaulting to
+`mindwtr-render-appdata' (the main GTD-list surface); the archive surface
+passes `mindwtr-render-archive-appdata'.  Everything else here -- org-only
+preservation, quarantine, point/view restore -- is buffer-generic and works for
+any surface.
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
 point is restored to the entity it was on, and user-visible view state
 \(folds) is snapshotted before the rebuild and reapplied after.  Headings the
@@ -463,7 +468,8 @@ silently erased."
            ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
            ;; status from the server), the buffer is left intact rather than
            ;; wiped between erase and insert.
-           (rendered (mindwtr-render-appdata merged org-only)))
+           (rendered (funcall (or render-fn #'mindwtr-render-appdata)
+                              merged org-only)))
       (let ((inhibit-message t))
         (erase-buffer)
         (insert rendered))

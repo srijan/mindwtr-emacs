@@ -107,11 +107,12 @@ with fast-access keys and the done-state separator."
   (should (equal mindwtr-model-list-roles
                  '("inbox" "single-actions" "projects"
                    "someday" "someday-single-actions" "someday-projects"
-                   "reference" "areas")))
+                   "reference" "areas" "archive")))
   (should (string= (mindwtr-model-list-title "single-actions") "Single Actions"))
   (should (string= (mindwtr-model-list-title "someday-single-actions") "Single Actions"))
   (should (string= (mindwtr-model-list-title "someday-projects") "Projects"))
-  (should (string= (mindwtr-model-list-title "areas") "Areas of Focus")))
+  (should (string= (mindwtr-model-list-title "areas") "Areas of Focus"))
+  (should (string= (mindwtr-model-list-title "archive") "Archive")))
 
 (ert-deftest mindwtr-model-status->list-maps-standalone-statuses ()
   (should (string= (mindwtr-model-status->list "inbox") "inbox"))

@@ -393,5 +393,86 @@ are not rendered."
       (setq out (concat out (mindwtr-render--entity a 'area 2 org-only))))
     out))
 
+;;; Archive surface render -----------------------------------------------------
+
+(defun mindwtr-render--inject-containment (rendered task)
+  "Inject TASK's MW_PROJECT_ID/MW_SECTION_ID into RENDERED's PROPERTIES drawer.
+The props are placed immediately before the drawer's `:END:' (the first one in
+RENDERED, which closes the sole PROPERTIES drawer -- any grafted LOGBOOK sits
+after it), at a fixed point so the render round-trips byte-stably (KTD4, R4).
+A no-op when TASK carries neither containment id."
+  (let (props)
+    (when (plist-get task :projectId)
+      (push (format ":MW_PROJECT_ID: %s" (plist-get task :projectId)) props))
+    (when (plist-get task :sectionId)
+      (push (format ":MW_SECTION_ID: %s" (plist-get task :sectionId)) props))
+    (if (null props) rendered
+      (let ((i (string-match "\n:END:\n" rendered)))
+        (if (not i) rendered
+          (concat (substring rendered 0 i)
+                  "\n" (mapconcat #'identity (nreverse props) "\n")
+                  (substring rendered i)))))))
+
+(defun mindwtr-render--archived-in-subtree-p (task arch-proj-ids arch-section-ids)
+  "Non-nil if TASK renders inside an archived project's subtree, not flat.
+A task whose nearest container (section first, else project) belongs to an
+archived project rendered in this file is pulled into that subtree by
+`mindwtr-render--project-subtree'; such a task must be excluded from the flat
+archived-task list so it appears exactly once (R3).  ARCH-PROJ-IDS and
+ARCH-SECTION-IDS are the ids of the archived projects and of the sections that
+belong to them."
+  (let ((sid (plist-get task :sectionId))
+        (pid (plist-get task :projectId)))
+    (cond (sid (and (member sid arch-section-ids) t))
+          (pid (and (member pid arch-proj-ids) t))
+          (t nil))))
+
+(defun mindwtr-render-archive-appdata (appdata &optional org-only)
+  "Render APPDATA's archived entities to the canonical archive-file layout.
+The mirror of `mindwtr-render-appdata' for the second (archive) surface: a
+single `* Archive' container holding (a) flat archived standalone/live-project
+tasks at level 2 -- each carrying its containment as explicit
+MW_PROJECT_ID/MW_SECTION_ID drawer props since its parent renders in the OTHER
+file (KTD4) -- then (b) archived projects as full subtrees, whose own
+done/next/archived children render inside them via ancestry (no props needed).
+Tombstoned entities are dropped; live (non-archived) entities never appear here.
+ORG-ONLY is the same id -> (:body :extra) preserved-content hash reconcile
+passes the main render.  Ordering reuses the shared sort helpers for
+determinism, and the render round-trips byte-stably (R4)."
+  (let* ((mindwtr-render-area-names (mindwtr-render--area-name-map appdata))
+         (area-order (mindwtr-render--area-order-map appdata))
+         ;; Non-tombstoned, archived NOT dropped: the archive file is exactly
+         ;; where archived entities live.
+         (sections (mindwtr-render--live (plist-get appdata :sections)))
+         (tasks (mindwtr-render--live (plist-get appdata :tasks)))
+         (arch-projects
+          (cl-remove-if-not
+           (lambda (p) (equal (plist-get p :status) "archived"))
+           (mindwtr-render--live (plist-get appdata :projects))))
+         (arch-proj-ids (mapcar (lambda (p) (plist-get p :id)) arch-projects))
+         (arch-section-ids
+          (mapcar (lambda (s) (plist-get s :id))
+                  (cl-remove-if-not
+                   (lambda (s) (member (plist-get s :projectId) arch-proj-ids))
+                   sections)))
+         (flat-tasks
+          (cl-remove-if-not
+           (lambda (tk)
+             (and (equal (plist-get tk :status) "archived")
+                  (not (mindwtr-render--archived-in-subtree-p
+                        tk arch-proj-ids arch-section-ids))))
+           tasks))
+         (out (concat (mindwtr-model-todo-keyword-line) "\n")))
+    (setq out (concat out (mindwtr-render--container "archive" 1)))
+    ;; (a) flat archived tasks, containment props injected into the drawer
+    (dolist (tk (mindwtr-render--sorted flat-tasks))
+      (setq out (concat out (mindwtr-render--inject-containment
+                             (mindwtr-render--entity tk 'task 2 org-only) tk))))
+    ;; (b) archived projects as full subtrees (children NOT dropped for archived)
+    (dolist (proj (mindwtr-render--sorted-projects arch-projects area-order))
+      (setq out (concat out (mindwtr-render--project-subtree
+                             proj 2 sections tasks org-only))))
+    out))
+
 (provide 'mindwtr-render)
 ;;; mindwtr-render.el ends here

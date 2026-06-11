@@ -13,6 +13,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-render)
+(require 'mindwtr-archive)
 
 (defun mindwtr-commands--kind-at-point ()
   "Return the MW_TYPE symbol of the heading at point, or nil."
@@ -31,6 +32,18 @@ Return the chosen keyword string, or nil on quit."
     (car (rassq ch choices))))
 
 ;;;###autoload
+(defun mindwtr-commands--route-after-keyword (kind keyword)
+  "Place the KIND entity at point after its keyword changed to KEYWORD.
+ARCH with the archive surface active refiles the heading into the archive file
+now (R5, best-effort per R7); any other keyword -- or ARCH with the surface
+inactive -- relocates within the main file.  The single home for this routing,
+so every keyword-setting command (`mindwtr-set-status' and
+`mindwtr-commands--cycle') stays in lockstep instead of each re-deciding where
+an ARCH'd heading goes."
+  (if (and (string= keyword "ARCH") (mindwtr-archive-path))
+      (mindwtr-archive-refile-best-effort)
+    (mindwtr-commands--relocate kind)))
+
 (defun mindwtr-set-status ()
   "Set the TODO status of the entity at point, offering only type-valid keywords.
 Shadows `org-todo' in `mindwtr-mode'.  After setting, relocate a standalone
@@ -44,7 +57,7 @@ task or a project to the container matching its new status."
                  kind (mindwtr-model-status-choices kind))))
         (when kw
           (save-excursion (org-back-to-heading t) (org-todo kw))
-          (mindwtr-commands--relocate kind))))))
+          (mindwtr-commands--route-after-keyword kind kw))))))
 
 (defun mindwtr-set-area--names ()
   "Return the area names defined in the current buffer (for completion)."
@@ -223,9 +236,10 @@ then relocate.  Falls back to plain org shift-cycling off Mindwtr headings."
              (cur (save-excursion (org-back-to-heading t) (org-get-todo-state)))
              (idx (and cur (cl-position cur kws :test #'string=)))
              (next (cond ((null idx) (if (> dir 0) 0 (1- (length kws))))
-                         (t (mod (+ idx dir) (length kws))))))
-        (save-excursion (org-back-to-heading t) (org-todo (nth next kws)))
-        (mindwtr-commands--relocate kind)))))
+                         (t (mod (+ idx dir) (length kws)))))
+             (kw (nth next kws)))
+        (save-excursion (org-back-to-heading t) (org-todo kw))
+        (mindwtr-commands--route-after-keyword kind kw)))))
 
 (defun mindwtr-commands--stamp-missing-child-keywords ()
   "Give NEXT to every descendant heading of the subtree at point lacking a keyword.

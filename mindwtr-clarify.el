@@ -39,6 +39,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-commands)
+(require 'mindwtr-archive)
 
 (defconst mindwtr-clarify--wip-buffer-name "*mindwtr-clarify*"
   "Name of the clarify WIP buffer.  Its liveness marks an active session.")
@@ -316,9 +317,17 @@ at point in the source buffer.  Point is on the freshly written-back item."
         (mindwtr-clarify--refile))
     (?s (mindwtr-clarify--finalize "SOMEDAY"))
     (?r (mindwtr-clarify--finalize "REF"))
-    ;; Trash: ARCH has no render bucket on purpose -- the heading keeps its
-    ;; place until the next sync drops archived tasks from the file.
-    (?x (mindwtr-clarify--finalize "ARCH"))))
+    ;; Trash: ARCH.  With the archive surface active the heading refiles into
+    ;; the archive file right now (R5); the id-based session queue skips the
+    ;; vanished heading rather than re-presenting it.  Best-effort (R7): on
+    ;; failure the keyword stays ARCH and the next sync files it.  With the
+    ;; surface inactive, fall back to the legacy in-place finalize -- the
+    ;; heading keeps its place until the next sync drops archived tasks.
+    (?x (if (mindwtr-archive-path)
+            (progn
+              (save-excursion (org-back-to-heading t) (org-todo "ARCH"))
+              (mindwtr-archive-refile-best-effort))
+          (mindwtr-clarify--finalize "ARCH")))))
 
 ;;; Commands
 

@@ -96,8 +96,10 @@ This means you can never accidentally apply a task-only keyword (`INBOX`, `NEXT`
 
 **Immediate relocation.** After a status change, a standalone task or a project
 is moved to the bucket matching its new status right away — no need to wait for
-the next sync. A task inside a project, a section heading, and an archived entity
-are left in place (they have no independent bucket to relocate to).
+the next sync. Setting `ARCH` (with the archive surface active) refiles the
+heading into the archive file immediately instead (see "The archive file"); a
+task inside a project and a section heading are left in place (they have no
+independent bucket to relocate to).
 
 **Re-parenting.** Moving a task into or out of a project is done with standard
 `C-c C-w` (`org-refile`). Containment is encoded by outline nesting, so nesting a
@@ -128,6 +130,44 @@ org-capture, or editing outside `mindwtr-mode` is never silently lost:
 
 **Fallback.** Off a Mindwtr task or project heading these keys fall back to
 standard org behaviour (`org-todo`, `org-shiftright` / `org-shiftleft`).
+
+### The archive file
+
+Archived work lives in a **second synced org file** — `mindwtr_archive.org` by
+default, beside your tasks file. It is not a write-once log: the sync engine
+parses it as local state and reconcile rebuilds it canonically every full
+cycle, exactly like the main file. That makes it a full citizen of the sync:
+
+- **Archived work from every device lands here.** The first sync after enabling
+  the surface backfills your entire historical archived set into the file; after
+  that, anything archived on another client appears on the next sync.
+- **Archiving is immediate.** Clarify's trash outcome, choosing `ARCH` via
+  `mindwtr-set-status`, and `M-x mindwtr-archive-item-at-point` (archive the
+  task/project at point) all refile the heading into the archive file right
+  away. This is a convenience only — if it can't (or the surface is inactive),
+  the heading keeps its `ARCH` keyword and the next sync performs the identical
+  move. An archived task whose project is still active keeps its containment via
+  `MW_PROJECT_ID`/`MW_SECTION_ID` drawer properties; an archived project renders
+  as its full subtree.
+- **Un-archive by editing the keyword.** Change an entry's `ARCH` to `NEXT` (or
+  any active keyword) and sync: the entity moves back to the tasks file,
+  un-archived on every device. Content edits sync like main-file edits.
+- **Deleting a heading deletes the entity on the server.** Once the archive
+  file has been rendered at least once, removing a heading from it and syncing
+  is a real, propagated delete — not a local hide. (Until that first render, a
+  missing archived entity is always echoed, never deleted, so the deploy can't
+  mass-delete the not-yet-written backlog; an absent archive file likewise reads
+  as "not yet rendered", never as "everything was deleted".) The per-cycle
+  backups under `backups/` (now covering both files) and the sync report's
+  deleted count are the safety net.
+- **It edits like the tasks file.** Saving it arms the debounced auto-sync, its
+  unsaved edits stand down background rebuilds, a manual `M-x mindwtr-sync`
+  saves it first alongside the tasks file, and its buffer opens in
+  `mindwtr-mode`.
+
+Set `mindwtr-archive-file` to override the location: a string path, or a
+function returning a path. Left `nil` (the default) it derives
+`mindwtr_archive.org` beside `mindwtr-file`.
 
 ## Usage
 
@@ -202,7 +242,7 @@ GTD flowchart's outcomes as the answers:
 | `a` | Add to existing project | Native `org-refile`, project headings as the only targets |
 | `s` | Someday/Maybe | `SOMEDAY`, into the Someday bucket |
 | `r` | Reference | `REF`, into Reference |
-| `x` | Trash | `ARCH`; the heading keeps its place until the next sync drops archived tasks |
+| `x` | Trash | `ARCH`; refiles into the archive file immediately (or, with the surface inactive, keeps its place until the next sync) |
 
 A decision first writes the WIP edits back onto the source item (matched by
 `MW_ID`), runs the outcome's own prompts, then the shared post-decision
@@ -248,6 +288,7 @@ task ordering and project semantics.
 | `mindwtr-server-url` | `nil` | Base URL of the Mindwtr Cloud server. |
 | `mindwtr-auth-token` | `nil` | Bearer token; if `nil`, looked up via auth-source. |
 | `mindwtr-file` | `nil` | Path to the synced org file. |
+| `mindwtr-archive-file` | `nil` | Archive file location: `nil` derives `mindwtr_archive.org` beside `mindwtr-file`; a string is a path; a function is called for one. |
 | `mindwtr-sync-idle-debounce` | `5` | Idle seconds after save before auto-sync. |
 | `mindwtr-sync-interval` | `600` | Seconds between periodic syncs (`nil` disables). |
 | `mindwtr-backup-retention-days` | `3` | Days to keep pre-sync backups; pruned after each sync (`nil`/`0` keeps forever). |
@@ -271,8 +312,8 @@ which — `* Someday` — is a container holding two nested sub-buckets:
 Tasks and projects have **disjoint** valid statuses. Task statuses are `inbox`,
 `next`, `waiting`, `someday`, `reference`, `done`, and `archived`. Project
 statuses are `active`, `waiting`, `someday`, and `archived`. Archived entities
-are not rendered into the file — see "Archived projects preserve their tasks"
-below.
+are not rendered into this file — they render in the archive file instead (see
+"The archive file").
 
 ### Entity schema
 
@@ -471,22 +512,21 @@ edited).
 
 ## Behavior notes
 
-### Archived projects preserve their tasks
+### Archived projects render in the archive file
 
 When a project is archived, Mindwtr moves the project's incomplete tasks to
-Done and keeps them inside the (now hidden) project. mindwtr-emacs hides an
-archived project's entire subtree from the org file — the project, its
-sections, and its tasks are not rendered — and **preserves those entities on
-the server**: they are echoed back verbatim on each sync (never tombstoned)
-rather than having their status rewritten. An entity whose absence from org is
-expected — because it is archived, its parent container does not render, or
-(for a standalone task) its status maps to no list — is therefore never
-mistaken for a user deletion. This is decided by
-`mindwtr-sync--rendered-absent-p`.
+Done and keeps them inside it. With the archive surface active, mindwtr-emacs
+renders the archived project's entire subtree — the project, its sections, and
+their tasks — into the archive file (see "The archive file"), and a sync that
+finds an archived entity missing from local state treats that as a real
+deletion once the surface has been rendered.
 
-**TODO / to verify manually:** the end-to-end behavior of archiving a project
-that has live/done child tasks against a real server has not yet been
-exercised. Confirm that the children are preserved (not deleted) across a sync,
-and that they reappear correctly if the project is un-archived. The path is
-guarded by `mindwtr-sync--rendered-absent-p` and covered by unit tests, but has
-not been run against the live server.
+**Legacy mode (surface inactive).** When no archive file is in play (the main
+buffer visits no file and `mindwtr-archive-file` is unset), archived entities
+are simply not rendered, and they are **preserved on the server**: echoed back
+verbatim on each sync (never tombstoned) rather than having their status
+rewritten. An entity whose absence from org is expected — because it is
+archived, its parent container does not render, or (for a standalone task) its
+status maps to no list — is never mistaken for a user deletion. This is decided
+by `mindwtr-sync--rendered-absent-p` with strict mode off
+(`mindwtr-sync--archive-strict`).

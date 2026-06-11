@@ -16,8 +16,14 @@
   '("MW_TYPE" "MW_ID" "MW_ENERGY" "MW_TIME_ESTIMATE" "MW_RECURRENCE"
     "MW_ASSIGNED_TO" "MW_FOCUS_TODAY" "MW_REVIEW_AT" "MW_LOCATION"
     "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "MW_AREA_ID" "MW_AREA" "MW_ATTACH"
-    "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS")
-  "PROPERTIES keys the parser interprets; all others are preserved verbatim.")
+    "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS"
+    "MW_PROJECT_ID" "MW_SECTION_ID")
+  "PROPERTIES keys the parser interprets; all others are preserved verbatim.
+MW_PROJECT_ID/MW_SECTION_ID carry an archived task's containment explicitly
+across the file split (KTD4): in the archive file a task whose project is still
+live cannot nest under it, so the render emits the parent id as a drawer prop
+and the task branch of `mindwtr-parse-buffer' honors it over outline ancestry.
+They are listed here so they never leak into `:mw-extra-props'.")
 
 (defun mindwtr-parse-ensure-keywords ()
   "Make sure the Mindwtr TODO keywords are recognized in this buffer.
@@ -374,8 +380,16 @@ container's :MW_LIST: plus project/section ancestry:
                   (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) sections))
                ('task
-                (let ((sid (mindwtr-parse--ancestor-id 'section))
-                      (pid (mindwtr-parse--ancestor-id 'project)))
+                ;; Containment: an explicit MW_SECTION_ID/MW_PROJECT_ID drawer
+                ;; prop (the archive file's cross-split carrier, KTD4) wins over
+                ;; outline ancestry per axis; section then takes precedence over
+                ;; project, exactly as the ancestry-only cond did.  In the main
+                ;; file the props are never emitted, so this is identical to
+                ;; the prior ancestry walk there.
+                (let ((sid (or (mindwtr-parse--prop "MW_SECTION_ID")
+                               (mindwtr-parse--ancestor-id 'section)))
+                      (pid (or (mindwtr-parse--prop "MW_PROJECT_ID")
+                               (mindwtr-parse--ancestor-id 'project))))
                   (cond (sid (setq e (plist-put e :sectionId sid)))
                         (pid (setq e (plist-put e :projectId pid)))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))

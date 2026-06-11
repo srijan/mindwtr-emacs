@@ -76,6 +76,22 @@ post-upgrade cycle (see `mindwtr-sync-build-candidate').  Parallel to
   (mindwtr-shadow--ensure-dir)
   (mindwtr-util-atomic-write (mindwtr-shadow--path "fields-migrated") "1"))
 
+(defun mindwtr-shadow-archive-migrated-p ()
+  "Non-nil once the archive surface has been durably rendered and saved once.
+Before this latch is set, the archive file does not yet exist on disk, so an
+archived entity absent from local state cannot be a user deletion -- it is the
+not-yet-rendered backlog and must be echoed, never tombstoned (R8).  Once the
+archive surface has been rendered AND the save confirmed, strict absence
+semantics activate: a missing archived entity is a real deletion.  Parallel to
+`mindwtr-shadow-notes-migrated-p' / `mindwtr-shadow-fields-migrated-p' and
+flipped with the same post-save discipline in `mindwtr-sync-once' (KTD5)."
+  (and (mindwtr-util-read-file (mindwtr-shadow--path "archive-migrated")) t))
+
+(defun mindwtr-shadow-set-archive-migrated ()
+  "Record that the archive surface has been durably rendered (one-way latch)."
+  (mindwtr-shadow--ensure-dir)
+  (mindwtr-util-atomic-write (mindwtr-shadow--path "archive-migrated") "1"))
+
 (defun mindwtr-shadow-device-id ()
   "Return the stable device id, generating and persisting one if needed."
   (let ((path (mindwtr-shadow--path "device-id")))
@@ -95,10 +111,12 @@ post-upgrade cycle (see `mindwtr-sync-build-candidate').  Parallel to
 
 (defun mindwtr-shadow--backup-time (filename)
   "Return the encoded time parsed from a backup FILENAME, or nil.
-FILENAME is a non-directory name like \"mindwtr-20260604T080500.org\".
-Returns nil for any name that does not match the mindwtr backup pattern."
+FILENAME is a non-directory name like \"mindwtr-20260604T080500.org\" or the
+archive surface's \"mindwtr-archive-20260604T080500.org\".  Returns nil for any
+name that does not match the mindwtr backup pattern."
   (when (string-match
-         "\\`mindwtr-\\([0-9]\\{8\\}\\)T\\([0-9]\\{6\\}\\)\\.org\\'" filename)
+         "\\`mindwtr\\(?:-archive\\)?-\\([0-9]\\{8\\}\\)T\\([0-9]\\{6\\}\\)\\.org\\'"
+         filename)
     (let ((d (match-string 1 filename))
           (tm (match-string 2 filename)))
       (encode-time (string-to-number (substring tm 4 6))  ; sec

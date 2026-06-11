@@ -19,7 +19,8 @@ JSON snapshot lets changes be detected without re-fetching.
 | `mindwtr-model.el` | Data model & validation (content-field definitions) |
 | `mindwtr-parse.el` | org buffer → appdata content (incl. MW_TYPE inference) |
 | `mindwtr-render.el` | appdata → canonical org text |
-| `mindwtr-reconcile.el` | Apply merged appdata into the buffer; view-state + quarantine |
+| `mindwtr-reconcile.el` | Apply merged appdata into the buffer (per surface, via a render fn); view-state + quarantine |
+| `mindwtr-archive.el` | Archive-file surface: path/buffer resolution, archive renderer entry, immediate refile (`mindwtr-archive-item-at-point`) |
 | `mindwtr-signature.el` | Content signatures (drives change detection) |
 | `mindwtr-shadow.el` | Local shadow snapshot + sync state |
 | `mindwtr-commands.el` | Interactive type-aware status commands |
@@ -35,7 +36,10 @@ JSON snapshot lets changes be detected without re-fetching.
   detection (`org-invisible-p`, not `org-fold-folded-p`).
 - **Round-trip byte-stability.** Any description/text transform must be its own inverse across
   render→parse→render. A non-stable transform phantom-churns the content signature on every
-  sync. Add a round-trip test for every new transform.
+  sync. Add a round-trip test for every new transform. **This obligation applies to the archive
+  file too:** `mindwtr-render-archive-appdata` is a second render surface and must round-trip
+  byte-stably exactly like the main render (its injected `MW_PROJECT_ID`/`MW_SECTION_ID`
+  containment props land at a fixed drawer position for that reason).
 - **Safe-by-default on reconcile.** Reconcile does a full `erase-buffer`+rebuild; it must never
   silently destroy user content. Anything the parser can't place is quarantined under
   `* Sync Failures`, not dropped.
