@@ -19,7 +19,15 @@
 ;; has loaded, without this lower layer depending on it.
 ;;; Code:
 
+(require 'org)
+(require 'mindwtr-model)
+(require 'mindwtr-parse)
+(require 'mindwtr-render)
+
 (defvar mindwtr-file)
+;; Declared in `mindwtr-sync' (the layer that requires this one), so the quiet
+;; save below can stand down the after-save debounce without a require cycle.
+(defvar mindwtr--inhibit-save-sync)
 (declare-function mindwtr-mode "mindwtr")
 
 (defcustom mindwtr-archive-file nil
@@ -71,6 +79,98 @@ so it carries the Mindwtr TODO keywords and status keybindings (R10)."
           (with-current-buffer buf
             (unless (derived-mode-p 'mindwtr-mode) (mindwtr-mode))))
         buf))))
+
+;;; Immediate refile -----------------------------------------------------------
+
+(defun mindwtr-archive--target-or-error ()
+  "Return (KIND . ID) for the refilable heading at point, or signal `user-error'.
+Signals -- WITHOUT mutating the buffer -- when the archive surface is inactive,
+point is not on a task or project heading, or the heading lacks an MW_ID."
+  (unless (mindwtr-archive-path)
+    (user-error "mindwtr-archive: the archive surface is inactive (no archive file)"))
+  (save-excursion
+    (unless (ignore-errors (org-back-to-heading t) t)
+      (user-error "mindwtr-archive: point is not on a heading"))
+    (let ((kind (let ((ty (mindwtr-parse--prop "MW_TYPE"))) (and ty (intern ty))))
+          (id (mindwtr-parse--prop "MW_ID")))
+      (unless (memq kind '(task project))
+        (user-error "mindwtr-archive: point is not on a task or project heading"))
+      (unless id
+        (user-error "mindwtr-archive: heading has no MW_ID"))
+      (cons kind id))))
+
+(defun mindwtr-archive--ensure-container ()
+  "Return the position of the archive buffer's `* Archive' container.
+Creates it (plus a leading keyword line so org honours ARCH etc.) at the end of
+the buffer when absent.  Point is left undefined; callers reposition."
+  (goto-char (point-min))
+  (if (re-search-forward "^[ \t]*:MW_LIST:[ \t]*archive[ \t]*$" nil t)
+      (progn (org-back-to-heading t) (point))
+    (goto-char (point-min))
+    (unless (re-search-forward "^#\\+TODO:" nil t)
+      (goto-char (point-min))
+      (insert (mindwtr-model-todo-keyword-line) "\n"))
+    (goto-char (point-max))
+    (unless (bolp) (insert "\n"))
+    (let ((pos (point)))
+      (insert (mindwtr-render--container "archive" 1))
+      pos)))
+
+(defun mindwtr-archive--save-quietly (buffer)
+  "Save BUFFER to disk best-effort, without arming the auto-sync or signaling.
+Binds `mindwtr--inhibit-save-sync' so the engine-style save stands down the
+after-save debounce; a write failure is caught and reported, never thrown (the
+refile is UX only -- R7)."
+  (with-current-buffer buffer
+    (when (and (buffer-file-name) (buffer-modified-p))
+      (let ((mindwtr--inhibit-save-sync t))
+        (condition-case err
+            (save-buffer)
+          (error (message "mindwtr-archive: save failed: %s"
+                          (error-message-string err))))))))
+
+(defun mindwtr-archive-refile-at-point ()
+  "Move the task/project subtree at point into the archive file immediately.
+Validates the target (`mindwtr-archive--target-or-error'); for a task, stamps
+its containment (MW_PROJECT_ID/MW_SECTION_ID, section first) from the ancestry
+it is about to lose (KTD7) so it round-trips across the file split; then cuts
+the subtree, re-roots it to level 2 under the archive file's `* Archive'
+container (created if absent), and saves both buffers quietly.
+
+UX only (R7): correctness never depends on this -- a failure or an inactive
+surface leaves the heading in place with its keyword, and the next sync performs
+the identical move via ordinary parse/render.  Returns t on success."
+  (let* ((target (mindwtr-archive--target-or-error))
+         (kind (car target))
+         (abuf (mindwtr-archive-buffer))
+         (src (current-buffer)))
+    (org-back-to-heading t)
+    (when (eq kind 'task)
+      (let ((sid (mindwtr-parse--ancestor-id 'section))
+            (pid (mindwtr-parse--ancestor-id 'project)))
+        (cond (sid (org-set-property "MW_SECTION_ID" sid))
+              (pid (org-set-property "MW_PROJECT_ID" pid)))))
+    (org-cut-subtree)
+    (with-current-buffer abuf
+      (let ((c (mindwtr-archive--ensure-container)))
+        (goto-char c)
+        (org-end-of-subtree t t)
+        (org-paste-subtree 2)))
+    (mindwtr-archive--save-quietly src)
+    (mindwtr-archive--save-quietly abuf)
+    t))
+
+;;;###autoload
+(defun mindwtr-archive-item-at-point ()
+  "Archive the task or project at point: set ARCH and refile it immediately.
+Signals a `user-error' WITHOUT mutating the buffer when point is not on a
+task/project heading with an MW_ID, or the archive surface is inactive -- so an
+invalid target never half-archives.  On success the subtree moves under the
+archive file's `* Archive' container and both buffers are saved (R6)."
+  (interactive)
+  (mindwtr-archive--target-or-error)
+  (save-excursion (org-back-to-heading t) (org-todo "ARCH"))
+  (mindwtr-archive-refile-at-point))
 
 (provide 'mindwtr-archive)
 ;;; mindwtr-archive.el ends here

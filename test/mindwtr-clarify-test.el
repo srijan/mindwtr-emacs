@@ -511,4 +511,37 @@ clarified to single-actions, One is neither loaded nor moved."
     (let ((case-fold-search nil)) (re-search-forward "Loose"))
     (should-error (mindwtr-clarify-this-item) :type 'user-error)))
 
+(ert-deftest mindwtr-clarify-trash-refiles-to-archive-when-active ()
+  "Covers R5.  With the archive surface active, clarify trash refiles the item
+into the archive file (it leaves the source buffer) and the session advances to
+the next inbox item -- the id-based queue skips the vanished heading."
+  (let* ((root (make-temp-file "mw-clar-arch" t))
+         (apath (expand-file-name "arch.org" root))
+         (mindwtr-archive-file apath)
+         (mindwtr-file nil))
+    (unwind-protect
+        (mindwtr-clarify-test--with-appdata
+            '(:areas nil :projects nil :sections nil
+              :tasks ((:id "t1" :title "One" :status "inbox")
+                      (:id "t2" :title "Two" :status "inbox"))
+              :settings nil)
+          (mindwtr-clarify)
+          (mindwtr-clarify-test--press ?x)
+          ;; the session advanced to the next inbox item
+          (with-current-buffer (mindwtr-clarify-test--wip)
+            (should (string= mindwtr-clarify--source-id "t2")))
+          ;; the trashed item left the source buffer ... (case-sensitive: the
+          ;; #+TODO keyword line contains "DONE", which case-folds to match "One")
+          (with-current-buffer src
+            (goto-char (point-min))
+            (let ((case-fold-search nil))
+              (should-not (search-forward "One" nil t))))
+          ;; ... and landed under * Archive with ARCH
+          (with-current-buffer (mindwtr-archive-buffer)
+            (goto-char (point-min))
+            (should (re-search-forward "ARCH One" nil t))))
+      (let ((b (find-buffer-visiting apath)))
+        (when b (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+      (delete-directory root t))))
+
 ;;; mindwtr-clarify-test.el ends here

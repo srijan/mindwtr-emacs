@@ -13,6 +13,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-render)
+(require 'mindwtr-archive)
 
 (defun mindwtr-commands--kind-at-point ()
   "Return the MW_TYPE symbol of the heading at point, or nil."
@@ -44,7 +45,16 @@ task or a project to the container matching its new status."
                  kind (mindwtr-model-status-choices kind))))
         (when kw
           (save-excursion (org-back-to-heading t) (org-todo kw))
-          (mindwtr-commands--relocate kind))))))
+          ;; ARCH with the archive surface active refiles the heading into the
+          ;; archive file now (R5); otherwise (or any other keyword) relocate
+          ;; within the main file.  Best-effort (R7): a refile failure leaves the
+          ;; ARCH keyword in place for the next sync to file.
+          (if (and (string= kw "ARCH") (mindwtr-archive-path))
+              (condition-case err
+                  (mindwtr-archive-refile-at-point)
+                (error (message "mindwtr: archived in place; next sync will file it (%s)"
+                                (error-message-string err))))
+            (mindwtr-commands--relocate kind)))))))
 
 (defun mindwtr-set-area--names ()
   "Return the area names defined in the current buffer (for completion)."
