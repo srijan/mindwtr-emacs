@@ -288,3 +288,70 @@ PROPERTIES :END:, like a task description."
                  :isSequential t :isFocused :false :mw-extra-props nil) 2 nil)))
     (should (string-match-p "^:MW_SEQUENTIAL: t$" text))
     (should-not (string-match-p "MW_FOCUSED" text))))
+
+;;; U3: archive surface render -----------------------------------------------
+
+(require 'mindwtr-parse)
+
+(defconst mindwtr-render-archive--appdata
+  '(:tasks ((:id "t1" :title "Lone archived" :status "archived")
+            (:id "t2" :title "Archived loose task" :status "archived"
+             :projectId "plive")
+            (:id "t3" :title "Done child" :status "done" :sectionId "s1")
+            (:id "t4" :title "Archived child" :status "archived" :projectId "parch")
+            (:id "tlive" :title "Still active" :status "next")
+            (:id "ttomb" :title "Gone" :status "archived" :deletedAt "2026-06-01T00:00:00Z"))
+    :projects ((:id "parch" :title "Archived Project" :status "archived")
+               (:id "plive" :title "An Active Project" :status "active"))
+    :sections ((:id "s1" :projectId "parch" :title "Phase 1"))
+    :areas nil :settings nil)
+  "Mixed appdata exercising every archive-render branch.")
+
+(ert-deftest mindwtr-render-archive-layout ()
+  "Container, flat archived tasks (owned one carrying MW_PROJECT_ID), the
+archived project subtree with its done child; live + tombstoned absent."
+  (let ((text (mindwtr-render-archive-appdata mindwtr-render-archive--appdata)))
+    ;; container
+    (should (string-match-p "^\\* Archive" text))
+    (should (string-match-p ":MW_LIST: archive" text))
+    ;; flat standalone archived task at level 2
+    (should (string-match-p "^\\*\\* ARCH Lone archived" text))
+    ;; flat archived task owned by a live project carries the containment prop
+    (should (string-match-p "^\\*\\* ARCH Archived loose task" text))
+    (should (string-match-p ":MW_PROJECT_ID: plive" text))
+    ;; archived project renders as a subtree at level 2, section at 3, child at 4
+    (should (string-match-p "^\\*\\* ARCH Archived Project" text))
+    (should (string-match-p "^\\*\\*\\* Phase 1" text))
+    (should (string-match-p "^\\*\\*\\*\\* DONE Done child" text))
+    ;; archived section-less child of the archived project at level 3
+    (should (string-match-p "^\\*\\*\\* ARCH Archived child" text))
+    ;; live and tombstoned entities never appear
+    (should-not (string-match-p "Still active" text))
+    (should-not (string-match-p "Gone" text))
+    ;; the live project itself is not rendered (only archived projects are)
+    (should-not (string-match-p "An Active Project" text))))
+
+(ert-deftest mindwtr-render-archive-child-appears-once ()
+  "A done child of an archived project appears inside the subtree, never flat."
+  (let* ((text (mindwtr-render-archive-appdata mindwtr-render-archive--appdata))
+         (start 0) (n 0))
+    (while (string-match "Done child" text start)
+      (setq n (1+ n) start (match-end 0)))
+    (should (= n 1))))
+
+(ert-deftest mindwtr-render-archive-round-trips-byte-stable ()
+  "Covers R4.  render -> parse -> render reproduces identical bytes."
+  (let* ((text1 (mindwtr-render-archive-appdata mindwtr-render-archive--appdata))
+         (reparsed (with-temp-buffer
+                     (let ((org-inhibit-startup t)) (insert text1) (org-mode))
+                     (mindwtr-parse-buffer)))
+         (text2 (mindwtr-render-archive-appdata reparsed)))
+    (should (string= text1 text2))))
+
+(ert-deftest mindwtr-render-archive-empty-is-just-container ()
+  "Appdata with no archived entities renders only the keyword line + container."
+  (let ((text (mindwtr-render-archive-appdata
+               '(:tasks ((:id "t1" :title "x" :status "next"))
+                 :projects nil :sections nil :areas nil :settings nil))))
+    (should (string-match-p "^\\* Archive" text))
+    (should-not (string-match-p "^\\*\\*" text))))
