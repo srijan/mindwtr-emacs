@@ -160,6 +160,16 @@ the identical move via ordinary parse/render.  Returns t on success."
     (mindwtr-archive--save-quietly abuf)
     t))
 
+(defun mindwtr-archive-refile-best-effort ()
+  "Refile the heading at point into the archive file, best-effort (R7).
+A failure is caught and reported; the heading keeps its keyword in place for
+the next sync to file identically.  The single home for the refile-failure
+policy shared by `mindwtr-set-status' and clarify's trash outcome."
+  (condition-case err
+      (mindwtr-archive-refile-at-point)
+    (error (message "mindwtr: archived in place; next sync will file it (%s)"
+                    (error-message-string err)))))
+
 ;;;###autoload
 (defun mindwtr-archive-item-at-point ()
   "Archive the task or project at point: set ARCH and refile it immediately.

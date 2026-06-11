@@ -47,13 +47,9 @@ task or a project to the container matching its new status."
           (save-excursion (org-back-to-heading t) (org-todo kw))
           ;; ARCH with the archive surface active refiles the heading into the
           ;; archive file now (R5); otherwise (or any other keyword) relocate
-          ;; within the main file.  Best-effort (R7): a refile failure leaves the
-          ;; ARCH keyword in place for the next sync to file.
+          ;; within the main file.  Refile is best-effort (R7).
           (if (and (string= kw "ARCH") (mindwtr-archive-path))
-              (condition-case err
-                  (mindwtr-archive-refile-at-point)
-                (error (message "mindwtr: archived in place; next sync will file it (%s)"
-                                (error-message-string err))))
+              (mindwtr-archive-refile-best-effort)
             (mindwtr-commands--relocate kind)))))))
 
 (defun mindwtr-set-area--names ()

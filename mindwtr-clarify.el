@@ -326,10 +326,7 @@ at point in the source buffer.  Point is on the freshly written-back item."
     (?x (if (mindwtr-archive-path)
             (progn
               (save-excursion (org-back-to-heading t) (org-todo "ARCH"))
-              (condition-case err
-                  (mindwtr-archive-refile-at-point)
-                (error (message "mindwtr: archived in place; next sync will file it (%s)"
-                                (error-message-string err)))))
+              (mindwtr-archive-refile-best-effort))
           (mindwtr-clarify--finalize "ARCH")))))
 
 ;;; Commands
