@@ -399,9 +399,12 @@ and silently dropped."
 adding a render-layer role without teaching `mindwtr-parse--infer-kind' fails
 loudly here instead of silently quarantining everything under the new bucket.
 Exceptions: `someday' (a parent whose children are themselves containers) infers
-nil, and the reconcile quarantine role `sync-failures' (not a model list-role)
-must stay un-inferable so its children keep round-tripping through quarantine."
-  (let ((parent-only '("someday")))
+nil, the reconcile quarantine role `sync-failures' (not a model list-role) must
+stay un-inferable so its children keep round-tripping through quarantine, and
+`archive' is deliberately un-inferable too (KTD9) -- a direct child of
+`* Archive' could be a task or a project, so an untyped heading there must
+quarantine rather than be guessed."
+  (let ((un-inferable '("someday" "archive" "sync-failures")))
     (dolist (role (append mindwtr-model-list-roles '("sync-failures")))
       (with-temp-buffer
         (let ((org-inhibit-startup t))
@@ -412,7 +415,7 @@ must stay un-inferable so its children keep round-tripping through quarantine."
           (goto-char (point-min))
           (org-next-visible-heading 1)   ; container
           (org-next-visible-heading 1)   ; child H
-          (if (or (member role parent-only) (string= role "sync-failures"))
+          (if (member role un-inferable)
               (should (null (mindwtr-parse--infer-kind)))
             (should (mindwtr-parse--infer-kind))))))))
 
@@ -706,3 +709,100 @@ Guards against the task-only-block regression -- project-side fields must parse.
       (should-not (plist-member e :isSequential))
       (should-not (plist-member e :isFocused))
       (should-not (plist-member e :reviewAt)))))
+
+;;; U2: archive-file containment props + container role ----------------------
+
+(ert-deftest mindwtr-parse-archive-explicit-project-id ()
+  "A flat archived task under `* Archive' carries :projectId from MW_PROJECT_ID
+\(no project ancestor), status `archived' from ARCH, and the prop does not
+leak into :mw-extra-props (KTD4)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Archive
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: archive
+:END:
+** ARCH Old task of a live project
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_PROJECT_ID: p9
+:END:
+")
+      (org-mode)
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :id) "t1"))
+        (should (string= (plist-get task :status) "archived"))
+        (should (string= (plist-get task :projectId) "p9"))
+        (should (null (plist-get task :sectionId)))
+        ;; the containment prop is interpreted, never preserved as extra
+        (should (null (plist-get task :mw-extra-props)))))))
+
+(ert-deftest mindwtr-parse-archive-explicit-section-id ()
+  "MW_SECTION_ID sets :sectionId and takes precedence over MW_PROJECT_ID."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Archive
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: archive
+:END:
+** ARCH Old task of a live section
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_SECTION_ID: s7
+:MW_PROJECT_ID: p9
+:END:
+")
+      (org-mode)
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :sectionId) "s7"))
+        (should (null (plist-get task :projectId)))))))
+
+(ert-deftest mindwtr-parse-archive-ancestry-when-no-explicit-props ()
+  "An archived task nested under an archived project subtree (no explicit
+props) gets :projectId from ancestry, exactly like the main file."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Archive
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: archive
+:END:
+** ARCH Archived Project
+:PROPERTIES:
+:MW_TYPE: project
+:MW_ID: p1
+:END:
+*** DONE A done child
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+")
+      (org-mode)
+      (let* ((ad (mindwtr-parse-buffer))
+             (task (car (plist-get ad :tasks))))
+        (should (string= (plist-get task :projectId) "p1"))
+        (should (null (plist-get task :sectionId)))))))
+
+(ert-deftest mindwtr-parse-archive-untyped-child-quarantines ()
+  "An untyped heading directly under `* Archive' is NOT inferred to a kind
+\(KTD9): it parses to no entity (it will route to the quarantine path)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Archive
+:PROPERTIES:
+:MW_TYPE: container
+:MW_LIST: archive
+:END:
+** A hand-added heading with no MW_TYPE
+")
+      (org-mode)
+      (let ((ad (mindwtr-parse-buffer)))
+        (should (null (plist-get ad :tasks)))
+        (should (null (plist-get ad :projects)))
+        (should (null (plist-get ad :sections)))
+        (should (null (plist-get ad :areas)))))))

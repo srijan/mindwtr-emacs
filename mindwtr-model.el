@@ -43,17 +43,22 @@ defines."
 (defconst mindwtr-model-list-roles
   '("inbox" "single-actions" "projects"
     "someday" "someday-single-actions" "someday-projects"
-    "reference" "areas")
+    "reference" "areas" "archive")
   "Every container role used as a `:MW_LIST:' discriminator.
 `* Someday' is a container whose children are the `someday-single-actions'
-and `someday-projects' containers; the rest are top-level.")
+and `someday-projects' containers; the rest are top-level.  `archive' is the
+container role of the synced archive file's single `* Archive' heading; it is
+deliberately absent from `mindwtr-parse--infer-kind' (KTD9) -- a direct child
+of `* Archive' could be a task or a project, so an untyped heading there
+quarantines rather than being guessed.")
 
 (defconst mindwtr-model--list-titles
   '(("inbox" . "Inbox") ("single-actions" . "Single Actions")
     ("projects" . "Projects") ("someday" . "Someday")
     ("someday-single-actions" . "Single Actions")
     ("someday-projects" . "Projects")
-    ("reference" . "Reference") ("areas" . "Areas of Focus")))
+    ("reference" . "Reference") ("areas" . "Areas of Focus")
+    ("archive" . "Archive")))
 
 (defun mindwtr-model-list-title (role)
   "Default heading text for a container ROLE."
