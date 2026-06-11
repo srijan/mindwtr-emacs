@@ -1180,6 +1180,9 @@ when the buffer is modified -- it does not save edits it did not cause."
   (let* ((dir (make-temp-file "mw-noop-save" t))
          (f (make-temp-file "mw-noop-org" nil ".org"))
          (mindwtr-shadow-directory dir)
+         ;; Legacy single-surface scope: keep the archive surface inactive so
+         ;; this exercises the bare HEAD-match noop branch (R9).
+         (mindwtr-archive-file (lambda () nil))
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
          (mindwtr-api-http-function
@@ -1450,6 +1453,9 @@ server's version, and the report must surface that path."
   (let* ((dir (make-temp-file "mw-bak" t))
          (f (make-temp-file "mw-bak-org" nil ".org"))
          (mindwtr-shadow-directory dir)
+         ;; Legacy single-surface scope: the archive surface would add a second
+         ;; backup; keep it inactive so the "exactly one backup" invariant holds.
+         (mindwtr-archive-file (lambda () nil))
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
          ;; The GET deliberately does NOT echo the PUT: the server wins with a
@@ -1662,3 +1668,167 @@ notes/fields latches."
           (mindwtr-shadow-set-archive-migrated)
           (should (mindwtr-shadow-archive-migrated-p)))
       (delete-directory dir t))))
+
+;;; U5: surface-list orchestration (end-to-end, file-visiting) ---------------
+
+(ert-deftest mindwtr-sync-once-archive-surface-receives-cloud-archive ()
+  "Covers R1.  A task the server reports as archived (held locally as done)
+leaves the tasks file and lands under * Archive in the archive file after one
+cycle; the migration latch flips."
+  (let* ((root (make-temp-file "mw-arch-r1" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (server-body
+          (concat "{\"tasks\":[{\"id\":\"t1\",\"title\":\"Old task\","
+                  "\"status\":\"archived\",\"rev\":2,"
+                  "\"createdAt\":\"2026-01-01T00:00:00Z\","
+                  "\"updatedAt\":\"2026-06-05T00:00:00Z\"}],"
+                  "\"projects\":[],\"sections\":[],\"areas\":[],\"settings\":{}}"))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body server-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks ((:id "t1" :title "Old task" :status "done" :order 0))
+                       :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Old task" :status "done" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              (should-not
+               (string-match-p "Old task"
+                               (with-temp-buffer (insert-file-contents tasks-file)
+                                                 (buffer-string))))
+              (let ((atext (with-temp-buffer (insert-file-contents archive-file)
+                                             (buffer-string))))
+                (should (string-match-p "^\\* Archive" atext))
+                (should (string-match-p "ARCH Old task" atext)))
+              (should (mindwtr-shadow-archive-migrated-p)))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-archive-edit-unarchives ()
+  "Covers R2.  With the latch set and the archive file present, editing an entry
+ARCH -> NEXT pushes status next, returns the heading to the tasks file, and
+drops it from the archive file."
+  (let* ((root (make-temp-file "mw-arch-r2" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ;; server accepts the un-archive: echoes the PUT back
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          ;; tasks file: t1 is archived -> dropped from the main render
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks ((:id "t1" :title "Resurrected" :status "archived"))
+                       :projects nil :sections nil :areas nil :settings nil))))
+          ;; archive file: the user edited the keyword ARCH -> NEXT (un-archive)
+          (with-temp-file archive-file
+            (insert (mindwtr-model-todo-keyword-line) "\n"
+                    "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+                    "** NEXT Resurrected\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Resurrected" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (mindwtr-shadow-set-archive-migrated)
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; pushed status next
+              (should (string-match-p "\"status\":\"next\"" put-body))
+              ;; heading is back in the tasks file...
+              (should (string-match-p "Resurrected"
+                                      (with-temp-buffer (insert-file-contents tasks-file)
+                                                        (buffer-string))))
+              ;; ...and no longer in the archive file
+              (should-not
+               (string-match-p "Resurrected"
+                               (with-temp-buffer (insert-file-contents archive-file)
+                                                 (buffer-string)))))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-first-cycle-backfills-without-tombstoning ()
+  "Covers R8.  Latch unset, archive file absent, shadow holds an archived task:
+the PUT carries no tombstone for it (echoed, never deleted), and the archive
+file is created containing it (backfill)."
+  (let* ((root (make-temp-file "mw-arch-r8" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (server-body
+          (concat "{\"tasks\":[{\"id\":\"t1\",\"title\":\"Backlog item\","
+                  "\"status\":\"archived\",\"rev\":2,"
+                  "\"createdAt\":\"2026-01-01T00:00:00Z\","
+                  "\"updatedAt\":\"2026-06-05T00:00:00Z\"}],"
+                  "\"projects\":[],\"sections\":[],\"areas\":[],\"settings\":{}}"))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body server-body))))))
+    (unwind-protect
+        (progn
+          ;; tasks file: empty layout (the archived task is not rendered here)
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Backlog item" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (should-not (file-exists-p archive-file))
+          (should-not (mindwtr-shadow-archive-migrated-p))
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; backfill never tombstones the not-yet-rendered archived task
+              (should-not (string-match-p "deletedAt" put-body))
+              ;; the archive file is created and holds the backlog item
+              (should (file-exists-p archive-file))
+              (let ((atext (with-temp-buffer (insert-file-contents archive-file)
+                                             (buffer-string))))
+                (should (string-match-p "ARCH Backlog item" atext)))
+              (should (mindwtr-shadow-archive-migrated-p)))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))

@@ -410,6 +410,8 @@ Classification per entity, in this order:
 (require 'mindwtr-api)
 (require 'mindwtr-reconcile)
 (require 'mindwtr-report)
+(require 'mindwtr-render)
+(require 'mindwtr-archive)
 
 (defun mindwtr-sync--strip-internal-keys (appdata)
   "Remove internal :mw-* keys from every entity in APPDATA (for the wire)."
@@ -467,21 +469,98 @@ absence is not explained by archival or a hidden parent."
               (setq deleted (1+ deleted)))))))
     (list :created created :updated updated :deleted deleted)))
 
+(defun mindwtr-sync--surfaces (main-buffer)
+  "Return the ordered surface list for this cycle (KTD2).
+Each surface is a plist (:buffer :kind :render :backup-prefix).  MAIN-BUFFER is
+always first with the GTD-list renderer; the archive surface is appended when
+`mindwtr-archive-buffer' resolves (the surface is inactive otherwise -- legacy
+single-file behavior, R9).  Earlier surfaces win id collisions in the merge."
+  (let ((surfaces (list (list :buffer main-buffer :kind 'main
+                              :render #'mindwtr-render-appdata
+                              :backup-prefix "mindwtr"))))
+    (let ((abuf (mindwtr-archive-buffer)))
+      (if (not abuf) surfaces
+        (append surfaces
+                (list (list :buffer abuf :kind 'archive
+                            :render #'mindwtr-render-archive-appdata
+                            :backup-prefix "mindwtr-archive")))))))
+
+(defun mindwtr-sync--parse-surfaces (surfaces)
+  "Parse each surface's buffer and merge the results by id (earlier wins).
+Returns (:surfaces SURFACES* :appdata MERGED :warnings WARNINGS): SURFACES* is
+SURFACES with a post-parse :tick added to each entry (parsing may re-init
+org-mode and bump the tick without a user edit, so the post-parse value is the
+correct concurrency-guard baseline).  An id present in two surfaces keeps the
+first surface's copy and logs a message.  Parse warnings are accumulated across
+buffers because `mindwtr-parse--warnings' is per-run state, reset by each parse."
+  (let ((merged (list :tasks nil :projects nil :sections nil :areas nil))
+        (seen (make-hash-table :test 'equal))
+        out-surfaces warnings)
+    (dolist (surface surfaces)
+      (with-current-buffer (plist-get surface :buffer)
+        (let ((ad (mindwtr-parse-buffer)))
+          (push (plist-put (copy-sequence surface)
+                           :tick (buffer-chars-modified-tick))
+                out-surfaces)
+          (setq warnings (append warnings (mindwtr-parse-warnings)))
+          (dolist (key mindwtr-sync--entity-keys)
+            (let (kept)
+              (dolist (e (plist-get ad key))
+                (let ((id (plist-get e :id)))
+                  (if (and id (gethash id seen))
+                      (message "mindwtr: id %s appears in multiple surfaces; keeping the first"
+                               id)
+                    (when id (puthash id t seen))
+                    (push e kept))))
+              (when kept
+                (setq merged (plist-put merged key
+                                        (append (plist-get merged key)
+                                                (nreverse kept))))))))))
+    (list :surfaces (nreverse out-surfaces) :appdata merged :warnings warnings)))
+
+(defun mindwtr-sync--backup-buffer (prefix)
+  "Write the current buffer to backups/PREFIX-<timestamp>.org; return the path.
+Distinct prefixes (\"mindwtr\" vs \"mindwtr-archive\") keep the two surfaces'
+backups from colliding in the shared backups directory."
+  (let* ((bdir (expand-file-name "backups/" mindwtr-shadow-directory))
+         (bf (expand-file-name
+              (format "%s-%s.org" prefix (format-time-string "%Y%m%dT%H%M%S")) bdir)))
+    (make-directory bdir t)
+    (write-region (point-min) (point-max) bf)
+    bf))
+
 (defun mindwtr-sync-once (buffer now)
   "Run one full sync cycle for org BUFFER, stamping changes with NOW.
-Return (:ok t :conflicts LIST) or signals on hard error."
+Iterates the surface list (main always first; the archive file appended when
+active): parse-merge by id, and on a full cycle guard each surface's tick, back
+each one up, reconcile each with its own render function, and save them all.
+Return (:ok t :conflicts LIST ...) or signals on hard error."
   (with-current-buffer buffer
     (let* ((shadow (mindwtr-shadow-load))
            (device (mindwtr-shadow-device-id))
-           (local (mindwtr-parse-buffer))
-           (parse-warnings (mindwtr-parse-warnings))
-           ;; Capture the tick AFTER parsing: `mindwtr-parse-buffer' may call
-           ;; `mindwtr-parse-ensure-keywords' which re-inits `org-mode', and a
-           ;; mode re-init can bump `buffer-chars-modified-tick' without the
-           ;; user editing.  Parsing is a read of the user's buffer state, so
-           ;; the post-parse tick is the correct baseline for the concurrency
-           ;; guard; capturing before parse would make the guard fire spuriously.
-           (tick (buffer-chars-modified-tick))
+           (surfaces0 (mindwtr-sync--surfaces buffer))
+           (archive-active (seq-find (lambda (s) (eq (plist-get s :kind) 'archive))
+                                     surfaces0))
+           ;; Strict absence semantics (KTD5/KTD6) activate only when the
+           ;; archive surface is active, its latch is set, AND the archive file
+           ;; exists on disk -- an `rm'ed file reads as not-yet-rendered (echo,
+           ;; recreate), never as "everything was deleted".  Bound around the
+           ;; whole cycle so stats, change detection, and candidate construction
+           ;; all agree on what an absent archived entity means.
+           (mindwtr-sync--archive-strict
+            (and archive-active
+                 (mindwtr-shadow-archive-migrated-p)
+                 (let ((p (mindwtr-archive-path))) (and p (file-exists-p p)))))
+           ;; Until the archive surface has been rendered once (latch unset),
+           ;; force a full cycle even on an otherwise-clean HEAD-match, so the
+           ;; first sync backfills the historical archived set into the archive
+           ;; file (R1) rather than deferring it to the next unrelated change.
+           (force-backfill (and archive-active
+                                (not (mindwtr-shadow-archive-migrated-p))))
+           (parsed (mindwtr-sync--parse-surfaces surfaces0))
+           (surfaces (plist-get parsed :surfaces))
+           (local (plist-get parsed :appdata))
+           (parse-warnings (plist-get parsed :warnings))
            (changed (mindwtr-sync--changed-ids local shadow))
            (stats (mindwtr-sync--stats local shadow))
            (local-dirty (> (+ (plist-get stats :created)
@@ -491,10 +570,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
            (shadow-etag (mindwtr-shadow-get-etag)))
       ;; Step 1 of the cycle: with nothing local to push, HEAD the server; if
       ;; its ETag still matches the shadow, neither side changed -- skip the
-      ;; PUT/GET round-trip.  (When local IS dirty we must PUT regardless, so a
-      ;; HEAD would not change the decision; we go straight to the full cycle,
-      ;; whose follow-up GET also pulls any concurrent remote changes.)
+      ;; PUT/GET round-trip.  (When local IS dirty -- a dirty archive file
+      ;; counts, since its changes fold into the combined stats -- or the
+      ;; archive still needs its first render, we go straight to the full cycle.)
       (if (and (not local-dirty)
+               (not force-backfill)
                shadow-etag (not (string-empty-p shadow-etag))
                (equal (mindwtr-api-head-etag) shadow-etag))
           (progn
@@ -502,13 +582,11 @@ Return (:ok t :conflicts LIST) or signals on hard error."
             ;; silently swallowed -- surface it in the report.
             (when parse-warnings
               (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
-            ;; The notes-migration latch is intentionally NOT set here: a noop
-            ;; skips reconcile, so the buffer still holds the old pre-notes
-            ;; render.  Empty-notes protection must stay on until a full cycle
-            ;; actually rewrites the buffer (the latch is set in that branch
-            ;; below, after a confirmed save).
-            ;; A HEAD-match means the server is unchanged, so nothing is
-            ;; incoming; the report-show above passes nil incoming by omission.
+            ;; The migration latches are intentionally NOT set here: a noop skips
+            ;; reconcile, so the buffers still hold their old render.  Migration
+            ;; protection must stay on until a full cycle actually rewrites them
+            ;; (the latches are set in that branch below, after a confirmed save).
+            ;; A HEAD-match means the server is unchanged, so nothing is incoming.
             (list :ok t :noop t :conflicts nil :stats stats :skew nil
                   :warnings parse-warnings :incoming nil))
         (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
@@ -535,55 +613,67 @@ Return (:ok t :conflicts LIST) or signals on hard error."
                  ;; the conflict path consumes; excludes own edits and conflicts.
                  (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
                  (backup-file nil))
-            (unless (= tick (buffer-chars-modified-tick))
-              (error "mindwtr: buffer changed during sync; aborting"))
-            (when (buffer-file-name)
-              (let* ((bdir (expand-file-name "backups/" mindwtr-shadow-directory))
-                     (bf (expand-file-name
-                          (format "mindwtr-%s.org"
-                                  (format-time-string "%Y%m%dT%H%M%S")) bdir)))
-                (make-directory bdir t)
-                (write-region (point-min) (point-max) bf)
-                (setq backup-file bf)
-                (condition-case err
-                    (mindwtr-shadow-prune-backups)
-                  (error (message "mindwtr: backup cleanup skipped: %s"
-                                  (error-message-string err))))))
-            (mindwtr-reconcile-buffer merged)
-            ;; Return the buffer to clean on disk after the rebuild (an
-            ;; erase+insert always marks it modified, so this always writes on
-            ;; a full cycle -- never on the :noop branch above).  This closes
-            ;; the loop that keeps the unsaved-edits gate from self-wedging.
+            ;; Per-surface concurrency guard: each buffer must be unchanged since
+            ;; its post-parse tick (the PUT/GET window).
+            (dolist (s surfaces)
+              (with-current-buffer (plist-get s :buffer)
+                (unless (= (plist-get s :tick) (buffer-chars-modified-tick))
+                  (error "mindwtr: buffer changed during sync; aborting"))))
+            ;; Per-surface pre-reconcile backup (file-visiting surfaces only),
+            ;; each under its own prefix so the two never collide.
+            (dolist (s surfaces)
+              (with-current-buffer (plist-get s :buffer)
+                (when (buffer-file-name)
+                  (let ((bf (mindwtr-sync--backup-buffer (plist-get s :backup-prefix))))
+                    (when (eq (plist-get s :buffer) buffer) (setq backup-file bf))))))
+            (when backup-file
+              (condition-case err
+                  (mindwtr-shadow-prune-backups)
+                (error (message "mindwtr: backup cleanup skipped: %s"
+                                (error-message-string err)))))
+            ;; Per-surface reconcile, each with its own render function.  Return
+            ;; each buffer to clean on disk after the rebuild (an erase+insert
+            ;; always marks it modified, so this always writes on a full cycle).
             ;; Content-protected (KTD-7) and condition-case-guarded inside the
-            ;; helper: a write failure here must NOT throw (post-PUT; the
-            ;; server already committed).  Instead it is reported via
-            ;; :save-failed so the caller can raise a visible, recoverable
-            ;; error state rather than stall the gate silently (KTD-5).  A
-            ;; non-file (temp-buffer) save returns :skipped, which is not a
-            ;; failure.
-            (let ((save-failed (null (mindwtr-sync--save-buffer-quietly t))))
+            ;; helper: a write failure must NOT throw (post-PUT; the server
+            ;; already committed) -- it is folded into :save-failed so the caller
+            ;; can raise a visible, recoverable error state (KTD-5).  A non-file
+            ;; (temp-buffer) save returns :skipped, which is not a failure.
+            (dolist (s surfaces)
+              (with-current-buffer (plist-get s :buffer)
+                (mindwtr-reconcile-buffer merged (plist-get s :render))))
+            (let ((save-failed nil))
+              (dolist (s surfaces)
+                (with-current-buffer (plist-get s :buffer)
+                  (when (null (mindwtr-sync--save-buffer-quietly t))
+                    (setq save-failed t))))
               (mindwtr-shadow-save merged)
               (mindwtr-shadow-set-etag (plist-get got :etag))
-              ;; Latch the notes migration ONLY once the notes-capable render is
-              ;; durably on disk.  The buffer now carries project/section note
-              ;; bodies, so a future empty notes value is a genuine clear -- but
-              ;; only if the file actually persisted.  If the save failed, the
-              ;; .org on disk may still hold the old note-less render; latching
-              ;; now would drop empty-notes protection, and a later reload from
-              ;; that stale file would clear a server note via LWW.  Guarded so
-              ;; a latch-write failure cannot throw (post-PUT; server committed).
+              ;; Latch the migrations ONLY once every surface is durably on disk.
+              ;; The buffers now carry the notes/boolean render; a future empty
+              ;; value is a genuine clear -- but only if the files persisted.  If
+              ;; a save failed, the on-disk file may still hold an older render;
+              ;; latching now would drop protection and a later reload could
+              ;; clear server data via LWW.  Guarded so a latch-write failure
+              ;; cannot throw (post-PUT; server committed).
               (unless save-failed
                 (condition-case err
                     (mindwtr-shadow-set-notes-migrated)
                   (error (message "mindwtr: notes-migrated latch write failed: %s"
                                   (error-message-string err))))
-                ;; Same reasoning, parallel latch for the reserved boolean
-                ;; fields: only after the boolean-capable render is durably on
-                ;; disk is a future empty boolean a genuine clear.
                 (condition-case err
                     (mindwtr-shadow-set-fields-migrated)
                   (error (message "mindwtr: fields-migrated latch write failed: %s"
-                                  (error-message-string err)))))
+                                  (error-message-string err))))
+                ;; Flip the archive latch only when the archive surface
+                ;; participated in this cycle and every save succeeded (KTD5):
+                ;; strict absence semantics must not activate until the archive
+                ;; file is provably on disk.
+                (when archive-active
+                  (condition-case err
+                      (mindwtr-shadow-set-archive-migrated)
+                    (error (message "mindwtr: archive-migrated latch write failed: %s"
+                                    (error-message-string err))))))
               (mindwtr-report-show stats conflicts skew backup-file (current-buffer)
                                    parse-warnings incoming)
               (list :ok t :conflicts conflicts :stats stats :skew skew

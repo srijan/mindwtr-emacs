@@ -111,10 +111,12 @@ flipped with the same post-save discipline in `mindwtr-sync-once' (KTD5)."
 
 (defun mindwtr-shadow--backup-time (filename)
   "Return the encoded time parsed from a backup FILENAME, or nil.
-FILENAME is a non-directory name like \"mindwtr-20260604T080500.org\".
-Returns nil for any name that does not match the mindwtr backup pattern."
+FILENAME is a non-directory name like \"mindwtr-20260604T080500.org\" or the
+archive surface's \"mindwtr-archive-20260604T080500.org\".  Returns nil for any
+name that does not match the mindwtr backup pattern."
   (when (string-match
-         "\\`mindwtr-\\([0-9]\\{8\\}\\)T\\([0-9]\\{6\\}\\)\\.org\\'" filename)
+         "\\`mindwtr\\(?:-archive\\)?-\\([0-9]\\{8\\}\\)T\\([0-9]\\{6\\}\\)\\.org\\'"
+         filename)
     (let ((d (match-string 1 filename))
           (tm (match-string 2 filename)))
       (encode-time (string-to-number (substring tm 4 6))  ; sec
