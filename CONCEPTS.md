@@ -53,6 +53,8 @@ Containment crosses the file split via explicit `MW_PROJECT_ID`/`MW_SECTION_ID` 
 
 The archive surface has its own Migration latch (`archive-migrated`): an archived entity absent from local state means deletion (Tombstone) only *after* the surface has been durably rendered once. Before that — and whenever the archive file is missing from disk — a missing archived entity is echoed verbatim instead, so the first post-upgrade sync can never read the not-yet-created archive file as a mass deletion. This strict-vs-echo behavior is a dynamic mode, off by default, so legacy single-file behavior is byte-identical when the surface is inactive.
 
+The latch guards the deploy seam; a second gate guards the steady-state seam. Even with the latch set and the file present, strict deletion semantics are withheld for a cycle when the archive buffer parsed with a degraded heading (an `MW_ID` heading that produced no entity — e.g. a hand-edit that removed `MW_TYPE`) or when the file came back empty while the Shadow still holds archived entities. In both cases an absent archived entity is more likely a parse or truncation fault than a deletion, so the cycle echoes (and re-backfills) instead of tombstoning. The one accepted cost: deleting the *last* archived item by emptying the file is deferred to the next cycle that carries another archived heading.
+
 ## Inbox triage
 
 ### Inbox

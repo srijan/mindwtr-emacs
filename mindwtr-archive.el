@@ -139,7 +139,14 @@ container (created if absent), and saves both buffers quietly.
 
 UX only (R7): correctness never depends on this -- a failure or an inactive
 surface leaves the heading in place with its keyword, and the next sync performs
-the identical move via ordinary parse/render.  Returns t on success."
+the identical move via ordinary parse/render.  Returns t on success.
+
+The move is atomic in the direction that matters: the subtree is COPIED and
+pasted into the archive buffer first, and only deleted from the source once the
+paste has succeeded.  A paste or container failure therefore aborts with the
+heading still in the source buffer -- never lost from both -- honoring the R7
+contract above (a prior cut-then-paste ordering could strand the subtree on the
+kill ring if the paste threw)."
   (let* ((target (mindwtr-archive--target-or-error))
          (kind (car target))
          (abuf (mindwtr-archive-buffer))
@@ -150,12 +157,17 @@ the identical move via ordinary parse/render.  Returns t on success."
             (pid (mindwtr-parse--ancestor-id 'project)))
         (cond (sid (org-set-property "MW_SECTION_ID" sid))
               (pid (org-set-property "MW_PROJECT_ID" pid)))))
-    (org-cut-subtree)
+    (org-copy-subtree)
+    ;; Paste into the archive buffer first.  If this signals, control unwinds
+    ;; with the source subtree intact (only copied, not cut).
     (with-current-buffer abuf
       (let ((c (mindwtr-archive--ensure-container)))
         (goto-char c)
         (org-end-of-subtree t t)
         (org-paste-subtree 2)))
+    ;; Paste succeeded -- now it is safe to remove the original.
+    (org-back-to-heading t)
+    (org-cut-subtree)
     (mindwtr-archive--save-quietly src)
     (mindwtr-archive--save-quietly abuf)
     t))
@@ -176,11 +188,15 @@ policy shared by `mindwtr-set-status' and clarify's trash outcome."
 Signals a `user-error' WITHOUT mutating the buffer when point is not on a
 task/project heading with an MW_ID, or the archive surface is inactive -- so an
 invalid target never half-archives.  On success the subtree moves under the
-archive file's `* Archive' container and both buffers are saved (R6)."
+archive file's `* Archive' container and both buffers are saved (R6).
+
+The refile runs best-effort (R7): a runtime failure during the move leaves the
+heading in place with its `ARCH' keyword for the next sync to file identically,
+rather than throwing after the keyword is set."
   (interactive)
   (mindwtr-archive--target-or-error)
   (save-excursion (org-back-to-heading t) (org-todo "ARCH"))
-  (mindwtr-archive-refile-at-point))
+  (mindwtr-archive-refile-best-effort))
 
 (provide 'mindwtr-archive)
 ;;; mindwtr-archive.el ends here

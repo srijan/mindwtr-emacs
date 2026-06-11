@@ -143,14 +143,22 @@ restore live only on this newest entry (R8)."
   (when skew-warning
     (insert (format "  ⚠ Clock skew: %s\n" skew-warning)))
   (when parse-warnings
-    (insert (format "  ⚠ %d heading(s) with an invalid status keyword (status left unchanged):\n"
-                    (length parse-warnings)))
-    (dolist (w parse-warnings)
-      (insert (format "    • %s %S — %s is not a valid %s status\n"
-                      (or (plist-get w :id) "(new)")
-                      (plist-get w :title)
-                      (plist-get w :keyword)
-                      (plist-get w :kind)))))
+    (let ((dupes (seq-filter (lambda (w) (plist-get w :duplicate)) parse-warnings))
+          (kw (seq-remove (lambda (w) (plist-get w :duplicate)) parse-warnings)))
+      (when kw
+        (insert (format "  ⚠ %d heading(s) with an invalid status keyword (status left unchanged):\n"
+                        (length kw)))
+        (dolist (w kw)
+          (insert (format "    • %s %S — %s is not a valid %s status\n"
+                          (or (plist-get w :id) "(new)")
+                          (plist-get w :title)
+                          (plist-get w :keyword)
+                          (plist-get w :kind)))))
+      (when dupes
+        (insert (format "  ⚠ %d id(s) present in more than one file; the archive-file copy was dropped (edit not applied):\n"
+                        (length dupes)))
+        (dolist (w dupes)
+          (insert (format "    • %s\n" (plist-get w :id)))))))
   (when backup-file
     (insert (format "  Pre-sync backup: %s\n" backup-file)))
   (if (null conflicts)

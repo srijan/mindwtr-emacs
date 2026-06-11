@@ -1832,3 +1832,347 @@ file is created containing it (backfill)."
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
+
+;;; Strict-mode safety gate (degraded/empty archive must not mass-delete) -----
+
+(ert-deftest mindwtr-sync--archived-count-counts-only-live-archived ()
+  "Counts non-deleted archived entities across kinds; ignores other statuses
+and tombstones."
+  (should (= 0 (mindwtr-sync--archived-count
+                '(:tasks ((:id "a" :status "next")) :projects nil
+                  :sections nil :areas nil))))
+  (should (= 2 (mindwtr-sync--archived-count
+                '(:tasks ((:id "a" :status "archived"))
+                  :projects ((:id "p" :status "archived"))
+                  :sections nil :areas nil))))
+  (should (= 1 (mindwtr-sync--archived-count
+                '(:tasks ((:id "a" :status "archived")
+                          (:id "b" :status "archived" :deletedAt "X"))
+                  :projects nil :sections nil :areas nil)))))
+
+(ert-deftest mindwtr-sync--archive-strict-safe-p-gates ()
+  "Strict mode is withheld on a warned parse or an empty-shortfall, allowed when
+the archive parsed cleanly with a plausible archived count."
+  (let ((shadow '(:tasks ((:id "t1" :status "archived")) :projects nil
+                  :sections nil :areas nil))
+        (have '(:tasks ((:id "t1" :status "archived")) :projects nil
+                :sections nil :areas nil))
+        (empty '(:tasks nil :projects nil :sections nil :areas nil)))
+    ;; clean parse, archived present on both sides -> safe
+    (should (mindwtr-sync--archive-strict-safe-p have shadow nil))
+    ;; archive parsed with an unparsed heading -> withheld
+    (should-not (mindwtr-sync--archive-strict-safe-p have shadow t))
+    ;; shadow has archived, local parsed none (empty/truncated) -> withheld
+    (should-not (mindwtr-sync--archive-strict-safe-p empty shadow nil))
+    ;; neither side has archived entities -> nothing to protect, safe
+    (should (mindwtr-sync--archive-strict-safe-p empty empty nil))))
+
+(ert-deftest mindwtr-sync--surface-has-unparsed-entity-p-detects-untyped ()
+  "A heading with an MW_ID but no parseable type (untyped/quarantined) is
+flagged; a fully-parsed buffer is not."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert (mindwtr-model-todo-keyword-line) "\n"
+              "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+              "** ARCH Real\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              ;; MW_TYPE removed by a raw edit -- inference under * Archive is nil,
+              ;; so the parser skips it though its MW_ID is intact.
+              "** ARCH Mangled\n:PROPERTIES:\n:MW_ID: t2\n:END:\n")
+      (org-mode))
+    (let ((ad (mindwtr-parse-buffer)))
+      ;; t2 did not parse into an entity but its MW_ID is in the buffer.
+      (should (mindwtr-sync--surface-has-unparsed-entity-p ad))))
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert (mindwtr-model-todo-keyword-line) "\n"
+              "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+              "** ARCH Real\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (let ((ad (mindwtr-parse-buffer)))
+      (should-not (mindwtr-sync--surface-has-unparsed-entity-p ad)))))
+
+(ert-deftest mindwtr-sync-once-latch-set-missing-file-echoes-not-deletes ()
+  "Covers R8/KTD5.  Latch SET but the archive file deleted from disk: the
+file-exists-p guard keeps strict OFF, so an archived shadow task absent from
+local is echoed (no tombstone) and the archive file is recreated."
+  (let* ((root (make-temp-file "mw-arch-rm" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Kept" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
+             :projects nil :sections nil :areas nil :settings nil))
+          ;; Latch set (migrated) but NO etag and NO archive file on disk.
+          (mindwtr-shadow-set-archive-migrated)
+          (should-not (file-exists-p archive-file))
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; strict stayed OFF (file absent) -> no tombstone for t1
+              (should-not (string-match-p "deletedAt" (or put-body "")))
+              ;; the archive file is recreated holding the echoed archived task
+              (should (file-exists-p archive-file))
+              (should (string-match-p
+                       "ARCH Kept"
+                       (with-temp-buffer (insert-file-contents archive-file)
+                                         (buffer-string)))))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-empty-archive-does-not-mass-delete ()
+  "Covers the P0 steady-state seam.  Latch set, archive file PRESENT but empty
+\(only the container -- a truncation/bad-save), shadow holds an archived task:
+the empty-shortfall gate withholds strict, the task is echoed (not tombstoned),
+and the archive file is re-backfilled."
+  (let* ((root (make-temp-file "mw-arch-empty" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          ;; archive file present but holds only the container (no archived heading)
+          (with-temp-file archive-file
+            (insert (mindwtr-render-archive-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Backlog" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-archive-migrated)
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; strict withheld -> NO mass deletion of the archived backlog
+              (should-not (string-match-p "deletedAt" (or put-body "")))
+              ;; the empty archive file is re-backfilled with the echoed task
+              (should (string-match-p
+                       "ARCH Backlog"
+                       (with-temp-buffer (insert-file-contents archive-file)
+                                         (buffer-string)))))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-warned-archive-does-not-tombstone-absent ()
+  "Covers the P0 quarantine seam.  Latch set, archive file present with a valid
+archived task AND an untyped (quarantined) heading, shadow holds a SECOND
+archived task absent from the file: the warned-parse gate withholds strict, so
+the absent task is echoed rather than tombstoned despite no count shortfall."
+  (let* ((root (make-temp-file "mw-arch-warn" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          ;; archive file: t2 present + an untyped heading (MW_ID intact, MW_TYPE
+          ;; removed by a raw edit) that quarantines.
+          (with-temp-file archive-file
+            (insert (mindwtr-model-todo-keyword-line) "\n"
+                    "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+                    "** ARCH Kept\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\n"
+                    "** ARCH Mangled\n:PROPERTIES:\n:MW_ID: t3\n:END:\n"))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Absent" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z")
+                     (:id "t2" :title "Kept" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z")
+                     (:id "t3" :title "Mangled" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-archive-migrated)
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; warned parse -> strict withheld -> no tombstone for the absent t1
+              (should-not (string-match-p "deletedAt" (or put-body ""))))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-clean-archive-deletes-absent-archived ()
+  "Covers R2 delete + the strict-mode sync-once derivation end-to-end.  Latch
+set, archive file present and clean with one of two archived tasks, the other
+deleted by the user (its heading removed): strict activates (no shortfall, no
+warning) and the PUT tombstones the removed task only."
+  (let* ((root (make-temp-file "mw-arch-del" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+          ;; archive file: only t2 remains; the user deleted t1's heading.
+          (with-temp-file archive-file
+            (insert (mindwtr-render-archive-appdata
+                     '(:tasks ((:id "t2" :title "Kept" :status "archived"))
+                       :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Deleted" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z")
+                     (:id "t2" :title "Kept" :status "archived" :rev 2
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-archive-migrated)
+          (with-current-buffer (find-file-noselect tasks-file)
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+              (should (plist-get res :ok))
+              ;; t1 (removed from the archive file) is tombstoned...
+              (should (string-match-p "\"id\":\"t1\"[^}]*\"deletedAt\"" put-body))
+              ;; ...t2 (still present) is not deleted.
+              (should-not (string-match-p "\"id\":\"t2\"[^}]*\"deletedAt\"" put-body)))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync-once-archive-save-failure-does-not-latch ()
+  "Covers KTD5 partial-save.  When the archive surface's save fails, the cycle
+reports :save-failed and the archive-migrated latch is NOT set -- so the next
+cycle keeps strict OFF rather than reading the stale file as deletions.  The
+main save can succeed independently; the archive failure alone withholds the
+latch."
+  (let* ((root (make-temp-file "mw-arch-sf" t))
+         (tasks-file (expand-file-name "tasks.org" root))
+         (archive-file (expand-file-name "mindwtr_archive.org" root))
+         (mindwtr-shadow-directory (expand-file-name "shadow/" root))
+         (mindwtr-file tasks-file)
+         (mindwtr-archive-file nil)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (server-body
+          (concat "{\"tasks\":[{\"id\":\"t1\",\"title\":\"Old task\","
+                  "\"status\":\"archived\",\"rev\":2,"
+                  "\"createdAt\":\"2026-01-01T00:00:00Z\","
+                  "\"updatedAt\":\"2026-06-05T00:00:00Z\"}],"
+                  "\"projects\":[],\"sections\":[],\"areas\":[],\"settings\":{}}"))
+         (orig-save (symbol-function 'save-buffer))
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body server-body))))))
+    (unwind-protect
+        (progn
+          (with-temp-file tasks-file
+            (insert (mindwtr-render-appdata
+                     '(:tasks ((:id "t1" :title "Old task" :status "done" :order 0))
+                       :projects nil :sections nil :areas nil :settings nil))))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "Old task" :status "done" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
+             :projects nil :sections nil :areas nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (should-not (mindwtr-shadow-archive-migrated-p))
+          ;; Fail only the archive buffer's save; the main save succeeds.
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest args)
+                       (if (and (buffer-file-name)
+                                (string-match-p "mindwtr_archive" (buffer-file-name)))
+                           (error "disk full")
+                         (apply orig-save args)))))
+            (with-current-buffer (find-file-noselect tasks-file)
+              (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
+                (should (plist-get res :save-failed))
+                ;; The archive save failed -> latch withheld -> strict stays off.
+                (should-not (mindwtr-shadow-archive-migrated-p))))))
+      (mindwtr-test--kill-file-buffer tasks-file)
+      (mindwtr-test--kill-file-buffer archive-file)
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-sync--parse-surfaces-duplicate-id-surfaces-in-warnings ()
+  "Covers the duplicate-id durability fix.  An id present in both surfaces keeps
+the first (main) copy and records the dropped id in :duplicates and as a
+:duplicate warning so the loss is visible in the sync report."
+  (let* ((main (get-buffer-create " *mw-dup-main*"))
+         (arch (get-buffer-create " *mw-dup-arch*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer main
+            (let ((org-inhibit-startup t))
+              (erase-buffer)
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+                      "** NEXT Dup\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: d1\n:END:\n")
+              (org-mode)))
+          (with-current-buffer arch
+            (let ((org-inhibit-startup t))
+              (erase-buffer)
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+                      "** ARCH Dup\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: d1\n:END:\n")
+              (org-mode)))
+          (let* ((surfaces (list (list :buffer main :kind 'main)
+                                 (list :buffer arch :kind 'archive)))
+                 (parsed (mindwtr-sync--parse-surfaces surfaces)))
+            (should (member "d1" (plist-get parsed :duplicates)))
+            (should (seq-find (lambda (w) (and (plist-get w :duplicate)
+                                               (equal (plist-get w :id) "d1")))
+                              (plist-get parsed :warnings)))
+            ;; the kept copy is the main (first) surface's NEXT task
+            (let ((task (car (plist-get (plist-get parsed :appdata) :tasks))))
+              (should (equal (plist-get task :status) "next")))))
+      (kill-buffer main)
+      (kill-buffer arch))))

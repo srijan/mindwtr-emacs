@@ -1,6 +1,7 @@
 ;;; mindwtr-archive-test.el --- -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'mindwtr-archive)
+(require 'mindwtr-commands)
 (require 'mindwtr)
 
 ;;; mindwtr-archive-path ------------------------------------------------------
@@ -193,6 +194,84 @@ untouched (no ARCH stamped)."
             (goto-char (point-min))
             (re-search-forward "Projects")
             (should-error (mindwtr-archive-item-at-point) :type 'user-error)))
+      (delete-directory root t))))
+
+;;; Refile atomicity (R7) -----------------------------------------------------
+
+(ert-deftest mindwtr-archive-refile-paste-failure-leaves-source-intact ()
+  "Covers #2 / R7 atomicity.  When the archive paste fails mid-refile, the
+subtree must remain in the source buffer -- copy-then-cut means it is never
+lost from both buffers (a prior cut-then-paste ordering could strand it)."
+  (let* ((root (make-temp-file "mw-refile-fail" t))
+         (apath (expand-file-name "arch.org" root)))
+    (unwind-protect
+        (mindwtr-archive-test--with-active apath
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+                      "** DONE Stay put\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (mindwtr-mode))
+            (goto-char (point-min))
+            (re-search-forward "Stay put")
+            ;; Force the archive-side paste to fail.
+            (cl-letf (((symbol-function 'mindwtr-archive--ensure-container)
+                       (lambda (&rest _) (error "boom"))))
+              (should-error (mindwtr-archive-refile-at-point)))
+            ;; The subtree survives in the source buffer (not lost to the cut).
+            (should (save-excursion (goto-char (point-min))
+                                    (search-forward "Stay put" nil t)))))
+      (delete-directory root t))))
+
+(ert-deftest mindwtr-archive-item-paste-failure-best-effort-keeps-heading ()
+  "Covers #2.  `mindwtr-archive-item-at-point' is best-effort: a paste failure
+does not throw; the heading stays in the source buffer with its ARCH keyword
+set for the next sync to file identically."
+  (let* ((root (make-temp-file "mw-refile-be" t))
+         (apath (expand-file-name "arch.org" root)))
+    (unwind-protect
+        (mindwtr-archive-test--with-active apath
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+                      "** NEXT Survive\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (mindwtr-mode))
+            (goto-char (point-min))
+            (re-search-forward "Survive")
+            (cl-letf (((symbol-function 'mindwtr-archive--ensure-container)
+                       (lambda (&rest _) (error "boom"))))
+              ;; best-effort: must NOT signal
+              (mindwtr-archive-item-at-point))
+            ;; heading still present and now ARCH
+            (should (save-excursion (goto-char (point-min))
+                                    (re-search-forward "^\\*\\* ARCH Survive" nil t)))))
+      (delete-directory root t))))
+
+;;; ARCH routing parity (#6) ---------------------------------------------------
+
+(ert-deftest mindwtr-commands-route-after-keyword-arch-refiles ()
+  "Covers #6.  The shared routing helper refiles an ARCH'd heading into the
+archive file when the surface is active, so `mindwtr-set-status' and
+`mindwtr-commands--cycle' route ARCH the same way instead of diverging."
+  (let* ((root (make-temp-file "mw-route" t))
+         (apath (expand-file-name "arch.org" root)))
+    (unwind-protect
+        (mindwtr-archive-test--with-active apath
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+                      "** ARCH Cycled\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+              (mindwtr-mode))
+            (goto-char (point-min))
+            (re-search-forward "Cycled")
+            (mindwtr-commands--route-after-keyword 'task "ARCH")
+            (should-not (save-excursion (goto-char (point-min))
+                                        (search-forward "Cycled" nil t))))
+          (with-current-buffer (mindwtr-archive-buffer)
+            (goto-char (point-min))
+            (should (re-search-forward "^\\*\\* ARCH Cycled" nil t))))
       (delete-directory root t))))
 
 (provide 'mindwtr-archive-test)

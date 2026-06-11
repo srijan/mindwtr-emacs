@@ -191,6 +191,43 @@ verbatim instead.  LIVE is (PROJECTS . SECTIONS) from
            (not (and pid (gethash pid (car live))))))
         (_ nil))))
 
+(defun mindwtr-sync--archived-count (appdata)
+  "Count non-deleted entities in APPDATA whose status is \"archived\".
+Used by the strict-mode safety gate to compare the archived set the archive
+surface actually rendered into LOCAL against the archived set the SHADOW holds."
+  (let ((n 0))
+    (dolist (key mindwtr-sync--entity-keys)
+      (dolist (e (plist-get appdata key))
+        (when (and (equal (plist-get e :status) "archived")
+                   (not (plist-get e :deletedAt)))
+          (setq n (1+ n)))))
+    n))
+
+(defun mindwtr-sync--archive-strict-safe-p (local shadow archive-warned)
+  "Non-nil if strict absence semantics are safe to apply this cycle.
+
+Strict mode reads an archived entity's absence from LOCAL as a user deletion
+\(a server tombstone).  That inference is only sound when the archive surface
+parsed completely.  This gate withholds strict mode -- falling back to echo for
+the cycle, exactly like the missing-file fallback (KTD5) -- in two cases where
+absence is more likely a parse/IO fault than a deletion:
+
+- ARCHIVE-WARNED: the archive buffer parsed with warnings.  A quarantined or
+  malformed heading (KTD9) means an archived entity may be missing from LOCAL
+  for a parse reason; tombstoning it would delete live server data on a bad
+  edit, not a deletion.
+
+- Empty-shortfall: SHADOW holds archived entities but LOCAL parsed none.  An
+  empty or truncated archive file (an `rm'+recreate, a save that lost its
+  body) must not read as a mass deletion of the entire archived backlog.  The
+  one accepted cost is that deleting the very last archived item by emptying
+  the file is deferred until the next cycle that carries another archived
+  heading; deleting it as a heading (leaving `* Archive' in place) is
+  unaffected."
+  (and (not archive-warned)
+       (not (and (> (mindwtr-sync--archived-count shadow) 0)
+                 (= (mindwtr-sync--archived-count local) 0)))))
+
 (defun mindwtr-sync--ensure-status (entity kind)
   "Default a missing status on a newly created ENTITY of KIND.
 A type-invalid or missing keyword left the parser omitting :status; for a
@@ -485,38 +522,82 @@ single-file behavior, R9).  Earlier surfaces win id collisions in the merge."
                             :render #'mindwtr-render-archive-appdata
                             :backup-prefix "mindwtr-archive")))))))
 
+(defun mindwtr-sync--surface-has-unparsed-entity-p (appdata)
+  "Non-nil if the current buffer has an MW_ID heading absent from APPDATA.
+A heading that carries an MW_ID but produced no entity -- an untyped/quarantined
+heading whose MW_TYPE was removed or mistyped, so kind inference returned nil
+and the parser skipped it -- means a shadow entity may be missing from local
+state for a PARSE reason, not a user deletion.  The strict-absence gate treats
+this exactly like a degraded parse and refuses to tombstone (KTD5).  Scoped to
+the archive surface by the caller; the main file relies on reconcile's orphan
+quarantine instead."
+  (let ((ids (make-hash-table :test 'equal))
+        (unparsed nil))
+    (dolist (key mindwtr-sync--entity-keys)
+      (dolist (e (plist-get appdata key))
+        (when (plist-get e :id) (puthash (plist-get e :id) t ids))))
+    (mindwtr-util--map-entries
+     (lambda ()
+       (let ((id (org-entry-get nil "MW_ID")))
+         (when (and id (not (gethash id ids))) (setq unparsed t)))))
+    unparsed))
+
 (defun mindwtr-sync--parse-surfaces (surfaces)
   "Parse each surface's buffer and merge the results by id (earlier wins).
-Returns (:surfaces SURFACES* :appdata MERGED :warnings WARNINGS): SURFACES* is
-SURFACES with a post-parse :tick added to each entry (parsing may re-init
-org-mode and bump the tick without a user edit, so the post-parse value is the
-correct concurrency-guard baseline).  An id present in two surfaces keeps the
-first surface's copy and logs a message.  Parse warnings are accumulated across
+Returns (:surfaces SURFACES* :appdata MERGED :warnings WARNINGS
+:archive-warned BOOL :duplicates IDS): SURFACES* is SURFACES with a post-parse
+:tick added to each entry (parsing may re-init org-mode and bump the tick
+without a user edit, so the post-parse value is the correct concurrency-guard
+baseline).  An id present in two surfaces keeps the first surface's copy; the
+dropped ids are returned in :duplicates (and logged) so the caller can surface
+the loss durably rather than only as a transient message.  ARCHIVE-WARNED is
+non-nil when the archive surface carries a heading with an MW_ID that did NOT
+parse into an entity (`mindwtr-sync--surface-has-unparsed-entity-p') -- the
+degraded-parse signal the strict-mode safety gate keys on, so a quarantined
+heading cannot read as a deletion.  Parse warnings are accumulated across
 buffers because `mindwtr-parse--warnings' is per-run state, reset by each parse."
   (let ((merged (list :tasks nil :projects nil :sections nil :areas nil))
         (seen (make-hash-table :test 'equal))
-        out-surfaces warnings)
+        out-surfaces warnings archive-warned duplicates)
     (dolist (surface surfaces)
       (with-current-buffer (plist-get surface :buffer)
-        (let ((ad (mindwtr-parse-buffer)))
+        (let ((ad (mindwtr-parse-buffer))
+              (w (mindwtr-parse-warnings)))
           (push (plist-put (copy-sequence surface)
                            :tick (buffer-chars-modified-tick))
                 out-surfaces)
-          (setq warnings (append warnings (mindwtr-parse-warnings)))
+          (when (and (eq (plist-get surface :kind) 'archive)
+                     (mindwtr-sync--surface-has-unparsed-entity-p ad))
+            (setq archive-warned t))
+          (setq warnings (append warnings w))
           (dolist (key mindwtr-sync--entity-keys)
             (let (kept)
               (dolist (e (plist-get ad key))
                 (let ((id (plist-get e :id)))
                   (if (and id (gethash id seen))
-                      (message "mindwtr: id %s appears in multiple surfaces; keeping the first"
-                               id)
+                      (progn
+                        (push id duplicates)
+                        (message "mindwtr: id %s appears in multiple surfaces; keeping the first"
+                                 id))
                     (when id (puthash id t seen))
                     (push e kept))))
               (when kept
                 (setq merged (plist-put merged key
                                         (append (plist-get merged key)
                                                 (nreverse kept))))))))))
-    (list :surfaces (nreverse out-surfaces) :appdata merged :warnings warnings)))
+    (setq duplicates (nreverse duplicates))
+    ;; Fold dropped cross-surface duplicates into the warnings channel so the
+    ;; loss is durable in the sync report, not just a transient *Messages* line
+    ;; (a user's archive-file edit to a doubly-present id is otherwise silently
+    ;; discarded).  A duplicate entry is shaped (:id ID :duplicate t); the
+    ;; report renderer renders it in its own group.  Duplicates do NOT set
+    ;; ARCHIVE-WARNED -- the entity still rendered from the winning surface, so
+    ;; this is not the degraded-parse condition the strict gate guards against.
+    (list :surfaces (nreverse out-surfaces) :appdata merged
+          :warnings (append warnings
+                            (mapcar (lambda (id) (list :id id :duplicate t))
+                                    duplicates))
+          :archive-warned archive-warned :duplicates duplicates)))
 
 (defun mindwtr-sync--backup-buffer (prefix)
   "Write the current buffer to backups/PREFIX-<timestamp>.org; return the path.
@@ -541,16 +622,6 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
            (surfaces0 (mindwtr-sync--surfaces buffer))
            (archive-active (seq-find (lambda (s) (eq (plist-get s :kind) 'archive))
                                      surfaces0))
-           ;; Strict absence semantics (KTD5/KTD6) activate only when the
-           ;; archive surface is active, its latch is set, AND the archive file
-           ;; exists on disk -- an `rm'ed file reads as not-yet-rendered (echo,
-           ;; recreate), never as "everything was deleted".  Bound around the
-           ;; whole cycle so stats, change detection, and candidate construction
-           ;; all agree on what an absent archived entity means.
-           (mindwtr-sync--archive-strict
-            (and archive-active
-                 (mindwtr-shadow-archive-migrated-p)
-                 (let ((p (mindwtr-archive-path))) (and p (file-exists-p p)))))
            ;; Until the archive surface has been rendered once (latch unset),
            ;; force a full cycle even on an otherwise-clean HEAD-match, so the
            ;; first sync backfills the historical archived set into the archive
@@ -561,6 +632,28 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
            (surfaces (plist-get parsed :surfaces))
            (local (plist-get parsed :appdata))
            (parse-warnings (plist-get parsed :warnings))
+           ;; Strict absence semantics (KTD5/KTD6) are eligible only when the
+           ;; archive surface is active, its latch is set, AND the archive file
+           ;; exists on disk -- an `rm'ed file reads as not-yet-rendered (echo,
+           ;; recreate), never as "everything was deleted".
+           (archive-strict-eligible
+            (and archive-active
+                 (mindwtr-shadow-archive-migrated-p)
+                 (let ((p (mindwtr-archive-path))) (and p (file-exists-p p)))))
+           ;; ...but eligibility is not enough: an absent archived entity is
+           ;; only a *deletion* when the archive surface parsed cleanly.  A
+           ;; degraded parse (quarantined/malformed heading) or an empty file
+           ;; would otherwise read present-but-unparsed archived entities as
+           ;; mass deletions on the migrated steady state -- the seam the latch
+           ;; does NOT cover.  The safety gate (computed post-parse, which is
+           ;; why this binding sits below the parse) withholds strict and falls
+           ;; back to echo for the cycle.  Bound around the whole cycle so
+           ;; stats, change detection, and candidate construction all agree on
+           ;; what an absent archived entity means.
+           (mindwtr-sync--archive-strict
+            (and archive-strict-eligible
+                 (mindwtr-sync--archive-strict-safe-p
+                  local shadow (plist-get parsed :archive-warned))))
            (changed (mindwtr-sync--changed-ids local shadow))
            (stats (mindwtr-sync--stats local shadow))
            (local-dirty (> (+ (plist-get stats :created)
@@ -568,6 +661,12 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                               (plist-get stats :deleted))
                            0))
            (shadow-etag (mindwtr-shadow-get-etag)))
+      ;; Loudly refuse to mass-delete: eligibility passed (active, migrated,
+      ;; file present) but the safety gate withheld strict mode because the
+      ;; archive parsed with warnings or came back empty.  Archived absences are
+      ;; echoed this cycle, not tombstoned.
+      (when (and archive-strict-eligible (not mindwtr-sync--archive-strict))
+        (message "mindwtr: archive file degraded or empty this cycle; archived deletions NOT applied (echoing instead)"))
       ;; Step 1 of the cycle: with nothing local to push, HEAD the server; if
       ;; its ETag still matches the shadow, neither side changed -- skip the
       ;; PUT/GET round-trip.  (When local IS dirty -- a dirty archive file
