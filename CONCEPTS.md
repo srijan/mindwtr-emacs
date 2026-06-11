@@ -46,15 +46,22 @@ The latch must flip only *after* a confirmed durable save of the re-rendered buf
 ### Reconcile
 The step that rebuilds the buffer from merged server data: it erases the buffer, re-renders the canonical AppData, and restores view state (folds, point). Because it is destructive-then-rebuild, it must collect anything it cannot represent *before* erasing, and it is the commit point that durable post-sync side effects (Shadow save, Migration latch) are sequenced after.
 
+### Archive surface
+A second synced render surface — its own org file (`mindwtr_archive.org`) — that holds exactly the entities the main render drops for being archived. "Archived" becomes a status whose render surface is a *different file*, not an entity that vanishes: one sync cycle iterates a list of surfaces (main first, archive appended when active), parse-merging them by id with the earlier surface winning collisions, and Reconciling each with its own renderer. Because the archive file is regenerated from merged data every full cycle (never an append log), dedup is automatic, cloud-side archives appear on Reconcile, and un-archiving or deleting are ordinary parse-side changes — no pending-push ledger or dedup tracking is needed.
+
+Containment crosses the file split via explicit `MW_PROJECT_ID`/`MW_SECTION_ID` drawer properties: an archived task whose project still lives in the main file cannot nest under it, so the archive render emits the parent id and the parser honors it over outline ancestry. These are not new content fields (no signature migration); they only relocate where ancestry is read from.
+
+The archive surface has its own Migration latch (`archive-migrated`): an archived entity absent from local state means deletion (Tombstone) only *after* the surface has been durably rendered once. Before that — and whenever the archive file is missing from disk — a missing archived entity is echoed verbatim instead, so the first post-upgrade sync can never read the not-yet-created archive file as a mass deletion. This strict-vs-echo behavior is a dynamic mode, off by default, so legacy single-file behavior is byte-identical when the surface is inactive.
+
 ## Inbox triage
 
 ### Inbox
-The capture bucket holding items that have not yet been clarified — the un-triaged entries that Clarify drains. An item leaves the Inbox when an Outcome relocates it (under a project, onto a someday list, into the calendar); trashing instead archives it in place, so it stays in the buffer but is no longer an Inbox item.
+The capture bucket holding items that have not yet been clarified — the un-triaged entries that Clarify drains. An item leaves the Inbox when an Outcome relocates it (under a project, onto a someday list, into the calendar, or — for trash with the Archive surface active — into the archive file; with the surface inactive, trash leaves it in place to be dropped on the next sync).
 
 ### Clarify
 The guided session that walks the Inbox one item at a time, loading each into a working buffer so the user can decide and apply a single Outcome before the session advances to the next item.
 
-Each item receives exactly one Outcome per pass. The session tracks its remaining queue by stable entity identity, not by buffer position, so an Outcome that leaves an item in place (trash) still advances correctly, and an item that has left the Inbox by other means is skipped rather than re-presented.
+Each item receives exactly one Outcome per pass. The session tracks its remaining queue by stable entity identity, not by buffer position, so an Outcome still advances correctly whether it relocates the item (including a trash that refiles it into the Archive surface, so the heading vanishes from the source) or leaves it in place, and an item that has left the Inbox by other means is skipped rather than re-presented.
 
 ### Outcome
-The decision applied to one Inbox item during Clarify, drawn from a fixed set that mirrors the GTD next-action question — make it a next action, file it under a project, defer it to someday, schedule it onto the calendar, mark it reference, delegate it, or trash it. Most Outcomes relocate the item out of the Inbox; trash is the one that leaves it in place.
+The decision applied to one Inbox item during Clarify, drawn from a fixed set that mirrors the GTD next-action question — make it a next action, file it under a project, defer it to someday, schedule it onto the calendar, mark it reference, delegate it, or trash it. Every Outcome relocates the item out of the Inbox — trash into the Archive surface when active (or in place when inactive, to be dropped on the next sync).
