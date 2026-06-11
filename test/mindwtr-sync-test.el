@@ -1583,3 +1583,82 @@ server's version, and the report must surface that path."
             (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z") :ok))
             (set-buffer-modified-p nil)))
       (delete-directory dir t))))
+
+;;; U4: migration latch + strict absence semantics ---------------------------
+
+(ert-deftest mindwtr-sync-archive-strict-tombstones-absent-archived-task ()
+  "Covers R8 deletion semantics.  With strict mode on, an archived shadow task
+absent from local is a user deletion -> tombstone stamped with this cycle's NOW."
+  (let* ((mindwtr-sync--archive-strict t)
+         (shadow '(:tasks ((:id "t1" :title "x" :status "archived" :rev 3
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev1" "NOW"))
+         (task (car (plist-get cand :tasks))))
+    (should (string= (plist-get task :deletedAt) "NOW"))
+    (should (= (plist-get task :rev) 4))
+    (should (string= (plist-get task :revBy) "dev1"))))
+
+(ert-deftest mindwtr-sync-archive-legacy-echoes-absent-archived-task ()
+  "Covers R9.  With strict mode OFF (today's default), the same absent archived
+task is echoed verbatim -- original rev, no :deletedAt -- byte-identical to now."
+  (let* ((mindwtr-sync--archive-strict nil)
+         (shadow '(:tasks ((:id "t1" :title "x" :status "archived" :rev 3
+                            :createdAt "C" :updatedAt "U"))
+                   :projects nil :sections nil :areas nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev1" "NOW"))
+         (task (car (plist-get cand :tasks))))
+    (should (null (plist-get task :deletedAt)))
+    (should (= (plist-get task :rev) 3))))
+
+(ert-deftest mindwtr-sync-archive-strict-tombstones-archived-project-child ()
+  "Covers R8.  With strict mode on, archived projects count as live containers,
+so a done child of an archived project absent from local tombstones (the
+project is still present locally, isolating the child's deletion)."
+  (let* ((mindwtr-sync--archive-strict t)
+         (shadow '(:tasks ((:id "t1" :title "child" :status "done" :projectId "p1"
+                            :rev 2 :createdAt "C" :updatedAt "U"))
+                   :projects ((:id "p1" :title "P" :status "archived" :rev 1
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "P"
+                                        :status "archived"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev1" "NOW"))
+         (tomb (seq-find (lambda (e) (equal (plist-get e :id) "t1"))
+                         (plist-get cand :tasks))))
+    (should (string= (plist-get tomb :deletedAt) "NOW"))))
+
+(ert-deftest mindwtr-sync-archive-legacy-echoes-archived-project-child ()
+  "Covers R9.  With strict mode off, the archived project's done child is echoed
+\(its parent container does not render in legacy mode), never tombstoned."
+  (let* ((mindwtr-sync--archive-strict nil)
+         (shadow '(:tasks ((:id "t1" :title "child" :status "done" :projectId "p1"
+                            :rev 2 :createdAt "C" :updatedAt "U"))
+                   :projects ((:id "p1" :title "P" :status "archived" :rev 1
+                               :createdAt "C" :updatedAt "U"))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks nil
+                      :projects (list '(:id "p1" :mw-kind project :title "P"
+                                        :status "archived"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev1" "NOW"))
+         (echoed (seq-find (lambda (e) (equal (plist-get e :id) "t1"))
+                           (plist-get cand :tasks))))
+    (should (null (plist-get echoed :deletedAt)))
+    (should (= (plist-get echoed :rev) 2))))
+
+(ert-deftest mindwtr-shadow-archive-migrated-latch ()
+  "The archive-migrated latch is a one-way persistent flag, parallel to the
+notes/fields latches."
+  (let* ((dir (make-temp-file "mw-arch-latch" t))
+         (mindwtr-shadow-directory dir))
+    (unwind-protect
+        (progn
+          (should (null (mindwtr-shadow-archive-migrated-p)))
+          (mindwtr-shadow-set-archive-migrated)
+          (should (mindwtr-shadow-archive-migrated-p)))
+      (delete-directory dir t))))

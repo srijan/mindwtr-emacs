@@ -76,6 +76,22 @@ post-upgrade cycle (see `mindwtr-sync-build-candidate').  Parallel to
   (mindwtr-shadow--ensure-dir)
   (mindwtr-util-atomic-write (mindwtr-shadow--path "fields-migrated") "1"))
 
+(defun mindwtr-shadow-archive-migrated-p ()
+  "Non-nil once the archive surface has been durably rendered and saved once.
+Before this latch is set, the archive file does not yet exist on disk, so an
+archived entity absent from local state cannot be a user deletion -- it is the
+not-yet-rendered backlog and must be echoed, never tombstoned (R8).  Once the
+archive surface has been rendered AND the save confirmed, strict absence
+semantics activate: a missing archived entity is a real deletion.  Parallel to
+`mindwtr-shadow-notes-migrated-p' / `mindwtr-shadow-fields-migrated-p' and
+flipped with the same post-save discipline in `mindwtr-sync-once' (KTD5)."
+  (and (mindwtr-util-read-file (mindwtr-shadow--path "archive-migrated")) t))
+
+(defun mindwtr-shadow-set-archive-migrated ()
+  "Record that the archive surface has been durably rendered (one-way latch)."
+  (mindwtr-shadow--ensure-dir)
+  (mindwtr-util-atomic-write (mindwtr-shadow--path "archive-migrated") "1"))
+
 (defun mindwtr-shadow-device-id ()
   "Return the stable device id, generating and persisting one if needed."
   (let ((path (mindwtr-shadow--path "device-id")))

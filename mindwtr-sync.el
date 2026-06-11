@@ -10,6 +10,19 @@
 
 (defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas))
 
+(defvar mindwtr-sync--archive-strict nil
+  "When non-nil, archived entities follow strict absence semantics (KTD6).
+Default nil makes change detection byte-identical to the pre-archive engine:
+an archived entity (or one whose status maps to no render list) absent from
+local state is EXCUSED, never tombstoned, and archived projects are NOT live
+containers.  `mindwtr-sync-once' let-binds this to `t' (U5) only once the
+archive surface provably exists on disk and the migration latch is set
+(`mindwtr-shadow-archive-migrated-p') -- the deploy-seam guard that keeps the
+first post-upgrade sync from mass-deleting the as-yet-unrendered archive.  With
+the mode on, an archived entity's render surface is the archive file, so its
+absence there IS a user deletion and falls through to the ordinary tombstone
+branch of `mindwtr-sync-build-candidate'.")
+
 (defvar mindwtr--inhibit-save-sync nil
   "Non-nil while the engine writes the synced buffer itself.
 Dynamically `let'-bound `t' (never `setq'-reset, so it auto-unwinds on any
@@ -130,16 +143,21 @@ recovered here -- the caller resolves the set."
 
 (defun mindwtr-sync--live-container-ids (shadow)
   "Return (PROJECTS . SECTIONS): hashes of SHADOW container ids that render.
-A project renders unless it is archived or tombstoned.  A section renders
-only when it is not tombstoned and its parent project renders.  Used to
-decide whether a shadow entity's absence from org is EXPECTED (its parent
-is hidden) rather than a user deletion."
+A project renders unless it is tombstoned, or -- with strict mode
+\(`mindwtr-sync--archive-strict') off -- archived.  Under strict mode an archived
+project IS a live container: it renders as a subtree in the archive file, so its
+children's absence from local state is a deletion, not an expected hidden-parent
+absence (KTD6).  A section
+renders only when it is not tombstoned and its parent project renders.  Used to
+decide whether a shadow entity's absence from org is EXPECTED (its parent is
+hidden) rather than a user deletion."
   (let ((projs (make-hash-table :test 'equal))
         (secs (make-hash-table :test 'equal)))
     (dolist (p (plist-get shadow :projects))
       (let ((id (plist-get p :id)))
         (when (and id (not (plist-get p :deletedAt))
-                   (not (equal (plist-get p :status) "archived")))
+                   (or mindwtr-sync--archive-strict
+                       (not (equal (plist-get p :status) "archived"))))
           (puthash id t projs))))
     (dolist (s (plist-get shadow :sections))
       (let ((id (plist-get s :id)) (pid (plist-get s :projectId)))
@@ -149,17 +167,25 @@ is hidden) rather than a user deletion."
 
 (defun mindwtr-sync--rendered-absent-p (se kind live)
   "Non-nil if shadow entity SE of KIND is EXPECTED to be absent from org.
-True when SE is archived, or its parent container does not render, or (for a
-standalone task) its status maps to no list.  Such an entity must not be
-tombstoned for being missing from the buffer; it is echoed verbatim instead.
-LIVE is (PROJECTS . SECTIONS) from `mindwtr-sync--live-container-ids'."
-  (or (equal (plist-get se :status) "archived")
+With `mindwtr-sync--archive-strict' off (today's default): true when SE is
+archived, or its parent container does not render, or (for a standalone task)
+its status maps to no list.  Under strict mode the archived-status and
+status-maps-to-no-list escapes stop applying -- an archived entity's render
+surface is the archive file, so its absence there IS a user deletion (KTD6) --
+while the parent-container test still holds (archived projects are live
+containers under strict, so it naturally flips too).  An entity that is
+rendered-absent must not be tombstoned for being missing; it is echoed
+verbatim instead.  LIVE is (PROJECTS . SECTIONS) from
+`mindwtr-sync--live-container-ids'."
+  (or (and (not mindwtr-sync--archive-strict)
+           (equal (plist-get se :status) "archived"))
       (pcase kind
         ('task
          (let ((sid (plist-get se :sectionId)) (pid (plist-get se :projectId)))
            (cond (sid (not (gethash sid (cdr live))))
                  (pid (not (gethash pid (car live))))
-                 (t (null (mindwtr-model-status->list (plist-get se :status)))))))
+                 (t (and (not mindwtr-sync--archive-strict)
+                         (null (mindwtr-model-status->list (plist-get se :status))))))))
         ('section
          (let ((pid (plist-get se :projectId)))
            (not (and pid (gethash pid (car live))))))
