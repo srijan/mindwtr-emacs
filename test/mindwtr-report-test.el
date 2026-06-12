@@ -139,6 +139,83 @@ incoming-from-remote section."
                                   (search-forward "↓ Renamed on phone (task) — updated" nil t))))
       (kill-buffer buf))))
 
+(ert-deftest mindwtr-report-incoming-updated-renders-field-diff ()
+  "An incoming `updated' entry with differing :before/:after emits one indented
+field-diff line per changed content field."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 0 :deleted 0)
+              nil nil nil nil nil
+              '((:id "t1" :kind task :title "Task A" :change updated
+                 :before (:id "t1" :title "Task A" :status "next")
+                 :after  (:id "t1" :title "Task A" :status "done"))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "↓ Task A (task) — updated" nil t))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "status: next → done" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-incoming-updated-identical-content-no-diff-lines ()
+  "An incoming `updated' entry whose :before/:after content fields are identical
+(only non-content fields differ) emits no field-diff lines."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 0 :deleted 0)
+              nil nil nil nil nil
+              '((:id "t1" :kind task :title "Task A" :change updated
+                 :before (:id "t1" :title "Task A" :status "next" :rev 1)
+                 :after  (:id "t1" :title "Task A" :status "next" :rev 2))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "↓ Task A (task) — updated" nil t))
+          (should-not (save-excursion
+                        (goto-char (point-min))
+                        (search-forward "rev:" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-local-changes-renders-proposed-list ()
+  "When local-changes is non-nil the report lists each proposed entity with ↑
+arrows after the Proposed count line; updated entries show a field diff."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 1 :updated 1 :deleted 1)
+              nil nil nil nil nil nil nil
+              '((:id "t1" :kind task :title "New one" :change created)
+                (:id "t2" :kind task :title "Edited" :change updated
+                 :before (:id "t2" :title "Edited" :status "next")
+                 :after  (:id "t2" :title "Edited" :status "done"))
+                (:id "t3" :kind task :title "Gone" :change deleted)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "↑ New one (task) — created" nil t))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "↑ Edited (task) — updated" nil t)))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "status: next → done" nil t)))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "↑ Gone (task) — deleted" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-nil-local-changes-no-extra-output ()
+  "When local-changes is nil the report omits the proposed-list section."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              nil nil nil nil nil nil nil nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should-not (search-forward "↑" nil t)))
+      (kill-buffer buf))))
+
 (ert-deftest mindwtr-report-appends-rather-than-replaces ()
   "Covers AE5 / R5.  Two reportable syncs produce two timestamped top-level
 headings in one buffer, not a replaced single entry."

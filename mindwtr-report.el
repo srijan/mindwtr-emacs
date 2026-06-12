@@ -120,7 +120,8 @@ no skew, and no parse warning appends no heading."
       conflicts skew-warning parse-warnings incoming-changes))
 
 (defun mindwtr-report--insert-entry (stats conflicts skew-warning backup-file
-                                           parse-warnings incoming-changes sync-time)
+                                           parse-warnings incoming-changes sync-time
+                                           &optional local-changes)
   "Insert one timestamped sync entry at point (end of buffer).
 `inhibit-read-only' must be bound.  Conflict blocks are tagged with the
 `mindwtr-conflict' text property so the restore action can find them; the
@@ -133,13 +134,32 @@ restore live only on this newest entry (R8)."
                   (or (plist-get stats :created) 0)
                   (or (plist-get stats :updated) 0)
                   (or (plist-get stats :deleted) 0)))
+  (dolist (lc local-changes)
+    (insert (format "    ↑ %s (%s) — %s\n"
+                    (or (plist-get lc :title) "(untitled)")
+                    (plist-get lc :kind)
+                    (mindwtr-report--change-label (plist-get lc :change))))
+    (when (and (eq (plist-get lc :change) 'updated)
+               (plist-get lc :before) (plist-get lc :after))
+      (dolist (d (mindwtr-report--field-diff (plist-get lc :before) (plist-get lc :after)))
+        (insert (format "        %s: %s → %s\n"
+                        (substring (symbol-name (nth 0 d)) 1)
+                        (mindwtr-report--fmt (nth 1 d))
+                        (mindwtr-report--fmt (nth 2 d)))))))
   (when incoming-changes
     (insert "  Incoming from remote:\n")
     (dolist (ic incoming-changes)
       (insert (format "    ↓ %s (%s) — %s\n"
                       (or (plist-get ic :title) "(untitled)")
                       (plist-get ic :kind)
-                      (mindwtr-report--change-label (plist-get ic :change))))))
+                      (mindwtr-report--change-label (plist-get ic :change))))
+      (when (and (eq (plist-get ic :change) 'updated)
+                 (plist-get ic :before) (plist-get ic :after))
+        (dolist (d (mindwtr-report--field-diff (plist-get ic :before) (plist-get ic :after)))
+          (insert (format "        %s: %s → %s\n"
+                          (substring (symbol-name (nth 0 d)) 1)
+                          (mindwtr-report--fmt (nth 1 d))
+                          (mindwtr-report--fmt (nth 2 d))))))))
   (when skew-warning
     (insert (format "  ⚠ Clock skew: %s\n" skew-warning)))
   (when parse-warnings
@@ -188,7 +208,7 @@ restore live only on this newest entry (R8)."
 
 (defun mindwtr-report-show (stats conflicts skew-warning &optional backup-file
                                   target-buffer parse-warnings incoming-changes
-                                  sync-time)
+                                  sync-time local-changes)
   "Append a sync entry for STATS, CONFLICTS, SKEW-WARNING; return the buffer.
 The report is an append-only org log: each reportable sync adds a top-level
 heading (R5) rather than erasing prior content, and the log persists for the
@@ -232,7 +252,8 @@ rendering hiccup in this post-PUT path cannot throw a spurious sync failure
               (setq mindwtr-report--newest-entry (point))
               (mindwtr-report--insert-entry stats conflicts skew-warning
                                             backup-file parse-warnings
-                                            incoming-changes sync-time)))
+                                            incoming-changes sync-time
+                                            local-changes)))
         (error
          (message "mindwtr: sync report render failed: %s"
                   (error-message-string err)))))
