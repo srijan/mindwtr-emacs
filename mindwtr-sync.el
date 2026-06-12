@@ -425,7 +425,8 @@ Classification per entity, in this order:
                    ((not (string= (mindwtr-signature m) (mindwtr-signature s)))
                     (push (list :id id :kind kind
                                 :title (mindwtr-model-entity-title m)
-                                :change 'updated)
+                                :change 'updated
+                                :before s :after m)
                           out)))))))
           ;; Pass 2 -- shadow entities the server dropped entirely (hard purge,
           ;; no lingering tombstone): a live shadow entity gone from MERGED is a
@@ -505,6 +506,50 @@ absence is not explained by archival or a hidden parent."
                         (mindwtr-sync--rendered-absent-p se kind live))
               (setq deleted (1+ deleted)))))))
     (list :created created :updated updated :deleted deleted)))
+
+(defun mindwtr-sync--local-changes (local shadow)
+  "Return the local proposed changes for this sync.
+Each element is (:id ID :kind KIND :title TITLE :change CHANGE), where CHANGE
+is one of `created'/`updated'/`deleted'.  Updated entries also carry
+:before SE :after LE so the caller can show a field diff.
+
+Classification reuses `mindwtr-sync--classify' so the listed entities match
+what `mindwtr-sync--stats' counts exactly -- no drift between the count line
+and the detail list.  Returns nil when there are no local changes."
+  (let ((live (mindwtr-sync--live-container-ids shadow))
+        out)
+    (dolist (key mindwtr-sync--entity-keys)
+      (let ((kind (mindwtr-sync--key->kind key))
+            (idx (mindwtr-shadow-index shadow key))
+            (seen (make-hash-table :test 'equal)))
+        ;; Pass 1 -- every local entity: created or updated vs shadow.
+        (dolist (le (plist-get local key))
+          (let* ((id (plist-get le :id))
+                 (se (and id (gethash id idx))))
+            (when id (puthash id t seen))
+            (pcase (mindwtr-sync--classify le se)
+              ('create
+               (push (list :id id :kind kind
+                           :title (mindwtr-model-entity-title le)
+                           :change 'created)
+                     out))
+              ('update
+               (push (list :id id :kind kind
+                           :title (mindwtr-model-entity-title le)
+                           :change 'updated
+                           :before se :after le)
+                     out)))))
+        ;; Pass 2 -- live shadow entities absent from local: deleted.
+        (dolist (se (plist-get shadow key))
+          (let ((id (plist-get se :id)))
+            (unless (or (gethash id seen)
+                        (plist-get se :deletedAt)
+                        (mindwtr-sync--rendered-absent-p se kind live))
+              (push (list :id id :kind kind
+                          :title (mindwtr-model-entity-title se)
+                          :change 'deleted)
+                    out))))))
+    (nreverse out)))
 
 (defun mindwtr-sync--surfaces (main-buffer)
   "Return the ordered surface list for this cycle (KTD2).
@@ -711,6 +756,9 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                  ;; today.  Computed from the same shadow/wire/merged bindings
                  ;; the conflict path consumes; excludes own edits and conflicts.
                  (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
+                 ;; Local changes this device proposed (local vs shadow), mirroring
+                 ;; stats so the count line and the detail list are consistent.
+                 (local-changes (mindwtr-sync--local-changes local shadow))
                  (backup-file nil))
             ;; Per-surface concurrency guard: each buffer must be unchanged since
             ;; its post-parse tick (the PUT/GET window).
@@ -774,7 +822,7 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                     (error (message "mindwtr: archive-migrated latch write failed: %s"
                                     (error-message-string err))))))
               (mindwtr-report-show stats conflicts skew backup-file (current-buffer)
-                                   parse-warnings incoming)
+                                   parse-warnings incoming nil local-changes)
               (list :ok t :conflicts conflicts :stats stats :skew skew
                     :warnings parse-warnings :incoming incoming
                     :save-failed save-failed))))))))
