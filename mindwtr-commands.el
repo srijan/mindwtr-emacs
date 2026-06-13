@@ -216,14 +216,21 @@ entity already sits directly under the target container."
               ;; cursor follows the entity the user just re-statused.
               (progn
                 (org-back-to-heading t)
-                (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
-                  (org-cut-subtree)
+                ;; Pass the cut text to `org-paste-subtree' explicitly rather
+                ;; than letting it read `(current-kill 0)': `org-cut-subtree'
+                ;; (-> `kill-region') APPENDS to the kill-ring head when
+                ;; `last-command' is `kill-region', which the command loop
+                ;; leaves set after a prior relocation -- so a kill-ring paste
+                ;; would re-insert every previously-moved subtree (duplicating
+                ;; them) on consecutive relocations.
+                (let* ((level (1+ (save-excursion (goto-char target) (org-current-level))))
+                       (text (org-cut-subtree)))
                   (goto-char target)
                   ;; To the start of the heading after this container's subtree
                   ;; (or end of buffer) -- a clean line boundary -- then paste as
                   ;; the container's last child at the computed level.
                   (org-end-of-subtree t t)
-                  (org-paste-subtree level)))
+                  (org-paste-subtree level text)))
             (set-marker target nil)))))))
 
 (defun mindwtr-commands--cycle (dir)
@@ -304,11 +311,13 @@ or nil when the buffer has no projects container."
   "Move the subtree at point to be the last child of the heading at TARGET.
 Leaves point on the moved heading."
   (org-back-to-heading t)
-  (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
-    (org-cut-subtree)
+  ;; Explicit `text' so the paste never reads a kill-ring head that
+  ;; `org-cut-subtree' may have APPENDED to (see `mindwtr-commands--relocate').
+  (let* ((level (1+ (save-excursion (goto-char target) (org-current-level))))
+         (text (org-cut-subtree)))
     (goto-char target)
     (org-end-of-subtree t t)
-    (org-paste-subtree level)))
+    (org-paste-subtree level text)))
 
 ;;;###autoload
 (defun mindwtr-promote-to-project ()
