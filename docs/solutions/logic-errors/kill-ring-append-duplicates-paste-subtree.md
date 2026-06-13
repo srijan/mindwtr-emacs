@@ -57,42 +57,53 @@ holding *only* the just-cut subtree, which is false after a prior relocation in
 the same command-loop session.
 
 ## Solution
-Capture the text returned by `org-cut-subtree` / `org-copy-subtree` (both return
-the subtree string) and pass it as the explicit `tree` argument to
-`org-paste-subtree`, making the move independent of kill-ring state:
+Prevent the append at the **cut/copy**, by binding `last-command` to nil so
+`kill-region`/`copy-region-as-kill` start a fresh kill entry. The plain
+`org-paste-subtree` then pastes only the single subtree:
 
 ```elisp
 ;; mindwtr-commands--relocate / --move-subtree-under
-(let* ((level (1+ (save-excursion (goto-char target) (org-current-level))))
-       (text (org-cut-subtree)))
+(let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
+  (let ((last-command nil)) (org-cut-subtree))
   (goto-char target)
   (org-end-of-subtree t t)
-  (org-paste-subtree level text))
+  (org-paste-subtree level))
 
 ;; mindwtr-archive-refile-at-point
-(let ((text (org-copy-subtree)))
-  (with-current-buffer abuf
-    (let ((c (mindwtr-archive--ensure-container)))
-      (goto-char c) (org-end-of-subtree t t)
-      (org-paste-subtree 2 text))))
+(let ((last-command nil)) (org-copy-subtree))
+(with-current-buffer abuf
+  (let ((c (mindwtr-archive--ensure-container)))
+    (goto-char c) (org-end-of-subtree t t)
+    (org-paste-subtree 2)))
 ```
 
-`mindwtr-clarify.el`'s write-back already passed an explicit `text` to
-`org-paste-subtree`, which is why the clarify write-back path was never affected
-— it was the template for the fix.
-
 ## Why This Works
-The explicit `text` is exactly the one subtree that was just cut/copied, so the
-paste no longer reads the (possibly appended) kill-ring head. Any leftover
-kill-ring accumulation is then harmless because nothing pastes from it.
+The append only happens because `kill-region` checks `(eq last-command
+'kill-region)`. Binding `last-command` to nil for the duration of the cut/copy
+forces a fresh `kill-new`, so the kill-ring head (and `org-subtree-clip`) hold
+exactly the one subtree — across every Org version. The paste, which reads
+`(current-kill 0)`, then inserts a single subtree.
 
 ## What Didn't Work
-- A plain batch ERT test of `--relocate` over several items passed against the
-  buggy code: `last-command` is not `kill-region` in batch, so no append
-  happened. Reproducing the bug **requires setting `last-command` to
-  `kill-region` between moves** to mimic the command loop. The regression tests
+- **Batch test without `last-command`.** A plain batch ERT test of `--relocate`
+  over several items passes against the buggy code: `last-command` is not
+  `kill-region` in batch, so no append happens. Reproducing the bug **requires
+  setting `last-command` to `kill-region` between moves** to mimic the command
+  loop. The regression tests
   (`mindwtr-commands-relocate-does-not-duplicate-on-consecutive-kills`,
   `mindwtr-archive-refile-no-duplicate-on-consecutive-kills`) do exactly that.
+- **Passing the cut/copy *return value* as the explicit `tree` arg.** Works on
+  recent Org (Emacs 32: `org-copy-subtree` returns the subtree string) but
+  **fails on Org 9.6 (Emacs 29.3)**, where `org-cut-subtree` returns the
+  `"Cut: Subtree(s) with N characters"` *message string* — `org-paste-subtree`
+  then errors `The kill is not a (set of) tree(s)`.
+- **Passing `org-subtree-clip` as the explicit `tree` arg.** Also fails on Org
+  9.6: there `org-subtree-clip` is set from the (already appended) kill-ring
+  contents, not the pre-kill substring, so it carries the same accumulated blob.
+  Only fixing the append at the source is version-portable.
+- This whole detour was caught **only by running the suite on Emacs 29.3**
+  (Docker `silex/emacs:29.3`); local Emacs 32 was green at every wrong step. See
+  the related issue on testing across supported Emacs/Org versions.
 
 ## Prevention
 - Never call `org-paste-subtree` without an explicit `tree` when the matching

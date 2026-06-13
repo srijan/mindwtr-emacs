@@ -157,19 +157,21 @@ kill ring if the paste threw)."
             (pid (mindwtr-parse--ancestor-id 'project)))
         (cond (sid (org-set-property "MW_SECTION_ID" sid))
               (pid (org-set-property "MW_PROJECT_ID" pid)))))
-    ;; Pass the copied text to `org-paste-subtree' explicitly: `org-copy-subtree'
-    ;; (-> `copy-region-as-kill') APPENDS to the kill-ring head when
-    ;; `last-command' is `kill-region' (left set by a prior refile's cut), so a
-    ;; kill-ring paste would carry every previously-archived subtree into the
-    ;; archive buffer on consecutive refiles.
-    (let ((text (org-copy-subtree)))
-      ;; Paste into the archive buffer first.  If this signals, control unwinds
-      ;; with the source subtree intact (only copied, not cut).
-      (with-current-buffer abuf
-        (let ((c (mindwtr-archive--ensure-container)))
-          (goto-char c)
-          (org-end-of-subtree t t)
-          (org-paste-subtree 2 text))))
+    ;; Bind `last-command' so the copy starts a FRESH kill instead of appending:
+    ;; `org-copy-subtree' (-> `copy-region-as-kill') appends to the kill-ring
+    ;; head when `last-command' is `kill-region' (left set by a prior refile's
+    ;; cut), so a kill-ring paste would carry every previously-archived subtree
+    ;; into the archive buffer on consecutive refiles.  Must fix it at the copy:
+    ;; on Org 9.6 the cut's return value and `org-subtree-clip' both already
+    ;; reflect the appended blob, so passing an explicit tree would not help.
+    (let ((last-command nil)) (org-copy-subtree))
+    ;; Paste into the archive buffer first.  If this signals, control unwinds
+    ;; with the source subtree intact (only copied, not cut).
+    (with-current-buffer abuf
+      (let ((c (mindwtr-archive--ensure-container)))
+        (goto-char c)
+        (org-end-of-subtree t t)
+        (org-paste-subtree 2)))
     ;; Paste succeeded -- now it is safe to remove the original.
     (org-back-to-heading t)
     (org-cut-subtree)
