@@ -216,8 +216,17 @@ entity already sits directly under the target container."
               ;; cursor follows the entity the user just re-statused.
               (progn
                 (org-back-to-heading t)
+                ;; Bind `last-command' so the cut starts a FRESH kill instead of
+                ;; appending: `org-cut-subtree' (-> `kill-region') appends to the
+                ;; kill-ring head when `last-command' is `kill-region', which the
+                ;; command loop leaves set after a prior relocation.  An appended
+                ;; head makes `org-paste-subtree' re-insert every previously-moved
+                ;; subtree, duplicating them on consecutive relocations.  Fixing
+                ;; it at the cut (not by passing an explicit tree) is the only
+                ;; version-portable option: on Org 9.6 BOTH the cut's return value
+                ;; and `org-subtree-clip' already reflect the appended blob.
                 (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
-                  (org-cut-subtree)
+                  (let ((last-command nil)) (org-cut-subtree))
                   (goto-char target)
                   ;; To the start of the heading after this container's subtree
                   ;; (or end of buffer) -- a clean line boundary -- then paste as
@@ -304,8 +313,10 @@ or nil when the buffer has no projects container."
   "Move the subtree at point to be the last child of the heading at TARGET.
 Leaves point on the moved heading."
   (org-back-to-heading t)
+  ;; Bind `last-command' so the cut cannot APPEND to the kill-ring head (see
+  ;; `mindwtr-commands--relocate' for the full rationale).
   (let ((level (1+ (save-excursion (goto-char target) (org-current-level)))))
-    (org-cut-subtree)
+    (let ((last-command nil)) (org-cut-subtree))
     (goto-char target)
     (org-end-of-subtree t t)
     (org-paste-subtree level)))

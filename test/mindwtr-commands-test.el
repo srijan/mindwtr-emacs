@@ -500,4 +500,38 @@ line, and the drawer key is removed (the edit is authoritative)."
     (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
       (should (equal (plist-get task :contexts) '("@deep" "@work"))))))
 
+(defun mindwtr-commands-test--id-count (id)
+  "Number of headings carrying MW_ID ID in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((n 0) (re (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" (regexp-quote id))))
+      (while (re-search-forward re nil t) (cl-incf n))
+      n)))
+
+(ert-deftest mindwtr-commands-relocate-does-not-duplicate-on-consecutive-kills ()
+  "Relocating several tasks in a row must not duplicate earlier ones.
+Regression: `org-cut-subtree' appends to the kill-ring head when `last-command'
+is `kill-region' (as the interactive command loop leaves it after a prior
+relocation), and `org-paste-subtree' with no explicit tree pastes that growing
+blob -- so each move re-inserts every previously-moved task (the staircase seen
+in heavy clarify sessions)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Alpha" :status "next")
+                (:id "t2" :title "Bravo" :status "next")
+                (:id "t3" :title "Charlie" :status "next"))
+        :settings nil)
+    (dolist (id '("t1" "t2" "t3"))
+      ;; Simulate the command loop leaving `kill-region' as `last-command'
+      ;; after the previous relocation's cut.
+      (setq last-command 'kill-region)
+      (goto-char (point-min))
+      (re-search-forward (format ":MW_ID: %s$" id))
+      (org-back-to-heading t)
+      (org-todo "SOMEDAY")
+      (mindwtr-commands--relocate 'task))
+    (should (= (mindwtr-commands-test--id-count "t1") 1))
+    (should (= (mindwtr-commands-test--id-count "t2") 1))
+    (should (= (mindwtr-commands-test--id-count "t3") 1))))
+
 ;;; mindwtr-commands-test.el ends here

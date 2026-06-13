@@ -149,6 +149,42 @@ task) as one unit."
             (should (save-excursion (goto-char (point-min)) (search-forward "Step" nil t)))))
       (delete-directory root t))))
 
+(ert-deftest mindwtr-archive-refile-no-duplicate-on-consecutive-kills ()
+  "Archiving several tasks in a row must not duplicate earlier ones in the
+archive file.  Regression: `org-copy-subtree' appends to the kill-ring head
+when `last-command' is `kill-region' (left there by the previous refile's cut),
+and `org-paste-subtree' with no explicit tree pastes that growing blob into the
+archive buffer."
+  (let* ((root (make-temp-file "mw-refile-dup" t))
+         (apath (expand-file-name "arch.org" root)))
+    (unwind-protect
+        (mindwtr-archive-test--with-active apath
+          (with-temp-buffer
+            (let ((org-inhibit-startup t))
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Single Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+                      "** DONE One\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+                      "** DONE Two\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\n")
+              (mindwtr-mode))
+            (dolist (title '("One" "Two"))
+              ;; Command-loop carry-over after the previous refile's cut.
+              (setq last-command 'kill-region)
+              (goto-char (point-min))
+              (re-search-forward (format "DONE %s$" title))
+              (mindwtr-archive-item-at-point)))
+          (with-current-buffer (mindwtr-archive-buffer)
+            (cl-flet ((count-id (id)
+                        (save-excursion
+                          (goto-char (point-min))
+                          (let ((n 0))
+                            (while (re-search-forward
+                                    (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" id) nil t)
+                              (cl-incf n))
+                            n))))
+              (should (= (count-id "t1") 1))
+              (should (= (count-id "t2") 1)))))
+      (delete-directory root t))))
+
 (ert-deftest mindwtr-archive-item-inactive-surface-errors-untouched ()
   "Command with no file and no configured archive path: user-error, buffer
 untouched (no ARCH stamped)."
