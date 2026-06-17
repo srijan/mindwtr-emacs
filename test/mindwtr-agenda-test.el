@@ -162,15 +162,23 @@ structure-only assertion would miss."
 
 (defun mindwtr-agenda-test--engage-text (appdata)
   "Render APPDATA to a temp Mindwtr file, run `mindwtr-engage', return the
-agenda buffer's text."
+agenda buffer's text.
+
+`org-element-use-cache' is bound nil here: Org 9.6.x (Emacs 29's bundled Org,
+what CI runs) has an element-cache regression where a COLD agenda scan -- org
+opening a fresh file buffer and scanning it before the cache is consistent --
+intermittently misses deadlines.  It is fixed in Org 9.7+ and does not affect
+interactive use, where the Mindwtr file is already open in a warm buffer (a
+warm-buffer scan surfaces the deadline correctly even on 9.6).  Disabling the
+cache here isolates the test from that unrelated upstream bug so it verifies
+the calendar's deadline-window logic, not org's cache implementation."
   (let ((file (make-temp-file "mw-agenda" nil ".org")))
     (unwind-protect
         (progn
           (with-temp-file file
-            (insert (mindwtr-model-todo-keyword-line) "\n"
-                    (mindwtr-render-appdata appdata)))
+            (insert (mindwtr-render-appdata appdata)))
           (let ((mindwtr-file file)
-                (org-agenda-files (list file))
+                (org-element-use-cache nil)
                 (org-agenda-window-setup 'current-window)
                 (org-agenda-sticky nil))
             (mindwtr-engage))
