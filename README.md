@@ -281,6 +281,34 @@ renders them flat under the project. Unlike org-gtd there is no dependency
 graph or NEXT-advancement bookkeeping to set up locally — the server owns
 task ordering and project semantics.
 
+### Agenda views
+
+Two `org-agenda` views ship with the package, built directly against the
+Mindwtr keyword set so you don't hand-roll an `org-agenda-custom-commands`
+block and keep it in sync as the keywords evolve. Enable them once:
+
+```elisp
+(mindwtr-agenda-setup)
+```
+
+This binds a prefix (default `C-c d`, set `mindwtr-agenda-prefix-key` to change
+it):
+
+| Key | Command | Shows |
+|---|---|---|
+| `C-c d e` | `mindwtr-engage` | The working view, in order: today's calendar (today's `SCHEDULED` items and upcoming `DEADLINE`s within org's `org-deadline-warning-days` window), **Today's Focus** (tasks starred `MW_FOCUS_TODAY`), **Next Actions** (`NEXT`, excluding focused ones so nothing appears twice), **Waiting For** (`WAIT`), and the **Inbox** last. |
+| `C-c d p` | `mindwtr-projects` | Active projects. A project with no `NEXT` action anywhere in its subtree is **stuck** — flagged inline with a plain-text `STUCK` marker and floated to the top of the list. |
+
+Both commands are also plain `M-x`-invocable, and each scopes
+`org-agenda-files` to the Mindwtr file internally, so the views work whether or
+not you have added it to your global agenda configuration. The archive file is
+excluded — archived and done entities are not actionable.
+
+Navigation is native org-agenda: `RET` jumps to the heading at point (for a
+project, that lands you on its subtree of actions), `TAB` previews it without
+leaving the agenda, and `F` (follow mode) previews as you move. Nothing custom
+to learn.
+
 ### Customization summary
 
 | Variable | Default | Meaning |
@@ -292,6 +320,7 @@ task ordering and project semantics.
 | `mindwtr-sync-idle-debounce` | `5` | Idle seconds after save before auto-sync. |
 | `mindwtr-sync-interval` | `600` | Seconds between periodic syncs (`nil` disables). |
 | `mindwtr-backup-retention-days` | `3` | Days to keep pre-sync backups; pruned after each sync (`nil`/`0` keeps forever). |
+| `mindwtr-agenda-prefix-key` | `"C-c d"` | Prefix `mindwtr-agenda-setup` binds the agenda views under (`e` engage, `p` projects). |
 
 ## Org schema
 
@@ -482,11 +511,6 @@ edited).
   brings *in*. Add a "remote changes since last sync" summary so the user sees
   what mobile changed without diffing manually. (Sync & conflict reconciliation
   track.)
-- **Ship the agenda / engage views in the package** — any agenda view (engage =
-  today + `NEXT` + `WAIT` + `INBOX`) is currently hand-rolled in user config.
-  Since mindwtr owns its keyword set, ship a tested `org-agenda-custom-commands`
-  block / a `mindwtr-engage` command so users don't reconstruct it. (Emacs-native
-  editing track.)
 - **Refile-target wiring** — re-parenting leans on `org-refile`, but nothing
   sets `org-refile-targets` to mindwtr projects globally, so a bare `C-c C-w`
   won't offer the right destinations out of the box. The clarify flow already
