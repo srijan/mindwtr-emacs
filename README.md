@@ -299,6 +299,14 @@ it):
 | `C-c d e` | `mindwtr-engage` | The working view, in order: today's calendar (today's `SCHEDULED` items and upcoming `DEADLINE`s within org's `org-deadline-warning-days` window), **Today's Focus** (tasks starred `MW_FOCUS_TODAY`), **Next Actions** (`NEXT`, excluding focused ones so nothing appears twice), **Waiting For** (`WAIT`), and the **Inbox** last. |
 | `C-c d p` | `mindwtr-projects` | Active projects. A project with no `NEXT` action anywhere in its subtree is **stuck** — flagged inline with a plain-text `STUCK` marker and floated to the top of the list. |
 
+In the Engage view, each action line leads with its **owning project** (the
+enclosing project heading), falling back to its **area of focus** (`MW_AREA`),
+and a plain `-` when it is neither under a project nor filed to an area (a
+raw Inbox item). This replaces org's default filename category — the same dead
+`mindwtr:` on every line — with the one thing that tells you what an action is
+in service of. The column width is `mindwtr-agenda-prefix-width` (default 30);
+longer titles are truncated with `mindwtr-agenda-prefix-ellipsis`.
+
 Both commands are also plain `M-x`-invocable, and each scopes
 `org-agenda-files` to the Mindwtr file internally, so the views work whether or
 not you have added it to your global agenda configuration. The archive file is
@@ -321,6 +329,8 @@ to learn.
 | `mindwtr-sync-interval` | `600` | Seconds between periodic syncs (`nil` disables). |
 | `mindwtr-backup-retention-days` | `3` | Days to keep pre-sync backups; pruned after each sync (`nil`/`0` keeps forever). |
 | `mindwtr-agenda-prefix-key` | `"C-c d"` | Prefix `mindwtr-agenda-setup` binds the agenda views under (`e` engage, `p` projects). |
+| `mindwtr-agenda-prefix-width` | `30` | Column width of the Engage view's owning-project/area prefix. |
+| `mindwtr-agenda-prefix-ellipsis` | `"..."` | String appended when an Engage prefix is truncated to fit. |
 
 ## Org schema
 

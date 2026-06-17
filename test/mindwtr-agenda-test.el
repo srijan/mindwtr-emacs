@@ -206,6 +206,18 @@ today's calendar block; one beyond it does not."
     (should (string-match-p "In +[0-9]+ d\\.: +NEXT DueSoon" text))
     (should-not (string-match-p "In +[0-9]+ d\\.: +NEXT DueFar" text))))
 
+(ert-deftest mindwtr-agenda-engage-next-actions-show-owning-project ()
+  "Behavioral: a NEXT action under a project shows the project name in its
+agenda prefix, replacing the useless filename category (\"mindwtr:\")."
+  (let ((text (mindwtr-agenda-test--engage-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Atlas" :status "active"))
+                 :sections nil
+                 :tasks ((:id "t1" :title "Ship it" :status "next" :projectId "p1"))
+                 :settings nil))))
+    (should (string-match-p "Atlas +NEXT Ship it" text))
+    (should-not (string-match-p "mindwtr: +NEXT Ship it" text))))
+
 ;;; U4 -- Projects view --------------------------------------------------------
 
 (defun mindwtr-agenda-test--projects-match ()
@@ -264,6 +276,104 @@ non-stuck one (R8)."
       (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) match)))
         (should (member "Live" hits))
         (should-not (member "Gone" hits))))))
+
+;;; U6 -- prefix resolver (owning project / area) ------------------------------
+
+(defun mindwtr-agenda-test--at-task (title)
+  "Move point onto the NEXT task heading named TITLE."
+  (goto-char (point-min))
+  (re-search-forward (concat "NEXT " (regexp-quote title))))
+
+(ert-deftest mindwtr-agenda-resolve-project-returns-parent-project-title ()
+  "A task nested under a project resolves to that project's clean title."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Atlas Rollout" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Do it" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Do it")
+    (should (equal (mindwtr-agenda--resolve-project) "Atlas Rollout"))))
+
+(ert-deftest mindwtr-agenda-resolve-project-nil-for-standalone-action ()
+  "A standalone single action has no owning project."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Lone task" :status "next"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Lone task")
+    (should-not (mindwtr-agenda--resolve-project))))
+
+(ert-deftest mindwtr-agenda-resolve-project-finds-project-through-section ()
+  "A task under a section still resolves to the enclosing project (whole
+ancestry walk, not just the direct parent)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Deep Proj" :status "active"))
+        :sections ((:id "s1" :title "Phase 1" :projectId "p1"))
+        :tasks ((:id "t1" :title "Nested act" :status "next"
+                 :projectId "p1" :sectionId "s1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Nested act")
+    (should (equal (mindwtr-agenda--resolve-project) "Deep Proj"))))
+
+(ert-deftest mindwtr-agenda-resolve-area-inherits-project-area ()
+  "A project task with no area of its own inherits its project's MW_AREA."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Sub")
+    (should (equal (mindwtr-agenda--resolve-area) "Work"))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-prefers-project-over-area ()
+  "When a task has both an owning project and an area, the prefix shows the
+project (R: project leads the fallback chain)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Sub")
+    (should (string-match-p "\\`Proj *\\'" (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-uses-area-when-no-project ()
+  "A standalone action with its own area shows the area (project slot empty)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Home"))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Chore" :status "next" :areaId "a1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Chore")
+    (should (string-match-p "\\`Home *\\'" (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-empty-marker-when-unfiled ()
+  "An action with neither project nor area shows the empty marker."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Bare" :status "next"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Bare")
+    (should (string-match-p (concat "\\`" (regexp-quote mindwtr-agenda--prefix-empty))
+                            (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-truncates-to-width ()
+  "A long owning-project title is truncated to `mindwtr-agenda-prefix-width'
+with an ellipsis."
+  (let ((mindwtr-agenda-prefix-width 10))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "A very long project title" :status "active"))
+          :sections nil
+          :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+          :settings nil)
+      (mindwtr-agenda-test--at-task "Sub")
+      (let ((pfx (mindwtr-agenda--resolve-prefix)))
+        (should (= (string-width pfx) 10))
+        (should (string-suffix-p mindwtr-agenda-prefix-ellipsis pfx))))))
 
 ;;; U5 -- setup / keybindings ---------------------------------------------------
 
