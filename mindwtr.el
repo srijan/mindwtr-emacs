@@ -20,6 +20,7 @@
 (require 'mindwtr-clarify)
 (require 'mindwtr-capture)
 (require 'mindwtr-archive)
+(require 'mindwtr-agenda)
 
 (defgroup mindwtr nil "Sync org with Mindwtr Cloud." :group 'org)
 
