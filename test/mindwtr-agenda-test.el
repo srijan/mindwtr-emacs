@@ -237,16 +237,74 @@ agenda prefix, replacing the useless filename category (\"mindwtr:\")."
 ;;; U4 -- Projects view --------------------------------------------------------
 
 (defun mindwtr-agenda-test--projects-match ()
-  "Return the match string of the Projects view's single block."
+  "Return the match string of the Projects view's active block."
   (nth 1 (nth 0 (nth 2 (mindwtr-agenda--projects-spec)))))
 
-(ert-deftest mindwtr-agenda-projects-spec-is-single-active-project-block ()
-  "The Projects spec is one block matching active projects (R7)."
+(defun mindwtr-agenda-test--projects-text (appdata)
+  "Render APPDATA to a temp Mindwtr file, run `mindwtr-projects', return the
+agenda buffer text.  `org-element-use-cache' is bound nil for the same Org 9.6
+cold-scan reason documented on `mindwtr-agenda-test--engage-text'."
+  (let ((file (make-temp-file "mw-agenda" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert (mindwtr-render-appdata appdata)))
+          (let ((mindwtr-file file)
+                (org-element-use-cache nil)
+                (org-agenda-window-setup 'current-window)
+                (org-agenda-sticky nil))
+            (mindwtr-projects))
+          (with-current-buffer org-agenda-buffer-name
+            (buffer-substring-no-properties (point-min) (point-max))))
+      (when (get-buffer org-agenda-buffer-name)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer org-agenda-buffer-name)))
+      (delete-file file))))
+
+(ert-deftest mindwtr-agenda-projects-waiting-block-renders-without-category ()
+  "Behavioral: a waiting project surfaces under the Waiting Projects header,
+and -- like the active block -- without org's filename category prefix."
+  (let ((text (mindwtr-agenda-test--projects-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Active proj" :status "active")
+                            (:id "p2" :title "Blocked proj" :status "waiting"))
+                 :sections nil :tasks nil :settings nil))))
+    (should (string-match-p "Waiting Projects" text))
+    (should (string-match-p "WAIT Blocked proj" text))
+    ;; The default filename category would render as "<base>: ... WAIT Blocked
+    ;; proj"; the project-prefix suppresses it, leaving only blank padding.
+    (should-not (string-match-p "[[:alnum:]]+: +WAIT Blocked proj" text))))
+
+(ert-deftest mindwtr-agenda-projects-spec-has-active-and-waiting-blocks ()
+  "The Projects spec is two blocks: active projects first (with stuck
+flagging), then waiting projects under their own header (R7)."
   (let* ((spec (mindwtr-agenda--projects-spec))
          (blocks (nth 2 spec)))
-    (should (= (length blocks) 1))
+    (should (= (length blocks) 2))
     (should (eq (nth 0 (nth 0 blocks)) 'tags-todo))
-    (should (equal (nth 1 (nth 0 blocks)) "MW_TYPE=\"project\"+TODO=\"ACTIVE\""))))
+    (should (equal (nth 1 (nth 0 blocks)) "MW_TYPE=\"project\"+TODO=\"ACTIVE\""))
+    (should (equal (mindwtr-agenda-test--block-header (nth 0 blocks)) "Projects"))
+    (should (eq (nth 0 (nth 1 blocks)) 'tags-todo))
+    (should (equal (nth 1 (nth 1 blocks)) "MW_TYPE=\"project\"+TODO=\"WAIT\""))
+    (should (equal (mindwtr-agenda-test--block-header (nth 1 blocks))
+                   "Waiting Projects"))))
+
+(ert-deftest mindwtr-agenda-projects-waiting-block-matches-waiting-only ()
+  "The Waiting Projects block matches waiting projects and not active ones;
+the active block, conversely, does not match the waiting project."
+  (let* ((blocks (nth 2 (mindwtr-agenda--projects-spec)))
+         (active-match (nth 1 (nth 0 blocks)))
+         (waiting-match (nth 1 (nth 1 blocks))))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "Active proj" :status "active")
+                     (:id "p2" :title "Waiting proj" :status "waiting"))
+          :sections nil :tasks nil :settings nil)
+      (let ((waiting (org-map-entries (lambda () (org-get-heading t t t t)) waiting-match))
+            (active (org-map-entries (lambda () (org-get-heading t t t t)) active-match)))
+        (should (member "Waiting proj" waiting))
+        (should-not (member "Active proj" waiting))
+        (should (member "Active proj" active))
+        (should-not (member "Waiting proj" active))))))
 
 (ert-deftest mindwtr-agenda-project-prefix-flags-stuck-only ()
   "The prefix returns the STUCK marker at a stuck project and blanks at a

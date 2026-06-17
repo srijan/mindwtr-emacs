@@ -225,23 +225,31 @@ Returns -1/+1/nil for agenda lines A and B; paired with the
           (t nil))))
 
 (defun mindwtr-agenda--projects-spec ()
-  "Return the single-block `org-agenda-custom-commands' entry for Projects.
-Lists active projects (`MW_TYPE=\"project\"' with the ACTIVE keyword, R7);
-stuck ones are flagged inline by `mindwtr-agenda--project-prefix' and floated to
-the top by `mindwtr-agenda--project-cmp' -- one list, not two blocks (R8)."
-  `("p" "Mindwtr Projects"
-    ((tags-todo "MW_TYPE=\"project\"+TODO=\"ACTIVE\""
-                ((org-agenda-overriding-header "Projects")
-                 (org-agenda-prefix-format
-                  '((tags . " %(mindwtr-agenda--project-prefix)")))
-                 (org-agenda-cmp-user-defined #'mindwtr-agenda--project-cmp)
-                 (org-agenda-sorting-strategy '(user-defined-up)))))))
+  "Return the `org-agenda-custom-commands' entry for the Projects view.
+Two blocks: active projects (`MW_TYPE=\"project\"' with the ACTIVE keyword, R7),
+where stuck ones are flagged inline by `mindwtr-agenda--project-prefix' and
+floated to the top by `mindwtr-agenda--project-cmp' (R8); then waiting projects
+(the WAIT keyword) under their own header.  Both blocks use
+`mindwtr-agenda--project-prefix', which suppresses org's default filename
+category.  A waiting project is intentionally blocked, not stalled: it is never
+ACTIVE, so the prefix yields blank padding (no STUCK flag) aligned with the
+active block."
+  (let ((project-pf '((tags . " %(mindwtr-agenda--project-prefix)"))))
+    `("p" "Mindwtr Projects"
+      ((tags-todo "MW_TYPE=\"project\"+TODO=\"ACTIVE\""
+                  ((org-agenda-overriding-header "Projects")
+                   (org-agenda-prefix-format ',project-pf)
+                   (org-agenda-cmp-user-defined #'mindwtr-agenda--project-cmp)
+                   (org-agenda-sorting-strategy '(user-defined-up))))
+       (tags-todo "MW_TYPE=\"project\"+TODO=\"WAIT\""
+                  ((org-agenda-overriding-header "Waiting Projects")
+                   (org-agenda-prefix-format ',project-pf)))))))
 
 ;;;###autoload
 (defun mindwtr-projects ()
-  "Open the Mindwtr Projects agenda: active projects, stuck ones flagged first.
-Scopes `org-agenda-files' to the Mindwtr file and builds the view dynamically,
-so it works with no global agenda configuration."
+  "Open the Mindwtr Projects agenda: active projects (stuck ones flagged first),
+then waiting projects.  Scopes `org-agenda-files' to the Mindwtr file and builds
+the view dynamically, so it works with no global agenda configuration."
   (interactive)
   (mindwtr-agenda--open (mindwtr-agenda--projects-spec)))
 
