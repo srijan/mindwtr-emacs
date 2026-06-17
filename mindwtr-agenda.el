@@ -41,6 +41,16 @@ done entities are not actionable and must not appear in these views."
   (unless mindwtr-file (error "mindwtr-agenda: set `mindwtr-file'"))
   (list mindwtr-file))
 
+(defun mindwtr-agenda--open (spec)
+  "Open the agenda for the custom-command SPEC, scoped to the Mindwtr file.
+Binds `org-agenda-files' to the Mindwtr file and `org-agenda-custom-commands' to
+SPEC alone, then dispatches on SPEC's own key (its `car') -- so nothing leaks
+into the user's global agenda configuration.  Shared by `mindwtr-engage' and
+`mindwtr-projects'."
+  (let ((org-agenda-files (mindwtr-agenda--files))
+        (org-agenda-custom-commands (list spec)))
+    (org-agenda nil (car spec))))
+
 (defun mindwtr-agenda--project-stuck-p ()
   "Non-nil when the project heading at point is stuck.
 A project is stuck when it is active (TODO keyword ACTIVE) and has no
@@ -98,9 +108,7 @@ user's own org default (R2)."
 Scopes `org-agenda-files' to the Mindwtr file and builds the view dynamically,
 so it works with no global agenda configuration."
   (interactive)
-  (let ((org-agenda-files (mindwtr-agenda--files))
-        (org-agenda-custom-commands (list (mindwtr-agenda--engage-spec))))
-    (org-agenda nil "e")))
+  (mindwtr-agenda--open (mindwtr-agenda--engage-spec)))
 
 ;;; Projects view --------------------------------------------------------------
 
@@ -151,9 +159,7 @@ the top by `mindwtr-agenda--project-cmp' -- one list, not two blocks (R8)."
 Scopes `org-agenda-files' to the Mindwtr file and builds the view dynamically,
 so it works with no global agenda configuration."
   (interactive)
-  (let ((org-agenda-files (mindwtr-agenda--files))
-        (org-agenda-custom-commands (list (mindwtr-agenda--projects-spec))))
-    (org-agenda nil "p")))
+  (mindwtr-agenda--open (mindwtr-agenda--projects-spec)))
 
 ;;; Setup ----------------------------------------------------------------------
 
