@@ -102,5 +102,58 @@ so it works with no global agenda configuration."
         (org-agenda-custom-commands (list (mindwtr-agenda--engage-spec))))
     (org-agenda nil "e")))
 
+;;; Projects view --------------------------------------------------------------
+
+(defconst mindwtr-agenda--stuck-flag "STUCK"
+  "Plain-text marker shown before a stuck project in the Projects view (R12).")
+
+(defun mindwtr-agenda--project-prefix ()
+  "Agenda prefix for the project heading at point: a STUCK marker or blanks.
+Invoked from the Projects view `org-agenda-prefix-format' via its `%(...)'
+escape, which org evaluates with point on the source heading.  Returns a
+plain-text `STUCK ' for a stuck project and an equal-width blank string
+otherwise, so the project titles stay column-aligned (R8, R12)."
+  (if (mindwtr-agenda--project-stuck-p)
+      (concat mindwtr-agenda--stuck-flag " ")
+    (make-string (1+ (length mindwtr-agenda--stuck-flag)) ?\s)))
+
+(defun mindwtr-agenda--entry-stuck-p (line)
+  "Non-nil when agenda LINE's project (via its `org-hd-marker') is stuck."
+  (let ((m (get-text-property 0 'org-hd-marker line)))
+    (and m (org-with-point-at m (mindwtr-agenda--project-stuck-p)))))
+
+(defun mindwtr-agenda--project-cmp (a b)
+  "Sort comparator floating stuck projects ahead of the rest.
+Returns -1/+1/nil for agenda lines A and B; paired with the
+`user-defined-up' sorting strategy so stuck projects lead the single list."
+  (let ((sa (mindwtr-agenda--entry-stuck-p a))
+        (sb (mindwtr-agenda--entry-stuck-p b)))
+    (cond ((and sa (not sb)) -1)
+          ((and sb (not sa)) +1)
+          (t nil))))
+
+(defun mindwtr-agenda--projects-spec ()
+  "Return the single-block `org-agenda-custom-commands' entry for Projects.
+Lists active projects (`MW_TYPE=\"project\"' with the ACTIVE keyword, R7);
+stuck ones are flagged inline by `mindwtr-agenda--project-prefix' and floated to
+the top by `mindwtr-agenda--project-cmp' -- one list, not two blocks (R8)."
+  `("p" "Mindwtr Projects"
+    ((tags-todo "MW_TYPE=\"project\"+TODO=\"ACTIVE\""
+                ((org-agenda-overriding-header "Projects")
+                 (org-agenda-prefix-format
+                  '((tags . " %(mindwtr-agenda--project-prefix)")))
+                 (org-agenda-cmp-user-defined #'mindwtr-agenda--project-cmp)
+                 (org-agenda-sorting-strategy '(user-defined-up)))))))
+
+;;;###autoload
+(defun mindwtr-projects ()
+  "Open the Mindwtr Projects agenda: active projects, stuck ones flagged first.
+Scopes `org-agenda-files' to the Mindwtr file and builds the view dynamically,
+so it works with no global agenda configuration."
+  (interactive)
+  (let ((org-agenda-files (mindwtr-agenda--files))
+        (org-agenda-custom-commands (list (mindwtr-agenda--projects-spec))))
+    (org-agenda nil "p")))
+
 (provide 'mindwtr-agenda)
 ;;; mindwtr-agenda.el ends here

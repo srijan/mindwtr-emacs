@@ -198,4 +198,63 @@ today's calendar block; one beyond it does not."
     (should (string-match-p "In +[0-9]+ d\\.: +NEXT DueSoon" text))
     (should-not (string-match-p "In +[0-9]+ d\\.: +NEXT DueFar" text))))
 
+;;; U4 -- Projects view --------------------------------------------------------
+
+(defun mindwtr-agenda-test--projects-match ()
+  "Return the match string of the Projects view's single block."
+  (nth 1 (nth 0 (nth 2 (mindwtr-agenda--projects-spec)))))
+
+(ert-deftest mindwtr-agenda-projects-spec-is-single-active-project-block ()
+  "The Projects spec is one block matching active projects (R7)."
+  (let* ((spec (mindwtr-agenda--projects-spec))
+         (blocks (nth 2 spec)))
+    (should (= (length blocks) 1))
+    (should (eq (nth 0 (nth 0 blocks)) 'tags-todo))
+    (should (equal (nth 1 (nth 0 blocks)) "MW_TYPE=\"project\"+TODO=\"ACTIVE\""))))
+
+(ert-deftest mindwtr-agenda-project-prefix-flags-stuck-only ()
+  "The prefix returns the STUCK marker at a stuck project and blanks at a
+non-stuck one (R8)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Stalled" :status "active")
+                   (:id "p2" :title "Moving" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Act" :status "next" :projectId "p2"))
+        :settings nil)
+    (goto-char (point-min))
+    (re-search-forward "ACTIVE Stalled")
+    (let ((pfx (mindwtr-agenda--project-prefix)))
+      (should (string-match-p "STUCK" pfx)))
+    (goto-char (point-min))
+    (re-search-forward "ACTIVE Moving")
+    (let ((pfx (mindwtr-agenda--project-prefix)))
+      (should-not (string-match-p "STUCK" pfx))
+      (should (string-match-p "\\`[ ]+\\'" pfx)))))
+
+(ert-deftest mindwtr-agenda-project-prefix-is-plain-ascii ()
+  "The stuck marker is plain ASCII -- no emoji or icons (R12)."
+  (should (string-match-p "\\`[[:ascii:]]+\\'" mindwtr-agenda--stuck-flag))
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Stalled" :status "active"))
+        :sections nil :tasks nil :settings nil)
+    (re-search-forward "ACTIVE Stalled")
+    (should (string-match-p "\\`[[:ascii:]]+\\'"
+                            (mindwtr-agenda--project-prefix)))))
+
+(ert-deftest mindwtr-agenda-projects-match-excludes-archived ()
+  "An ARCH project is not matched by the Projects spec (AE4)."
+  (let ((match (mindwtr-agenda-test--projects-match)))
+    (with-temp-buffer
+      (let ((org-todo-keywords mindwtr-model-todo-keywords)
+            (org-inhibit-startup t))
+        (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+                "** ACTIVE Live\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n"
+                "** ARCH Gone\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p2\n:END:\n")
+        (org-mode))
+      (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) match)))
+        (should (member "Live" hits))
+        (should-not (member "Gone" hits))))))
+
 ;;; mindwtr-agenda-test.el ends here
