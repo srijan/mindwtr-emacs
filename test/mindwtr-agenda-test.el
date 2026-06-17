@@ -39,4 +39,64 @@
   (let ((mindwtr-file nil))
     (should-error (mindwtr-agenda--files))))
 
+;;; U2 -- stuck-project predicate ----------------------------------------------
+
+(defun mindwtr-agenda-test--stuck-at (title)
+  "Move to the project heading named TITLE and return its stuck-p result."
+  (goto-char (point-min))
+  (re-search-forward (concat "ACTIVE " (regexp-quote title)))
+  (mindwtr-agenda--project-stuck-p))
+
+(ert-deftest mindwtr-agenda-project-with-next-child-is-not-stuck ()
+  "An active project with a NEXT child is not stuck (AE2)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "HasNext" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Do it" :status "next" :projectId "p1"))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--stuck-at "HasNext"))))
+
+(ert-deftest mindwtr-agenda-project-without-next-child-is-stuck ()
+  "An active project with zero NEXT children is stuck (AE2)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "NoNext" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Later" :status "waiting" :projectId "p1"))
+        :settings nil)
+    (should (mindwtr-agenda-test--stuck-at "NoNext"))))
+
+(ert-deftest mindwtr-agenda-project-with-only-done-children-is-stuck ()
+  "DONE children do not clear stuck."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "AllDone" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Finished" :status "done" :projectId "p1"))
+        :settings nil)
+    (should (mindwtr-agenda-test--stuck-at "AllDone"))))
+
+(ert-deftest mindwtr-agenda-project-with-only-waiting-child-is-stuck ()
+  "A WAIT child but no NEXT is still stuck."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "OnlyWait" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Blocked" :status "waiting" :projectId "p1"))
+        :settings nil)
+    (should (mindwtr-agenda-test--stuck-at "OnlyWait"))))
+
+(ert-deftest mindwtr-agenda-project-with-nested-next-is-not-stuck ()
+  "A NEXT task under a section within the project clears stuck (whole-subtree
+scan, not just direct children)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Nested" :status "active"))
+        :sections ((:id "s1" :title "Phase 1" :projectId "p1"))
+        :tasks ((:id "t1" :title "Deep action" :status "next"
+                 :projectId "p1" :sectionId "s1"))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--stuck-at "Nested"))))
+
 ;;; mindwtr-agenda-test.el ends here

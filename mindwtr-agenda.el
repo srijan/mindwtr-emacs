@@ -41,5 +41,26 @@ done entities are not actionable and must not appear in these views."
   (unless mindwtr-file (error "mindwtr-agenda: set `mindwtr-file'"))
   (list mindwtr-file))
 
+(defun mindwtr-agenda--project-stuck-p ()
+  "Non-nil when the project heading at point is stuck.
+A project is stuck when it is active (TODO keyword ACTIVE) and has no
+descendant carrying the NEXT keyword.  Only NEXT clears stuck: WAIT, SOMEDAY,
+and DONE children do not.  The scan covers the whole subtree, so a NEXT task
+nested under a section still counts.  Returns nil off an active project
+heading.  Used both as the Projects view's inline stuck flag and its sort key,
+so the definition lives in one place."
+  (save-excursion
+    (org-back-to-heading t)
+    (and (equal (org-get-todo-state) "ACTIVE")
+         (let ((end (save-excursion (org-end-of-subtree t t) (point)))
+               (found nil))
+           (save-excursion
+             (while (and (not found)
+                         (outline-next-heading)
+                         (< (point) end))
+               (when (equal (org-get-todo-state) "NEXT")
+                 (setq found t))))
+           (not found)))))
+
 (provide 'mindwtr-agenda)
 ;;; mindwtr-agenda.el ends here
