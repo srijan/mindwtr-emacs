@@ -231,12 +231,33 @@ absence is more likely a parse/IO fault than a deletion:
 (defun mindwtr-sync--ensure-status (entity kind)
   "Default a missing status on a newly created ENTITY of KIND.
 A type-invalid or missing keyword left the parser omitting :status; for a
-brand-new entity there is no shadow status to inherit, so fall back to the
-kind's default (task -> inbox, project -> active) so validation does not abort."
+brand-new entity there is no shadow status to inherit, so fall back to a
+context-aware default so validation does not abort:
+
+  project                          -> active
+  task with a project/section parent -> next
+  task with no container parent     -> inbox
+
+A keyword-less task created directly inside a project (carrying :projectId or
+:sectionId from outline ancestry) is an actionable project task, so it rests at
+NEXT -- inbox is the wrong resting state there (mirrors the explicit NEXT stamp
+`mindwtr-commands--stamp-missing-child-keywords' applies on promote-to-project).
+A keyword-less task elsewhere (the Inbox container) still rests at inbox.
+
+This keys on parent presence ONLY, never the parent project's status: a new task
+under a someday/waiting project also defaults to NEXT, and we never cascade a
+project's deferred status onto its tasks (a task keeps whatever keyword it has;
+the project's container placement carries the deferral).  This matches upstream,
+which leaves task status untouched when a project becomes someday."
   (if (or (not (memq kind '(task project))) (plist-get entity :status))
       entity
     (plist-put (copy-sequence entity)
-               :status (if (eq kind 'task) "inbox" "active"))))
+               :status (cond
+                        ((eq kind 'project) "active")
+                        ((or (plist-get entity :projectId)
+                             (plist-get entity :sectionId))
+                         "next")
+                        (t "inbox")))))
 
 (defun mindwtr-sync-build-candidate (local shadow device-id now
                                            &optional protect-empty-notes

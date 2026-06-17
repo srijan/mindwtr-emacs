@@ -23,6 +23,51 @@
     (should (string= (plist-get task :createdAt) "2026-06-01T00:00:00Z"))
     (should (string= (plist-get task :revBy) "dev-1"))))
 
+(ert-deftest mindwtr-sync-ensure-status-defaults-inbox-for-standalone-task ()
+  "A keyword-less new task with no container parent defaults to inbox."
+  (let ((m (mindwtr-sync--ensure-status '(:id "t" :title "x") 'task)))
+    (should (string= (plist-get m :status) "inbox"))))
+
+(ert-deftest mindwtr-sync-ensure-status-defaults-next-for-project-task ()
+  "A keyword-less new task created directly inside a project defaults to NEXT,
+not inbox -- inbox is the wrong resting state for a project task."
+  (let ((m (mindwtr-sync--ensure-status '(:id "t" :title "x" :projectId "p1") 'task)))
+    (should (string= (plist-get m :status) "next"))))
+
+(ert-deftest mindwtr-sync-ensure-status-defaults-next-for-section-task ()
+  "A keyword-less new task inside a section also defaults to NEXT."
+  (let ((m (mindwtr-sync--ensure-status '(:id "t" :title "x" :sectionId "s1") 'task)))
+    (should (string= (plist-get m :status) "next"))))
+
+(ert-deftest mindwtr-sync-build-candidate-keywordless-project-task-is-next ()
+  "End-to-end: a new keyword-less task parsed under a project (carrying
+:projectId but no :status) syncs as NEXT, not INBOX."
+  (let* ((local '(:tasks ((:id nil :mw-kind task :title "do it" :projectId "p1"))
+                  :projects nil :sections nil :areas nil))
+         (shadow '(:tasks nil :projects nil :sections nil :areas nil :settings nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1"
+                                             "2026-06-01T00:00:00Z"))
+         (task (car (plist-get cand :tasks))))
+    (should (string= (plist-get task :status) "next"))))
+
+(ert-deftest mindwtr-sync-build-candidate-keywordless-someday-project-task-is-next ()
+  "A new keyword-less task under a SOMEDAY (or waiting) project still defaults to
+NEXT -- the default is project-status-agnostic; we never cascade the project's
+deferred status onto the task (matches upstream, which leaves task status
+untouched when a project is someday)."
+  (let* ((shadow '(:tasks nil
+                   :projects ((:id "p1" :title "parked" :status "someday" :rev 1))
+                   :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id nil :mw-kind task :title "do it"
+                                     :projectId "p1"))
+                      :projects (list '(:id "p1" :mw-kind project :title "parked"
+                                        :status "someday"))
+                      :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1"
+                                             "2026-06-01T00:00:00Z"))
+         (task (car (plist-get cand :tasks))))
+    (should (string= (plist-get task :status) "next"))))
+
 (ert-deftest mindwtr-sync-build-candidate-unchanged-echoes-rev ()
   (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 7
                             :revBy "phone" :createdAt "C" :updatedAt "U"))
