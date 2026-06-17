@@ -114,3 +114,6 @@ A future boolean `:pinned`, not mapped to org:
   the deletion marker is shadow-only and off this allow-list, a server tombstone has an
   unchanged signature, so deletes are invisible to signature comparison and must be detected
   before any signature-equality gate.
+- [[single-classifier-feeds-summary-and-detail]] — the sync report's field-diff renderer
+  consumes this same allow-list, which is what lets one renderer serve both the proposed and
+  incoming directions correctly.

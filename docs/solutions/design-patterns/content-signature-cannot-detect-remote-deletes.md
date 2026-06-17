@@ -161,8 +161,16 @@ Note the own/remote distinction: `(and w (plist-get w :deletedAt))` asks *"did t
 push the tombstone?"* — provenance — never a signature comparison, since signatures are
 equal on both sides of any delete.
 
+Since PR #49 the `'updated` branch additionally carries `:before s :after m` on its plist
+(only `updated`, not `created`/`deleted`), so the report can render a per-field diff; the
+delete path shown above is unchanged. See
+[[single-classifier-feeds-summary-and-detail]].
+
 ## Related
 
+- [[single-classifier-feeds-summary-and-detail]] — the symmetric proposed/incoming report
+  built on this classifier: its `mindwtr-sync--local-changes` reuses the same `--classify`
+  and the same three-part delete guard documented here.
 - [[content-signature-allow-list-not-deny-list]] — the field-set invariant this is the
   delete-blindness corollary of; the signature signs only `mindwtr-model-content-fields`.
 - [[reconcile-partial-update-reverts-remote-edits]] — same signature-equality-misfire
