@@ -1,10 +1,10 @@
 ---
 title: Archive sync strict-absence safety gate for degraded parse
 date: 2026-06-11
-category: docs/solutions/logic-errors
-module: archive-sync
+category: logic-errors
+module: mindwtr-archive / mindwtr-sync
 problem_type: logic_error
-component: service_object
+component: tooling
 symptoms:
   - "Archived entities silently server-deleted after a sync cycle with no user deletion — triggered when the archive file contains a quarantined heading (MW_TYPE removed) or is empty/truncated"
   - "Refile to archive loses the heading from both source buffer and archive file if the paste step fails after the cut (heading stranded on kill ring)"
@@ -14,7 +14,10 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: critical
 related_components:
-  - service_object
+  - mindwtr-sync--archive-strict-safe-p
+  - mindwtr-sync--surface-has-unparsed-entity-p
+  - mindwtr-archive-refile-best-effort
+  - mindwtr-commands--route-after-keyword
 tags:
   - archive-sync
   - strict-absence
