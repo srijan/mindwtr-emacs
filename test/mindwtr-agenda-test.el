@@ -99,4 +99,103 @@ scan, not just direct children)."
         :settings nil)
     (should-not (mindwtr-agenda-test--stuck-at "Nested"))))
 
+;;; U3 -- Engage view ----------------------------------------------------------
+
+(defun mindwtr-agenda-test--block-header (block)
+  "Return BLOCK's `org-agenda-overriding-header' value."
+  (cadr (assq 'org-agenda-overriding-header
+              (car (last block)))))
+
+(ert-deftest mindwtr-agenda-engage-spec-block-order ()
+  "The Engage spec is five blocks in order: calendar, focus, next, waiting,
+inbox -- with the Inbox last (R1, R6)."
+  (let* ((spec (mindwtr-agenda--engage-spec))
+         (blocks (nth 2 spec)))
+    (should (= (length blocks) 5))
+    (should (eq (nth 0 (nth 0 blocks)) 'agenda))
+    (should (eq (nth 0 (nth 1 blocks)) 'tags-todo))
+    (should (equal (nth 1 (nth 1 blocks)) "MW_FOCUS_TODAY=\"t\""))
+    (should (equal (nth 1 (nth 2 blocks)) "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""))
+    (should (equal (nth 1 (nth 3 blocks)) "TODO=\"WAIT\""))
+    ;; Inbox is the last block (R6).
+    (should (eq (nth 0 (nth 4 blocks)) 'tags-todo))
+    (should (equal (nth 1 (nth 4 blocks)) "TODO=\"INBOX\""))))
+
+(ert-deftest mindwtr-agenda-engage-headers-are-plain-ascii ()
+  "Every block header is plain ASCII text -- no emoji or icon characters (R12)."
+  (dolist (block (nth 2 (mindwtr-agenda--engage-spec)))
+    (let ((header (mindwtr-agenda-test--block-header block)))
+      (should (stringp header))
+      (should (string-match-p "\\`[[:ascii:]]+\\'" header)))))
+
+(ert-deftest mindwtr-agenda-engage-calendar-keeps-org-deadline-default ()
+  "The calendar block does not override `org-deadline-warning-days' -- the
+look-ahead window follows the user's org default (R2)."
+  (let* ((blocks (nth 2 (mindwtr-agenda--engage-spec)))
+         (settings (car (last (nth 0 blocks)))))
+    (should-not (assq 'org-deadline-warning-days settings))))
+
+(ert-deftest mindwtr-agenda-engage-focus-dedups-against-next ()
+  "Behavioral (AE1): run the focus and next-actions match strings the spec
+actually uses against a rendered buffer with a focused NEXT and an unfocused
+NEXT.  The focused task appears under focus and NOT under next; the unfocused
+one appears under next.  This catches a wrong-but-plausible match string a
+structure-only assertion would miss."
+  (let* ((blocks (nth 2 (mindwtr-agenda--engage-spec)))
+         (focus-match (nth 1 (nth 1 blocks)))
+         (next-match (nth 1 (nth 2 blocks))))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil :projects nil :sections nil
+          :tasks ((:id "t1" :title "Focused" :status "next" :isFocusedToday t)
+                  (:id "t2" :title "Plain" :status "next"))
+          :settings nil)
+      (let ((focus (org-map-entries (lambda () (org-get-heading t t t t)) focus-match))
+            (next (org-map-entries (lambda () (org-get-heading t t t t)) next-match)))
+        (should (member "Focused" focus))
+        (should-not (member "Plain" focus))
+        (should (member "Plain" next))
+        (should-not (member "Focused" next))))))
+
+(defun mindwtr-agenda-test--iso-days (n)
+  "Return a date-only ISO string N days from today."
+  (format-time-string "%Y-%m-%d" (time-add nil (days-to-time n))))
+
+(defun mindwtr-agenda-test--engage-text (appdata)
+  "Render APPDATA to a temp Mindwtr file, run `mindwtr-engage', return the
+agenda buffer's text."
+  (let ((file (make-temp-file "mw-agenda" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert (mindwtr-model-todo-keyword-line) "\n"
+                    (mindwtr-render-appdata appdata)))
+          (let ((mindwtr-file file)
+                (org-agenda-files (list file))
+                (org-agenda-window-setup 'current-window)
+                (org-agenda-sticky nil))
+            (mindwtr-engage))
+          (with-current-buffer org-agenda-buffer-name
+            (buffer-substring-no-properties (point-min) (point-max))))
+      (when (get-buffer org-agenda-buffer-name)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer org-agenda-buffer-name)))
+      (delete-file file))))
+
+(ert-deftest mindwtr-agenda-engage-calendar-honors-deadline-window ()
+  "Behavioral (AE3): a deadline inside org's default warning window surfaces on
+today's calendar block; one beyond it does not."
+  (let ((text (mindwtr-agenda-test--engage-text
+               `(:areas nil :projects nil :sections nil
+                 :tasks ((:id "t1" :title "DueSoon" :status "next"
+                          :dueDate ,(mindwtr-agenda-test--iso-days 7))
+                         (:id "t2" :title "DueFar" :status "next"
+                          :dueDate ,(mindwtr-agenda-test--iso-days 60)))
+                 :settings nil))))
+    ;; The calendar block renders an upcoming deadline as "In N d.: NEXT Title".
+    ;; That marker only appears in the calendar block (Next Actions lists both
+    ;; tasks bare), so matching it -- not bare presence -- proves the calendar
+    ;; surfaced the near deadline and skipped the far one.
+    (should (string-match-p "In +[0-9]+ d\\.: +NEXT DueSoon" text))
+    (should-not (string-match-p "In +[0-9]+ d\\.: +NEXT DueFar" text))))
+
 ;;; mindwtr-agenda-test.el ends here
