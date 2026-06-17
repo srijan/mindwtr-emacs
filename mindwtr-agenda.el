@@ -155,5 +155,19 @@ so it works with no global agenda configuration."
         (org-agenda-custom-commands (list (mindwtr-agenda--projects-spec))))
     (org-agenda nil "p")))
 
+;;; Setup ----------------------------------------------------------------------
+
+;;;###autoload
+(defun mindwtr-agenda-setup ()
+  "Bind the Mindwtr agenda commands under `mindwtr-agenda-prefix-key'.
+Installs a global prefix keymap (default \"C-c d\") with `e' -> `mindwtr-engage'
+and `p' -> `mindwtr-projects'.  Idempotent: a fresh prefix keymap is built and
+re-installed each call, so calling it twice leaves a single consistent binding."
+  (interactive)
+  (let ((map (make-sparse-keymap)))
+    (define-key map "e" #'mindwtr-engage)
+    (define-key map "p" #'mindwtr-projects)
+    (global-set-key (kbd mindwtr-agenda-prefix-key) map)))
+
 (provide 'mindwtr-agenda)
 ;;; mindwtr-agenda.el ends here

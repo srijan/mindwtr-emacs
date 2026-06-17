@@ -257,4 +257,39 @@ non-stuck one (R8)."
         (should (member "Live" hits))
         (should-not (member "Gone" hits))))))
 
+;;; U5 -- setup / keybindings ---------------------------------------------------
+
+(defmacro mindwtr-agenda-test--with-sandbox-global-map (&rest body)
+  "Run BODY with a fresh global keymap, restoring the real one afterward."
+  (declare (indent 0))
+  `(let ((saved (current-global-map)))
+     (unwind-protect
+         (progn (use-global-map (make-sparse-keymap)) ,@body)
+       (use-global-map saved))))
+
+(ert-deftest mindwtr-agenda-setup-binds-default-prefix ()
+  "After setup, C-c d e -> engage and C-c d p -> projects (R10, overridden)."
+  (mindwtr-agenda-test--with-sandbox-global-map
+    (let ((mindwtr-agenda-prefix-key "C-c d"))
+      (mindwtr-agenda-setup))
+    (should (eq (key-binding (kbd "C-c d e")) 'mindwtr-engage))
+    (should (eq (key-binding (kbd "C-c d p")) 'mindwtr-projects))))
+
+(ert-deftest mindwtr-agenda-setup-honors-custom-prefix ()
+  "A custom `mindwtr-agenda-prefix-key' binds the commands under that prefix."
+  (mindwtr-agenda-test--with-sandbox-global-map
+    (let ((mindwtr-agenda-prefix-key "C-c m"))
+      (mindwtr-agenda-setup))
+    (should (eq (key-binding (kbd "C-c m e")) 'mindwtr-engage))
+    (should (eq (key-binding (kbd "C-c m p")) 'mindwtr-projects))))
+
+(ert-deftest mindwtr-agenda-setup-is-idempotent ()
+  "Calling setup twice leaves a single consistent binding."
+  (mindwtr-agenda-test--with-sandbox-global-map
+    (let ((mindwtr-agenda-prefix-key "C-c d"))
+      (mindwtr-agenda-setup)
+      (mindwtr-agenda-setup))
+    (should (eq (key-binding (kbd "C-c d e")) 'mindwtr-engage))
+    (should (eq (key-binding (kbd "C-c d p")) 'mindwtr-projects))))
+
 ;;; mindwtr-agenda-test.el ends here
