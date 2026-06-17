@@ -55,6 +55,13 @@ The archive surface has its own Migration latch (`archive-migrated`): an archive
 
 The latch guards the deploy seam; a second gate guards the steady-state seam. Even with the latch set and the file present, strict deletion semantics are withheld for a cycle when the archive buffer parsed with a degraded heading (an `MW_ID` heading that produced no entity — e.g. a hand-edit that removed `MW_TYPE`) or when the file came back empty while the Shadow still holds archived entities. In both cases an absent archived entity is more likely a parse or truncation fault than a deletion, so the cycle echoes (and re-backfills) instead of tombstoning. The one accepted cost: deleting the *last* archived item by emptying the file is deferred to the next cycle that carries another archived heading.
 
+## Task status
+
+### Status
+The GTD-style resting keyword that names a task's or project's workflow state — for a task, drawn from the next-action vocabulary (inbox, next, active, someday, waiting, and the like) and carried by the org TODO keyword, so the keyword *is* the status; for a project it names the project's own state.
+
+A task's status is independent of its parent's: a project's deferral (someday, waiting) is carried by the task's container placement, never cascaded onto the task's own keyword. So a keyword-less task created inside a project rests at next — actionable — whatever the project's status, while a keyword-less task with no container parent rests at inbox. This independence matches upstream, which leaves a task's status untouched when its project becomes someday.
+
 ## Inbox triage
 
 ### Inbox
