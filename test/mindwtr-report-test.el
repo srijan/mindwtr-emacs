@@ -203,6 +203,64 @@ arrows after the Proposed count line; updated entries show a field diff."
                                   (search-forward "↑ Gone (task) — deleted" nil t))))
       (kill-buffer buf))))
 
+(ert-deftest mindwtr-report-checklist-summary-pairs-renames-and-toggle ()
+  "Two items renamed in place (one also toggled) read as two `~' lines, not
+as deletions zipped backwards against insertions."
+  (should (equal
+           '("~ [ ]→[X] Review the intro draft → Review the intro draft - decided not to do it"
+             "~ Check the appendix links → Check/fix the appendix links")
+           (mindwtr-report--checklist-summary-lines
+            '((:title "Review the intro draft" :isCompleted :false)
+              (:title "Check the appendix links" :isCompleted :false))
+            '((:title "Review the intro draft - decided not to do it" :isCompleted t)
+              (:title "Check/fix the appendix links" :isCompleted :false))))))
+
+(ert-deftest mindwtr-report-checklist-summary-shows-only-the-insertion ()
+  "Inserting an item between two unchanged ones emits a single `+' line; the
+unchanged items are omitted and their positions do not shift the diff."
+  (should (equal
+           '("+ [X] Merge the intro into the summary")
+           (mindwtr-report--checklist-summary-lines
+            '((:title "A" :isCompleted t) (:title "B" :isCompleted :false))
+            '((:title "A" :isCompleted t)
+              (:title "Merge the intro into the summary" :isCompleted t)
+              (:title "B" :isCompleted :false))))))
+
+(ert-deftest mindwtr-report-checklist-summary-toggle-and-unrelated-pair ()
+  "A pure completion toggle renders one `~ [ ]->[X]' line; an unrelated
+delete+insert that do not look like a rename stay as separate `-'/`+'."
+  (should (equal '("~ [ ]→[X] Buy milk")
+                 (mindwtr-report--checklist-summary-lines
+                  '((:title "Buy milk" :isCompleted :false))
+                  '((:title "Buy milk" :isCompleted t)))))
+  (should (equal '("- [ ] Old thing" "+ [X] Brand new")
+                 (mindwtr-report--checklist-summary-lines
+                  '((:title "Old thing" :isCompleted :false))
+                  '((:title "Brand new" :isCompleted t))))))
+
+(ert-deftest mindwtr-report-checklist-diff-renders-compact-not-raw-plist ()
+  "An `updated' entry that changes the checklist renders a `checklist:' header
+with compact change lines, never the raw `(:title ... :isCompleted ...)' form."
+  (when (get-buffer "*Mindwtr Sync Report*")
+    (kill-buffer "*Mindwtr Sync Report*"))
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              nil nil nil nil nil nil nil
+              '((:id "t1" :kind task :title "Fix budget" :change updated
+                 :before (:id "t1" :title "Fix budget"
+                          :checklist ((:title "Split fees" :isCompleted :false)))
+                 :after  (:id "t1" :title "Fix budget"
+                          :checklist ((:title "Split fees" :isCompleted t))))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "checklist:" nil t))
+          (should (save-excursion (goto-char (point-min))
+                                  (search-forward "~ [ ]→[X] Split fees" nil t)))
+          (should-not (save-excursion (goto-char (point-min))
+                                      (search-forward ":isCompleted" nil t))))
+      (kill-buffer buf))))
+
 (ert-deftest mindwtr-report-nil-local-changes-no-extra-output ()
   "When local-changes is nil the report omits the proposed-list section."
   (when (get-buffer "*Mindwtr Sync Report*")

@@ -11,6 +11,7 @@
 ;; history with the restore affordance stripped.
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'mindwtr-model)
 (require 'mindwtr-signature)
@@ -52,6 +53,145 @@ updatedAt, ...) are ignored by construction."
   (cond ((null v) "(empty)")
         ((stringp v) v)
         (t (prin1-to-string v))))
+
+(defun mindwtr-report--cl-box (it)
+  "Checkbox character (\"X\" or \" \") for checklist item IT."
+  (if (eq (plist-get it :isCompleted) t) "X" " "))
+
+(defun mindwtr-report--cl-title (it)
+  "Title string for checklist item IT (empty string when absent)."
+  (or (plist-get it :title) ""))
+
+(defun mindwtr-report--cl-align (before after)
+  "Align checklist item lists BEFORE and AFTER by title via LCS.
+Returns an ordered list of ops: (match B A) | (del B) | (ins A).  Items
+with equal titles anchor as `match' even when they moved, so insertions
+and deletions stand out rather than shifting every later item."
+  (let* ((b (vconcat before)) (a (vconcat after))
+         (n (length b)) (m (length a))
+         (w (1+ m))
+         (dp (make-vector (* (1+ n) w) 0)))
+    (cl-flet ((at (i j) (aref dp (+ (* i w) j))))
+      (dotimes (ii n)
+        (let ((i (- n 1 ii)))
+          (dotimes (jj m)
+            (let ((j (- m 1 jj)))
+              (aset dp (+ (* i w) j)
+                    (if (equal (mindwtr-report--cl-title (aref b i))
+                               (mindwtr-report--cl-title (aref a j)))
+                        (1+ (at (1+ i) (1+ j)))
+                      (max (at (1+ i) j) (at i (1+ j)))))))))
+      (let ((i 0) (j 0) ops)
+        (while (and (< i n) (< j m))
+          (cond
+           ((equal (mindwtr-report--cl-title (aref b i))
+                   (mindwtr-report--cl-title (aref a j)))
+            (push (list 'match (aref b i) (aref a j)) ops)
+            (cl-incf i) (cl-incf j))
+           ((>= (at (1+ i) j) (at i (1+ j)))
+            (push (list 'del (aref b i)) ops) (cl-incf i))
+           (t (push (list 'ins (aref a j)) ops) (cl-incf j))))
+        (while (< i n) (push (list 'del (aref b i)) ops) (cl-incf i))
+        (while (< j m) (push (list 'ins (aref a j)) ops) (cl-incf j))
+        (nreverse ops)))))
+
+(defun mindwtr-report--cl-rename-p (s1 s2)
+  "Non-nil when titles S1 and S2 look like a rename, not unrelated items.
+Pairs a deletion with an adjacent insertion only when they share a
+leading run or enough word tokens, so a genuine swap stays as `-'/`+'."
+  (let ((a (downcase s1)) (b (downcase s2)))
+    (or (string-prefix-p a b) (string-prefix-p b a)
+        (>= (let ((k 0) (len (min (length a) (length b))))
+              (while (and (< k len) (eq (aref a k) (aref b k))) (cl-incf k))
+              k)
+            4)
+        (let* ((t1 (split-string a "[^[:alnum:]]+" t))
+               (t2 (split-string b "[^[:alnum:]]+" t))
+               (common (seq-intersection t1 t2 #'string=)))
+          (and t1 t2 (>= (length common)
+                         (max 1 (/ (min (length t1) (length t2)) 2))))))))
+
+(defun mindwtr-report--cl-rename-line (b a)
+  "One `~' rename line from checklist item B to item A.
+Includes the `[ ]->[X]' completion marker only when it changed."
+  (let ((bb (mindwtr-report--cl-box b)) (ab (mindwtr-report--cl-box a)))
+    (if (string= bb ab)
+        (format "~ %s → %s"
+                (mindwtr-report--cl-title b) (mindwtr-report--cl-title a))
+      (format "~ [%s]→[%s] %s → %s" bb ab
+              (mindwtr-report--cl-title b) (mindwtr-report--cl-title a)))))
+
+(defun mindwtr-report--cl-flush-block (dels inss)
+  "Render a change block of deleted items DELS and inserted items INSS.
+Pairs them positionally into rename lines where the titles look related
+\(see `mindwtr-report--cl-rename-p'); unpaired items fall back to `-'/`+'."
+  (let (lines)
+    (dotimes (k (max (length dels) (length inss)))
+      (let ((d (nth k dels)) (a (nth k inss)))
+        (cond
+         ((and d a (mindwtr-report--cl-rename-p
+                    (mindwtr-report--cl-title d) (mindwtr-report--cl-title a)))
+          (push (mindwtr-report--cl-rename-line d a) lines))
+         (t
+          (when d (push (format "- [%s] %s" (mindwtr-report--cl-box d)
+                                (mindwtr-report--cl-title d))
+                        lines))
+          (when a (push (format "+ [%s] %s" (mindwtr-report--cl-box a)
+                                (mindwtr-report--cl-title a))
+                        lines))))))
+    (nreverse lines)))
+
+(defun mindwtr-report--checklist-summary-lines (before after)
+  "Compact change lines for the checklist diff BEFORE → AFTER.
+Each line is one of: `+ [X] T' (added), `- [ ] T' (removed),
+`~ ... → ...' (renamed, optionally with a completion change), or a
+`~ [ ]->[X] T' completion toggle.  Unchanged items are omitted.
+
+Consecutive deletions and insertions form a change block that is paired
+positionally, so two items renamed in place read as two `~' lines rather
+than as deletions backwards-zipped against insertions."
+  (let ((ops (mindwtr-report--cl-align before after))
+        lines dels inss)
+    (cl-flet ((flush ()
+                (when (or dels inss)
+                  (setq lines (nconc (nreverse (mindwtr-report--cl-flush-block
+                                                (nreverse dels) (nreverse inss)))
+                                     lines))
+                  (setq dels nil inss nil))))
+      (dolist (op ops)
+        (pcase (car op)
+          ('del (push (nth 1 op) dels))
+          ('ins (push (nth 1 op) inss))
+          ('match
+           (flush)
+           (let ((b (nth 1 op)) (a (nth 2 op)))
+             (unless (eq (eq (plist-get b :isCompleted) t)
+                         (eq (plist-get a :isCompleted) t))
+               (push (format "~ [%s]→[%s] %s"
+                             (mindwtr-report--cl-box b) (mindwtr-report--cl-box a)
+                             (mindwtr-report--cl-title a))
+                     lines))))))
+      (flush))
+    (nreverse lines)))
+
+(defun mindwtr-report--insert-field-diff (d indent)
+  "Insert diff tuple D (FIELD BEFORE AFTER) at point, prefixed by INDENT.
+Most fields render as a single `field: before → after' line; the
+checklist renders as a header plus one compact change line per item."
+  (let ((field (substring (symbol-name (nth 0 d)) 1))
+        (before (nth 1 d)) (after (nth 2 d)))
+    (if (eq (nth 0 d) :checklist)
+        (let ((lines (mindwtr-report--checklist-summary-lines before after)))
+          (if (null lines)
+              (insert (format "%s%s: %s → %s\n" indent field
+                              (mindwtr-report--fmt before)
+                              (mindwtr-report--fmt after)))
+            (insert (format "%s%s:\n" indent field))
+            (dolist (l lines)
+              (insert (format "%s  %s\n" indent l)))))
+      (insert (format "%s%s: %s → %s\n" indent field
+                      (mindwtr-report--fmt before)
+                      (mindwtr-report--fmt after))))))
 
 (defvar mindwtr-report-mode-map
   (let ((m (make-sparse-keymap)))
@@ -142,10 +282,7 @@ restore live only on this newest entry (R8)."
     (when (and (eq (plist-get lc :change) 'updated)
                (plist-get lc :before) (plist-get lc :after))
       (dolist (d (mindwtr-report--field-diff (plist-get lc :before) (plist-get lc :after)))
-        (insert (format "        %s: %s → %s\n"
-                        (substring (symbol-name (nth 0 d)) 1)
-                        (mindwtr-report--fmt (nth 1 d))
-                        (mindwtr-report--fmt (nth 2 d)))))))
+        (mindwtr-report--insert-field-diff d "        "))))
   (when incoming-changes
     (insert "  Incoming from remote:\n")
     (dolist (ic incoming-changes)
@@ -156,10 +293,7 @@ restore live only on this newest entry (R8)."
       (when (and (eq (plist-get ic :change) 'updated)
                  (plist-get ic :before) (plist-get ic :after))
         (dolist (d (mindwtr-report--field-diff (plist-get ic :before) (plist-get ic :after)))
-          (insert (format "        %s: %s → %s\n"
-                          (substring (symbol-name (nth 0 d)) 1)
-                          (mindwtr-report--fmt (nth 1 d))
-                          (mindwtr-report--fmt (nth 2 d))))))))
+          (mindwtr-report--insert-field-diff d "        ")))))
   (when skew-warning
     (insert (format "  ⚠ Clock skew: %s\n" skew-warning)))
   (when parse-warnings
