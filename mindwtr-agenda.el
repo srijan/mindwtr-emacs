@@ -153,6 +153,12 @@ would negate a non-existent tag and fail to dedup.  The inequality form also
 correctly matches the common case where the property is absent (every
 non-focused task), so those still appear under Next Actions.
 
+The Waiting For block is scoped `+MW_TYPE=\"task\"': a project in the waiting
+state shares the WAIT keyword (`mindwtr-model--project-status-keywords'), but a
+waiting project is not a delegated action and belongs to the Projects view, so
+it must not surface here.  Next Actions and Inbox need no such guard -- projects
+are never NEXT or INBOX.
+
 The calendar block is a single day (`org-agenda-span' 1) and deliberately does
 NOT override `org-deadline-warning-days': upcoming deadlines surface through the
 user's own org default (R2).
@@ -173,7 +179,7 @@ column is preserved."
        (tags-todo "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""
                   ((org-agenda-overriding-header "Next Actions")
                    (org-agenda-prefix-format ',pf)))
-       (tags-todo "TODO=\"WAIT\""
+       (tags-todo "TODO=\"WAIT\"+MW_TYPE=\"task\""
                   ((org-agenda-overriding-header "Waiting For")
                    (org-agenda-prefix-format ',pf)))
        (tags-todo "TODO=\"INBOX\""

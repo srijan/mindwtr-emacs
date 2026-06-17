@@ -116,7 +116,7 @@ inbox -- with the Inbox last (R1, R6)."
     (should (eq (nth 0 (nth 1 blocks)) 'tags-todo))
     (should (equal (nth 1 (nth 1 blocks)) "MW_FOCUS_TODAY=\"t\""))
     (should (equal (nth 1 (nth 2 blocks)) "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""))
-    (should (equal (nth 1 (nth 3 blocks)) "TODO=\"WAIT\""))
+    (should (equal (nth 1 (nth 3 blocks)) "TODO=\"WAIT\"+MW_TYPE=\"task\""))
     ;; Inbox is the last block (R6).
     (should (eq (nth 0 (nth 4 blocks)) 'tags-todo))
     (should (equal (nth 1 (nth 4 blocks)) "TODO=\"INBOX\""))))
@@ -205,6 +205,22 @@ today's calendar block; one beyond it does not."
     ;; surfaced the near deadline and skipped the far one.
     (should (string-match-p "In +[0-9]+ d\\.: +NEXT DueSoon" text))
     (should-not (string-match-p "In +[0-9]+ d\\.: +NEXT DueFar" text))))
+
+(ert-deftest mindwtr-agenda-engage-waiting-excludes-projects ()
+  "The Waiting For block lists waiting tasks only.  A project in the waiting
+state shares the WAIT keyword but is not an action -- it must not appear here
+(AE: projects belong to the Projects view)."
+  (let* ((blocks (nth 2 (mindwtr-agenda--engage-spec)))
+         (wait-match (nth 1 (nth 3 blocks))))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "Blocked proj" :status "waiting"))
+          :sections nil
+          :tasks ((:id "t1" :title "Awaiting reply" :status "waiting" :projectId "p1"))
+          :settings nil)
+      (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) wait-match)))
+        (should (member "Awaiting reply" hits))
+        (should-not (member "Blocked proj" hits))))))
 
 (ert-deftest mindwtr-agenda-engage-next-actions-show-owning-project ()
   "Behavioral: a NEXT action under a project shows the project name in its
