@@ -58,9 +58,19 @@ The latch guards the deploy seam; a second gate guards the steady-state seam. Ev
 ## Task status
 
 ### Status
-The GTD-style resting keyword that names a task's or project's workflow state — for a task, drawn from the next-action vocabulary (inbox, next, active, someday, waiting, and the like) and carried by the org TODO keyword, so the keyword *is* the status; for a project it names the project's own state.
+The GTD-style resting keyword that names a task's or project's workflow state — for a task, drawn from the next-action vocabulary (inbox, next, active, someday, waiting, and the like) and carried by the org TODO keyword, so the keyword *is* the status; for a project it names the project's own state (active, someday, waiting, archived).
+
+The two vocabularies overlap — a waiting task and a waiting project carry the same TODO keyword, as do someday and archived — so the keyword names the *status* but not the *entity type*. Whether a heading is a task or a project is a separate dimension; a query that selects on a shared keyword (e.g. waiting) without also constraining on entity type will mix tasks and projects together.
 
 A task's status is independent of its parent's: a project's deferral (someday, waiting) is carried by the task's container placement, never cascaded onto the task's own keyword. So a keyword-less task created inside a project rests at next — actionable — whatever the project's status, while a keyword-less task with no container parent rests at inbox. This independence matches upstream, which leaves a task's status untouched when its project becomes someday.
+
+## Agenda views
+
+### Engage
+The daily "what do I act on now" agenda surface, gathering today's focused items, next actions, the items you have delegated and are waiting on, the inbox, and the day's calendar into one view. Named for GTD's engage phase — choosing what to do in the moment. Its delegated-items block lists waiting *tasks* only; a waiting project is not a delegated action and belongs to the Projects view.
+
+### Projects
+The project-review agenda surface, listing the multi-step outcomes themselves rather than individual actions: active projects (stuck ones flagged for attention) and the projects you are waiting on, each under its own block. Complements Engage, which is scoped to actions.
 
 ## Inbox triage
 
