@@ -57,3 +57,21 @@
       '(:status 429 :headers nil :body "slow down")
     (condition-case err (mindwtr-api-get-data)
       (mindwtr-api-error (should (plist-get (cdr err) :retryable))))))
+
+(ert-deftest mindwtr-api-url-transport-nil-buffer-is-retryable ()
+  "A dropped connection makes `url-retrieve-synchronously' return nil
+\(e.g. after the laptop resumes from sleep and the TLS socket is dead).
+The url.el transport must turn that into a retryable `mindwtr-api-error'
+so backoff handles it, rather than crashing on `with-current-buffer nil'
+with `wrong-type-argument stringp nil'."
+  (cl-letf (((symbol-function 'url-retrieve-synchronously)
+             (lambda (&rest _) nil)))
+    (let ((req '(:method "GET" :url "https://mw.example/v1/data" :headers nil)))
+      ;; Must not signal the cryptic wrong-type-argument error.
+      (should-not
+       (condition-case err (progn (mindwtr-api--default-http req) nil)
+         (wrong-type-argument t)
+         (mindwtr-api-error nil)))
+      ;; Must signal a retryable mindwtr-api-error instead.
+      (condition-case err (mindwtr-api--default-http req)
+        (mindwtr-api-error (should (plist-get (cdr err) :retryable)))))))
