@@ -83,3 +83,7 @@ before exit, so the buffer can be killed immediately; nothing holds a reference.
   multibyte-body crash). Both are `url.el` fallback-path footguns.
 - The synchronous transport's nested-event-loop behavior is the subject of
   [[sync-reentrancy-in-flight-guard]].
+- The defensive `(buffer-live-p buf)` nil case above (a TLS error returning no
+  buffer) is the read-side crash documented in
+  [[url-retrieve-synchronously-nil-buffer-crash-on-tls-drop]]: that doc guards
+  `with-current-buffer` against the same nil and turns it into a retryable error.
