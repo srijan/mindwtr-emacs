@@ -116,7 +116,7 @@ inbox -- with the Inbox last (R1, R6)."
     (should (eq (nth 0 (nth 1 blocks)) 'tags-todo))
     (should (equal (nth 1 (nth 1 blocks)) "MW_FOCUS_TODAY=\"t\""))
     (should (equal (nth 1 (nth 2 blocks)) "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""))
-    (should (equal (nth 1 (nth 3 blocks)) "TODO=\"WAIT\""))
+    (should (equal (nth 1 (nth 3 blocks)) "TODO=\"WAIT\"+MW_TYPE=\"task\""))
     ;; Inbox is the last block (R6).
     (should (eq (nth 0 (nth 4 blocks)) 'tags-todo))
     (should (equal (nth 1 (nth 4 blocks)) "TODO=\"INBOX\""))))
@@ -206,19 +206,105 @@ today's calendar block; one beyond it does not."
     (should (string-match-p "In +[0-9]+ d\\.: +NEXT DueSoon" text))
     (should-not (string-match-p "In +[0-9]+ d\\.: +NEXT DueFar" text))))
 
+(ert-deftest mindwtr-agenda-engage-waiting-excludes-projects ()
+  "The Waiting For block lists waiting tasks only.  A project in the waiting
+state shares the WAIT keyword but is not an action -- it must not appear here
+(AE: projects belong to the Projects view)."
+  (let* ((blocks (nth 2 (mindwtr-agenda--engage-spec)))
+         (wait-match (nth 1 (nth 3 blocks))))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "Blocked proj" :status "waiting"))
+          :sections nil
+          :tasks ((:id "t1" :title "Awaiting reply" :status "waiting" :projectId "p1"))
+          :settings nil)
+      (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) wait-match)))
+        (should (member "Awaiting reply" hits))
+        (should-not (member "Blocked proj" hits))))))
+
+(ert-deftest mindwtr-agenda-engage-next-actions-show-owning-project ()
+  "Behavioral: a NEXT action under a project shows the project name in its
+agenda prefix, replacing the useless filename category (\"mindwtr:\")."
+  (let ((text (mindwtr-agenda-test--engage-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Atlas" :status "active"))
+                 :sections nil
+                 :tasks ((:id "t1" :title "Ship it" :status "next" :projectId "p1"))
+                 :settings nil))))
+    (should (string-match-p "Atlas +NEXT Ship it" text))
+    (should-not (string-match-p "mindwtr: +NEXT Ship it" text))))
+
 ;;; U4 -- Projects view --------------------------------------------------------
 
 (defun mindwtr-agenda-test--projects-match ()
-  "Return the match string of the Projects view's single block."
+  "Return the match string of the Projects view's active block."
   (nth 1 (nth 0 (nth 2 (mindwtr-agenda--projects-spec)))))
 
-(ert-deftest mindwtr-agenda-projects-spec-is-single-active-project-block ()
-  "The Projects spec is one block matching active projects (R7)."
+(defun mindwtr-agenda-test--projects-text (appdata)
+  "Render APPDATA to a temp Mindwtr file, run `mindwtr-projects', return the
+agenda buffer text.  `org-element-use-cache' is bound nil for the same Org 9.6
+cold-scan reason documented on `mindwtr-agenda-test--engage-text'."
+  (let ((file (make-temp-file "mw-agenda" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert (mindwtr-render-appdata appdata)))
+          (let ((mindwtr-file file)
+                (org-element-use-cache nil)
+                (org-agenda-window-setup 'current-window)
+                (org-agenda-sticky nil))
+            (mindwtr-projects))
+          (with-current-buffer org-agenda-buffer-name
+            (buffer-substring-no-properties (point-min) (point-max))))
+      (when (get-buffer org-agenda-buffer-name)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer org-agenda-buffer-name)))
+      (delete-file file))))
+
+(ert-deftest mindwtr-agenda-projects-waiting-block-renders-without-category ()
+  "Behavioral: a waiting project surfaces under the Waiting Projects header,
+and -- like the active block -- without org's filename category prefix."
+  (let ((text (mindwtr-agenda-test--projects-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Active proj" :status "active")
+                            (:id "p2" :title "Blocked proj" :status "waiting"))
+                 :sections nil :tasks nil :settings nil))))
+    (should (string-match-p "Waiting Projects" text))
+    (should (string-match-p "WAIT Blocked proj" text))
+    ;; The default filename category would render as "<base>: ... WAIT Blocked
+    ;; proj"; the project-prefix suppresses it, leaving only blank padding.
+    (should-not (string-match-p "[[:alnum:]]+: +WAIT Blocked proj" text))))
+
+(ert-deftest mindwtr-agenda-projects-spec-has-active-and-waiting-blocks ()
+  "The Projects spec is two blocks: active projects first (with stuck
+flagging), then waiting projects under their own header (R7)."
   (let* ((spec (mindwtr-agenda--projects-spec))
          (blocks (nth 2 spec)))
-    (should (= (length blocks) 1))
+    (should (= (length blocks) 2))
     (should (eq (nth 0 (nth 0 blocks)) 'tags-todo))
-    (should (equal (nth 1 (nth 0 blocks)) "MW_TYPE=\"project\"+TODO=\"ACTIVE\""))))
+    (should (equal (nth 1 (nth 0 blocks)) "MW_TYPE=\"project\"+TODO=\"ACTIVE\""))
+    (should (equal (mindwtr-agenda-test--block-header (nth 0 blocks)) "Projects"))
+    (should (eq (nth 0 (nth 1 blocks)) 'tags-todo))
+    (should (equal (nth 1 (nth 1 blocks)) "MW_TYPE=\"project\"+TODO=\"WAIT\""))
+    (should (equal (mindwtr-agenda-test--block-header (nth 1 blocks))
+                   "Waiting Projects"))))
+
+(ert-deftest mindwtr-agenda-projects-waiting-block-matches-waiting-only ()
+  "The Waiting Projects block matches waiting projects and not active ones;
+the active block, conversely, does not match the waiting project."
+  (let* ((blocks (nth 2 (mindwtr-agenda--projects-spec)))
+         (active-match (nth 1 (nth 0 blocks)))
+         (waiting-match (nth 1 (nth 1 blocks))))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "Active proj" :status "active")
+                     (:id "p2" :title "Waiting proj" :status "waiting"))
+          :sections nil :tasks nil :settings nil)
+      (let ((waiting (org-map-entries (lambda () (org-get-heading t t t t)) waiting-match))
+            (active (org-map-entries (lambda () (org-get-heading t t t t)) active-match)))
+        (should (member "Waiting proj" waiting))
+        (should-not (member "Active proj" waiting))
+        (should (member "Active proj" active))
+        (should-not (member "Waiting proj" active))))))
 
 (ert-deftest mindwtr-agenda-project-prefix-flags-stuck-only ()
   "The prefix returns the STUCK marker at a stuck project and blanks at a
@@ -264,6 +350,104 @@ non-stuck one (R8)."
       (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) match)))
         (should (member "Live" hits))
         (should-not (member "Gone" hits))))))
+
+;;; U6 -- prefix resolver (owning project / area) ------------------------------
+
+(defun mindwtr-agenda-test--at-task (title)
+  "Move point onto the NEXT task heading named TITLE."
+  (goto-char (point-min))
+  (re-search-forward (concat "NEXT " (regexp-quote title))))
+
+(ert-deftest mindwtr-agenda-resolve-project-returns-parent-project-title ()
+  "A task nested under a project resolves to that project's clean title."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Atlas Rollout" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "Do it" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Do it")
+    (should (equal (mindwtr-agenda--resolve-project) "Atlas Rollout"))))
+
+(ert-deftest mindwtr-agenda-resolve-project-nil-for-standalone-action ()
+  "A standalone single action has no owning project."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Lone task" :status "next"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Lone task")
+    (should-not (mindwtr-agenda--resolve-project))))
+
+(ert-deftest mindwtr-agenda-resolve-project-finds-project-through-section ()
+  "A task under a section still resolves to the enclosing project (whole
+ancestry walk, not just the direct parent)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Deep Proj" :status "active"))
+        :sections ((:id "s1" :title "Phase 1" :projectId "p1"))
+        :tasks ((:id "t1" :title "Nested act" :status "next"
+                 :projectId "p1" :sectionId "s1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Nested act")
+    (should (equal (mindwtr-agenda--resolve-project) "Deep Proj"))))
+
+(ert-deftest mindwtr-agenda-resolve-area-inherits-project-area ()
+  "A project task with no area of its own inherits its project's MW_AREA."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Sub")
+    (should (equal (mindwtr-agenda--resolve-area) "Work"))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-prefers-project-over-area ()
+  "When a task has both an owning project and an area, the prefix shows the
+project (R: project leads the fallback chain)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Sub")
+    (should (string-match-p "\\`Proj *\\'" (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-uses-area-when-no-project ()
+  "A standalone action with its own area shows the area (project slot empty)."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Home"))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Chore" :status "next" :areaId "a1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Chore")
+    (should (string-match-p "\\`Home *\\'" (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-empty-marker-when-unfiled ()
+  "An action with neither project nor area shows the empty marker."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Bare" :status "next"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Bare")
+    (should (string-match-p (concat "\\`" (regexp-quote mindwtr-agenda--prefix-empty))
+                            (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-truncates-to-width ()
+  "A long owning-project title is truncated to `mindwtr-agenda-prefix-width'
+with an ellipsis."
+  (let ((mindwtr-agenda-prefix-width 10))
+    (mindwtr-agenda-test--with-appdata
+        '(:areas nil
+          :projects ((:id "p1" :title "A very long project title" :status "active"))
+          :sections nil
+          :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+          :settings nil)
+      (mindwtr-agenda-test--at-task "Sub")
+      (let ((pfx (mindwtr-agenda--resolve-prefix)))
+        (should (= (string-width pfx) 10))
+        (should (string-suffix-p mindwtr-agenda-prefix-ellipsis pfx))))))
 
 ;;; U5 -- setup / keybindings ---------------------------------------------------
 

@@ -33,6 +33,19 @@ Beneath this prefix, `e' is bound to `mindwtr-engage' and `p' to
 `mindwtr-projects'.  A key description string as understood by `kbd'."
   :type 'string :group 'mindwtr)
 
+(defcustom mindwtr-agenda-prefix-width 30
+  "Column width of the Engage view's owning-project/area prefix.
+Each Next Action (and Focus/Waiting/Inbox) line leads with the task's owning
+project, falling back to its area of focus -- see
+`mindwtr-agenda--resolve-prefix'.  Longer values are truncated to this width
+with `mindwtr-agenda-prefix-ellipsis'."
+  :type 'integer :group 'mindwtr)
+
+(defcustom mindwtr-agenda-prefix-ellipsis "..."
+  "String appended when an Engage prefix is truncated to fit its column.
+See `mindwtr-agenda-prefix-width'."
+  :type 'string :group 'mindwtr)
+
 (defun mindwtr-agenda--files ()
   "Return the agenda file list scoped to the Mindwtr task file.
 Signals a clear error when `mindwtr-file' is unset (mirrors the guard in
@@ -72,6 +85,60 @@ so the definition lives in one place."
                  (setq found t))))
            (not found)))))
 
+;;; Engage prefix: owning project / area ---------------------------------------
+
+(defconst mindwtr-agenda--prefix-empty "-"
+  "Marker shown in the Engage prefix when a task has no owning project or area.
+A plain hyphen: a task that is neither under a project nor filed to an area
+(e.g. a raw Inbox item) reads as a clean blank slot rather than a dead filename.")
+
+(defconst mindwtr-agenda--prefix-format "  %(mindwtr-agenda--resolve-prefix) "
+  "`org-agenda-prefix-format' value for the Engage view's TODO/tags blocks.
+The `%(...)' escape org evaluates with point on the source heading (the same
+mechanism the Projects view uses for its STUCK flag), so the per-line prefix is
+resolved by `mindwtr-agenda--resolve-prefix'.")
+
+(defun mindwtr-agenda--nearest-project-marker ()
+  "Return a marker on the nearest `MW_TYPE=project' ancestor of point, or nil.
+Walks up the outline from the heading at point (the heading itself counts).
+Mindwtr links a task to its project by outline nesting in the main file -- there
+is no MW_PROJECT_ID there -- so the owning project is found by ancestry, the
+inverse of the subtree walk in `mindwtr-agenda--project-stuck-p'."
+  (save-excursion
+    (org-back-to-heading t)
+    (catch 'found
+      (while t
+        (when (equal (org-entry-get (point) "MW_TYPE") "project")
+          (throw 'found (point-marker)))
+        (unless (org-up-heading-safe)
+          (throw 'found nil))))))
+
+(defun mindwtr-agenda--resolve-project ()
+  "Return the clean title of point's owning project, or nil if standalone.
+The title is stripped of TODO keyword, priority cookie, and tags."
+  (let ((m (mindwtr-agenda--nearest-project-marker)))
+    (when m
+      (prog1 (org-with-point-at m (org-get-heading t t t t))
+        (set-marker m nil)))))
+
+(defun mindwtr-agenda--resolve-area ()
+  "Return point's area of focus (MW_AREA), or nil.
+Reads MW_AREA on the task, inheriting from an ancestor project when the task
+carries none of its own."
+  (org-entry-get (point) "MW_AREA" t))
+
+(defun mindwtr-agenda--resolve-prefix ()
+  "Return the Engage prefix string for the heading at point.
+Fallback chain (R: most decision-relevant first): owning project title, else
+area of focus, else `mindwtr-agenda--prefix-empty'.  Padded with spaces to, and
+truncated with `mindwtr-agenda-prefix-ellipsis' at,
+`mindwtr-agenda-prefix-width' so titles stay column-aligned."
+  (truncate-string-to-width
+   (or (mindwtr-agenda--resolve-project)
+       (mindwtr-agenda--resolve-area)
+       mindwtr-agenda--prefix-empty)
+   mindwtr-agenda-prefix-width nil ?\s mindwtr-agenda-prefix-ellipsis))
+
 ;;; Engage view ----------------------------------------------------------------
 
 (defun mindwtr-agenda--engage-spec ()
@@ -86,21 +153,38 @@ would negate a non-existent tag and fail to dedup.  The inequality form also
 correctly matches the common case where the property is absent (every
 non-focused task), so those still appear under Next Actions.
 
+The Waiting For block is scoped `+MW_TYPE=\"task\"': a project in the waiting
+state shares the WAIT keyword (`mindwtr-model--project-status-keywords'), but a
+waiting project is not a delegated action and belongs to the Projects view, so
+it must not surface here.  Next Actions and Inbox need no such guard -- projects
+are never NEXT or INBOX.
+
 The calendar block is a single day (`org-agenda-span' 1) and deliberately does
 NOT override `org-deadline-warning-days': upcoming deadlines surface through the
-user's own org default (R2)."
-  `("e" "Mindwtr Engage"
-    ((agenda ""
-             ((org-agenda-span 1)
-              (org-agenda-overriding-header "Today")))
-     (tags-todo "MW_FOCUS_TODAY=\"t\""
-                ((org-agenda-overriding-header "Today's Focus")))
-     (tags-todo "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""
-                ((org-agenda-overriding-header "Next Actions")))
-     (tags-todo "TODO=\"WAIT\""
-                ((org-agenda-overriding-header "Waiting For")))
-     (tags-todo "TODO=\"INBOX\""
-                ((org-agenda-overriding-header "Inbox"))))))
+user's own org default (R2).
+
+The four `tags-todo' blocks lead each line with the task's owning project (or
+area) via `mindwtr-agenda--prefix-format', replacing org's default filename
+category.  The calendar block keeps org's default prefix so its time/deadline
+column is preserved."
+  (let ((pf `((tags . ,mindwtr-agenda--prefix-format)
+              (todo . ,mindwtr-agenda--prefix-format))))
+    `("e" "Mindwtr Engage"
+      ((agenda ""
+               ((org-agenda-span 1)
+                (org-agenda-overriding-header "Today")))
+       (tags-todo "MW_FOCUS_TODAY=\"t\""
+                  ((org-agenda-overriding-header "Today's Focus")
+                   (org-agenda-prefix-format ',pf)))
+       (tags-todo "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""
+                  ((org-agenda-overriding-header "Next Actions")
+                   (org-agenda-prefix-format ',pf)))
+       (tags-todo "TODO=\"WAIT\"+MW_TYPE=\"task\""
+                  ((org-agenda-overriding-header "Waiting For")
+                   (org-agenda-prefix-format ',pf)))
+       (tags-todo "TODO=\"INBOX\""
+                  ((org-agenda-overriding-header "Inbox")
+                   (org-agenda-prefix-format ',pf)))))))
 
 ;;;###autoload
 (defun mindwtr-engage ()
@@ -141,23 +225,31 @@ Returns -1/+1/nil for agenda lines A and B; paired with the
           (t nil))))
 
 (defun mindwtr-agenda--projects-spec ()
-  "Return the single-block `org-agenda-custom-commands' entry for Projects.
-Lists active projects (`MW_TYPE=\"project\"' with the ACTIVE keyword, R7);
-stuck ones are flagged inline by `mindwtr-agenda--project-prefix' and floated to
-the top by `mindwtr-agenda--project-cmp' -- one list, not two blocks (R8)."
-  `("p" "Mindwtr Projects"
-    ((tags-todo "MW_TYPE=\"project\"+TODO=\"ACTIVE\""
-                ((org-agenda-overriding-header "Projects")
-                 (org-agenda-prefix-format
-                  '((tags . " %(mindwtr-agenda--project-prefix)")))
-                 (org-agenda-cmp-user-defined #'mindwtr-agenda--project-cmp)
-                 (org-agenda-sorting-strategy '(user-defined-up)))))))
+  "Return the `org-agenda-custom-commands' entry for the Projects view.
+Two blocks: active projects (`MW_TYPE=\"project\"' with the ACTIVE keyword, R7),
+where stuck ones are flagged inline by `mindwtr-agenda--project-prefix' and
+floated to the top by `mindwtr-agenda--project-cmp' (R8); then waiting projects
+(the WAIT keyword) under their own header.  Both blocks use
+`mindwtr-agenda--project-prefix', which suppresses org's default filename
+category.  A waiting project is intentionally blocked, not stalled: it is never
+ACTIVE, so the prefix yields blank padding (no STUCK flag) aligned with the
+active block."
+  (let ((project-pf '((tags . " %(mindwtr-agenda--project-prefix)"))))
+    `("p" "Mindwtr Projects"
+      ((tags-todo "MW_TYPE=\"project\"+TODO=\"ACTIVE\""
+                  ((org-agenda-overriding-header "Projects")
+                   (org-agenda-prefix-format ',project-pf)
+                   (org-agenda-cmp-user-defined #'mindwtr-agenda--project-cmp)
+                   (org-agenda-sorting-strategy '(user-defined-up))))
+       (tags-todo "MW_TYPE=\"project\"+TODO=\"WAIT\""
+                  ((org-agenda-overriding-header "Waiting Projects")
+                   (org-agenda-prefix-format ',project-pf)))))))
 
 ;;;###autoload
 (defun mindwtr-projects ()
-  "Open the Mindwtr Projects agenda: active projects, stuck ones flagged first.
-Scopes `org-agenda-files' to the Mindwtr file and builds the view dynamically,
-so it works with no global agenda configuration."
+  "Open the Mindwtr Projects agenda: active projects (stuck ones flagged first),
+then waiting projects.  Scopes `org-agenda-files' to the Mindwtr file and builds
+the view dynamically, so it works with no global agenda configuration."
   (interactive)
   (mindwtr-agenda--open (mindwtr-agenda--projects-spec)))
 
