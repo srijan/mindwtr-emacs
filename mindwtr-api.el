@@ -52,6 +52,12 @@ REQ is (:method :url :headers :body).  Returns (:status :headers :body)."
           (url-request-data (when (plist-get req :body)
                               (encode-coding-string (plist-get req :body) 'utf-8))))
       (let ((buf (url-retrieve-synchronously (plist-get req :url) t)))
+        ;; A dropped connection (e.g. a dead TLS socket after the laptop
+        ;; resumes from sleep) makes url-retrieve-synchronously return nil.
+        ;; Treat that as a retryable transport failure so the backoff path
+        ;; handles it, rather than crashing on `with-current-buffer nil'.
+        (unless buf
+          (signal 'mindwtr-api-error (list :status 0 :retryable t)))
         ;; url-retrieve-synchronously hands back a fresh *http HOST:PORT*
         ;; buffer that the caller owns; kill it so requests don't leak.
         (unwind-protect
