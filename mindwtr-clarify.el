@@ -318,6 +318,11 @@ at point in the source buffer.  Point is on the freshly written-back item."
     ;; heading out from under point, so the task does not linger as INBOX.
     (?a (mindwtr-clarify--post-prompts t)
         (save-excursion (org-back-to-heading t) (org-todo "NEXT"))
+        ;; Sketched child sub-headings ride along as the project's tasks;
+        ;; stamp the keyword-less ones NEXT now (mirrors
+        ;; `mindwtr-promote-to-project') so the buffer shows them as project
+        ;; tasks immediately, not only after sync's `ensure-status'.
+        (mindwtr-commands--stamp-missing-child-keywords)
         (mindwtr-clarify--refile))
     (?s (mindwtr-clarify--finalize "SOMEDAY"))
     (?r (mindwtr-clarify--finalize "REF"))

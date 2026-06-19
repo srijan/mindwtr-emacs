@@ -403,6 +403,32 @@ The refile is stubbed to a no-op so the keyword stays observable in place."
     (with-current-buffer src
       (should (string= (mindwtr-clarify-test--keyword-of "One") "NEXT")))))
 
+(ert-deftest mindwtr-clarify-add-to-project-stamps-child-keywords ()
+  "[a] stamps NEXT on keyword-less child sub-headings that ride along, just
+like `mindwtr-promote-to-project' does -- so the local buffer shows them as
+project tasks immediately, not only after the next sync's `ensure-status'."
+  (with-temp-buffer
+    (let ((org-todo-keywords mindwtr-model-todo-keywords)
+          (org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX Plan party\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "*** Buy cake\n"
+              "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
+              "** ACTIVE MyProj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (let ((src (current-buffer)))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'org-refile) (lambda (&rest _) nil))
+                      ((symbol-function 'completing-read-multiple)
+                       (lambda (&rest _) nil)))
+              (mindwtr-clarify)
+              (mindwtr-clarify-test--press ?a))
+            (should (string= (mindwtr-clarify-test--keyword-of "Plan party") "NEXT"))
+            (should (string= (mindwtr-clarify-test--keyword-of "Buy cake") "NEXT")))
+        (mindwtr-clarify-test--teardown)))))
+
 (ert-deftest mindwtr-clarify-refile-targets-only-projects ()
   "The refile wiring offers exactly the buffer's project headings."
   (mindwtr-clarify-test--with-appdata
