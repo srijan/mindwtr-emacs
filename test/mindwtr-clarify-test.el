@@ -385,6 +385,24 @@ the WIP buffer open for a re-decision instead of advancing."
       (should (eq seen-verify #'mindwtr-clarify--project-target-p))
       (should (null (mindwtr-clarify-test--wip))))))
 
+(ert-deftest mindwtr-clarify-add-to-project-sets-next ()
+  "[a] makes the item NEXT before handing off to the refile -- a task under a
+project rests at NEXT, not the INBOX state it carried in the inbox (issue #61).
+The refile is stubbed to a no-op so the keyword stays observable in place."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "MyProj" :status "active"))
+        :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'org-refile) (lambda (&rest _) nil))
+              ((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil)))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?a))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "NEXT")))))
+
 (ert-deftest mindwtr-clarify-refile-targets-only-projects ()
   "The refile wiring offers exactly the buffer's project headings."
   (mindwtr-clarify-test--with-appdata
