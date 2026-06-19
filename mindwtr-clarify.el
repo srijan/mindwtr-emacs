@@ -312,8 +312,17 @@ at point in the source buffer.  Point is on the freshly written-back item."
         (mindwtr-clarify--finalize "NEXT"))
     (?p (mindwtr-promote-to-project))
     ;; Contexts-only post prompts: a task under a project takes its area
-    ;; from the project, so the area question would be noise here.
+    ;; from the project, so the area question would be noise here.  NEXT is
+    ;; the resting state for a project task (mirrors
+    ;; `mindwtr-promote-to-project'); set it before the refile moves the
+    ;; heading out from under point, so the task does not linger as INBOX.
     (?a (mindwtr-clarify--post-prompts t)
+        (save-excursion (org-back-to-heading t) (org-todo "NEXT"))
+        ;; Sketched child sub-headings ride along as the project's tasks;
+        ;; stamp the keyword-less ones NEXT now (mirrors
+        ;; `mindwtr-promote-to-project') so the buffer shows them as project
+        ;; tasks immediately, not only after sync's `ensure-status'.
+        (mindwtr-commands--stamp-missing-child-keywords)
         (mindwtr-clarify--refile))
     (?s (mindwtr-clarify--finalize "SOMEDAY"))
     (?r (mindwtr-clarify--finalize "REF"))
