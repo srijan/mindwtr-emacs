@@ -21,6 +21,7 @@
 (defvar org-capture-templates)
 (declare-function org-capture "org-capture" (&optional goto keys))
 
+;;;###autoload
 (defun mindwtr-capture-template ()
   "Return an `org-capture' template string for a new Mindwtr inbox task.
 A level-1 INBOX heading stamped with :MW_TYPE: task and a freshly minted

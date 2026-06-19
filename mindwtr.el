@@ -70,6 +70,7 @@ Emacs' synchronous HTTP spins a nested event loop that runs pending
 timers, so a periodic/debounce/retry timer can fire mid-sync; this guard
 stops such a re-entrant trigger from launching a second concurrent cycle.")
 
+;;;###autoload
 (define-derived-mode mindwtr-mode org-mode "Mindwtr"
   "Major mode for the Mindwtr-synced org file."
   ;; Org only registers TODO keywords from `org-todo-keywords' during its
