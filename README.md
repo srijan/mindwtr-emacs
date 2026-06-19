@@ -26,6 +26,65 @@ Put the `.el` files on your load path and require the package:
 (require 'mindwtr)
 ```
 
+### Lazy loading with `use-package`
+
+A plain `require` (or `:demand t`) loads the whole package — and starts
+auto-sync — at Emacs startup. To instead **defer loading until you first open
+the synced file** (or press a Mindwtr key), drop `:demand` and lean on
+autoloading. `mindwtr-mode` and the interactive entry points are autoloaded, so
+`:mode` and `:bind` pull the package in on demand:
+
+```elisp
+(use-package mindwtr
+  :ensure nil
+  :load-path "/path/to/mindwtr-emacs"
+
+  ;; Open the synced file -> autoload the package and enter the mode.
+  :mode ("/mindwtr\\.org\\'" . mindwtr-mode)
+
+  ;; Global entry points. :bind installs the keys at startup and autoloads each
+  ;; command, so they work (and load the package) before the file is opened.
+  :bind (("C-c d e" . mindwtr-engage)
+         ("C-c d p" . mindwtr-projects)
+         ("C-c d c" . mindwtr-capture)
+         ("C-c d k" . mindwtr-clarify)
+         ("C-c d s" . mindwtr-sync))
+
+  ;; Autoload the inbox-capture template fn so a `C-c c i' org-capture entry
+  ;; works before the package is loaded. (On Emacs 29.1+, the semantically
+  ;; tidier `:autoload (mindwtr-capture-template)' does the same.)
+  :commands (mindwtr-capture-template)
+
+  :custom
+  (mindwtr-server-url "https://mw.example")
+  (mindwtr-file "~/org/mindwtr.org")
+  (mindwtr-sync-interval 600)        ; periodic sync; nil to disable
+  (mindwtr-sync-idle-debounce 5)     ; debounce after save
+
+  ;; Eager (runs at startup): make the agenda and inbox capture available from a
+  ;; cold start. use-package applies `:custom' before `:init', so `mindwtr-file'
+  ;; is already set here.
+  :init
+  (with-eval-after-load 'org
+    (add-to-list 'org-agenda-files mindwtr-file))
+  (with-eval-after-load 'org-capture
+    (add-to-list 'org-capture-templates
+                 `("i" "Mindwtr inbox" entry
+                   (file+headline mindwtr-file "Inbox")
+                   (function mindwtr-capture-template))))
+
+  ;; Deferred (runs on first package load, via any entry point above): enable
+  ;; auto-sync and register the agenda commands. No sync fires at startup.
+  :config
+  (mindwtr-auto-sync-mode 1)
+  (mindwtr-agenda-setup))
+```
+
+With a bare `:load-path` checkout there is no generated autoloads file, so the
+`:mode`/`:bind`/`:commands` keywords (which emit their own autoloads) are what
+make deferral work — the `:commands` line in particular is what lets the
+`C-c c i` capture template resolve before the package loads.
+
 ## Configuration
 
 ```elisp
@@ -61,7 +120,11 @@ priorities. To have it open in `mindwtr-mode` automatically, either add it to
 (add-to-list 'auto-mode-alist '("/mindwtr\\.org\\'" . mindwtr-mode))
 ```
 
-or put a file-local line at the top of the file:
+`mindwtr-mode` is autoloaded, so this association also lazy-loads the package
+the first time you open the file (see [Lazy loading with
+`use-package`](#lazy-loading-with-use-package)).
+
+Or put a file-local line at the top of the file:
 
 ```org
 # -*- mode: mindwtr -*-
