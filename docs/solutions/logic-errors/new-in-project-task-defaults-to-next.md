@@ -1,6 +1,7 @@
 ---
 title: A new in-project task should default to NEXT, not INBOX
 date: 2026-06-16
+last_updated: 2026-06-19
 category: logic-errors
 module: mindwtr-sync
 problem_type: logic_error
@@ -115,10 +116,13 @@ corrected it; now hand-typed and command-promoted tasks land identically.
 - **Guardrail rule: key a child entity's default on parent _presence_, never parent _status_.** A
   task under a `someday`/`waiting` project must still default to `next`; never cascade a container's
   deferral onto its members. Preserve this on any future change to `ensure-status`.
-- **Keep the two default paths in sync.** Any change to the sync-side default
-  (`mindwtr-sync--ensure-status`) and the command-side stamp
-  (`mindwtr-commands--stamp-missing-child-keywords`) must move together; their docstrings
-  cross-reference each other for exactly this reason.
+- **Keep the project-task NEXT default in sync across all three paths.** The sync-side default
+  (`mindwtr-sync--ensure-status`), the command-side stamp
+  (`mindwtr-commands--stamp-missing-child-keywords`, used by `mindwtr-promote-to-project`), and the
+  clarify `[a]` add-to-existing-project outcome must move together; the first two docstrings
+  cross-reference each other for exactly this reason. See
+  [add-to-project-leaves-inbox-keyword](add-to-project-leaves-inbox-keyword.md) for the clarify path,
+  where an explicit INBOX keyword (not a missing one) meant `ensure-status` could not be the safety net.
 - **Regression tests** (in `test/mindwtr-sync-test.el`):
   - `ensure-status` of a standalone task `(:id "t" :title "x")` -> `"inbox"`.
   - `ensure-status` of a task with `:projectId "p1"` -> `"next"`.

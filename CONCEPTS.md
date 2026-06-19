@@ -84,3 +84,5 @@ Each item receives exactly one Outcome per pass. The session tracks its remainin
 
 ### Outcome
 The decision applied to one Inbox item during Clarify, drawn from a fixed set that mirrors the GTD next-action question — make it a next action, file it under a project, defer it to someday, schedule it onto the calendar, mark it reference, delegate it, or trash it. Every Outcome relocates the item out of the Inbox — trash into the Archive surface when active (or in place when inactive, to be dropped on the next sync).
+
+An Outcome both relocates the item and assigns it the resting Status its destination implies — the two are one operation, not relocation alone. Filing an item under a project makes it a next action; leaving it at inbox would contradict the destination. Because the inbox keyword is an explicit Status (not an absent one), nothing downstream re-derives it from the new location, so the Outcome itself must set it.
