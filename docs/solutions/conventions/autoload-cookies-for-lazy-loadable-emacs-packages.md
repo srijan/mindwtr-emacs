@@ -77,9 +77,10 @@ machinery stays deferred:
          ("C-c d k" . mindwtr-clarify)
          ("C-c d s" . mindwtr-sync))
   :commands (mindwtr-capture-template)                 ; so C-c c i resolves pre-load
-  :custom (mindwtr-server-url "...") (mindwtr-file "...")
+  :custom (mindwtr-server-url "...")
           (mindwtr-sync-interval 600) (mindwtr-sync-idle-debounce 5)
   :init                                                 ; eager: agenda + capture from cold start
+  (setq mindwtr-file "...")                             ; NOT :custom — see "Why This Matters"
   (with-eval-after-load 'org
     (add-to-list 'org-agenda-files mindwtr-file))
   (with-eval-after-load 'org-capture
@@ -97,10 +98,11 @@ The keyword roles:
 - `:mode`, `:bind`, and `:commands` inject `(autoload ...)` forms at startup. These
   are the actual triggers that load the package — opening the file, pressing a key,
   or calling the named command.
-- `:init` runs eagerly, before the package loads. Put GTD essentials here:
-  registering the file in `org-agenda-files` and adding the `C-c c i` inbox capture
-  template. Wrap each in `with-eval-after-load` so they attach to `org` /
-  `org-capture` whenever those load, without forcing them.
+- `:init` runs eagerly, before the package loads. Put GTD essentials here: binding
+  `mindwtr-file` with `setq` (see "Why This Matters" — `:custom` won't bind it in
+  time), registering the file in `org-agenda-files`, and adding the `C-c c i` inbox
+  capture template. Wrap the `add-to-list` forms in `with-eval-after-load` so they
+  attach to `org` / `org-capture` whenever those load, without forcing them.
 - `:config` runs once, on first package load via any entry point. Put the heavy,
   side-effecting machinery here: the auto-sync engine and agenda-command
   registration. Nothing in here runs until the user first opens the file or hits a
@@ -132,9 +134,17 @@ Several non-obvious mechanics make or break this setup:
   which means `mindwtr-agenda-setup` has already run by the time `mindwtr-engage`'s
   body executes. You do not need to open the file to "warm up" the package.
 
-- **Keyword ordering matters.** `use-package` processes `:custom` before `:init`, so
-  `mindwtr-file` (set via `:custom`) is already bound when `:init` references it in
-  the agenda and capture registrations.
+- **`:custom` does NOT bind a deferred package's variable before load — bind it
+  with `setq` in `:init` instead.** For a deferred package, `use-package` compiles
+  `:custom` into `custom-theme-set-variables`, which only *records* a pending custom
+  value; it does not bind the symbol until the package's own `defcustom` runs at load
+  time. So any `:init` form (or capture target, or command) that reads such a
+  variable *before* the package loads hits `(void-variable ...)`. Bind it eagerly in
+  `:init` with `setq` (`(setq mindwtr-file "...")`) and drop it from `:custom`. The
+  package still adopts the value at load: `defcustom`'s default initializer
+  (`custom-initialize-reset`) keeps an already-bound value rather than resetting it.
+  Note the ordering subtlety this corrects — `:custom` *is* processed before `:init`,
+  but "processed" only means "recorded," not "bound."
 
 The eager-vs-deferred split is the heart of the fix. GTD essentials —
 agenda-file registration and the inbox capture template — must work from a cold

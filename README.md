@@ -57,14 +57,18 @@ autoloading. `mindwtr-mode` and the interactive entry points are autoloaded, so
 
   :custom
   (mindwtr-server-url "https://mw.example")
-  (mindwtr-file "~/org/mindwtr.org")
   (mindwtr-sync-interval 600)        ; periodic sync; nil to disable
   (mindwtr-sync-idle-debounce 5)     ; debounce after save
 
   ;; Eager (runs at startup): make the agenda and inbox capture available from a
-  ;; cold start. use-package applies `:custom' before `:init', so `mindwtr-file'
-  ;; is already set here.
+  ;; cold start. `mindwtr-file' is bound here with `setq' rather than via
+  ;; `:custom' on purpose: for a deferred package, `:custom' only RECORDS a
+  ;; pending custom value — it does not bind the symbol until the package's
+  ;; `defcustom' loads. The forms below reference `mindwtr-file' before that, so
+  ;; it must already hold a value or org's after-load hook hits
+  ;; `(void-variable mindwtr-file)'. The package adopts this value at load time.
   :init
+  (setq mindwtr-file "~/org/mindwtr.org")
   (with-eval-after-load 'org
     (add-to-list 'org-agenda-files mindwtr-file))
   (with-eval-after-load 'org-capture
