@@ -363,7 +363,7 @@ it):
 
 | Key | Command | Shows |
 |---|---|---|
-| `C-c d e` | `mindwtr-engage` | The working view, in order: today's calendar (today's `SCHEDULED` items and upcoming `DEADLINE`s within org's `org-deadline-warning-days` window), **Today's Focus** (tasks starred `MW_FOCUS_TODAY`), **Next Actions** (`NEXT`, excluding focused ones so nothing appears twice), **Waiting For** (`WAIT`), and the **Inbox** last. |
+| `C-c d e` | `mindwtr-engage` | The working view, in order: today's calendar (today's `SCHEDULED` items and upcoming `DEADLINE`s within org's `org-deadline-warning-days` window), **Today's Focus** (tasks starred `MW_FOCUS_TODAY`), **Next Actions** (`NEXT`, excluding focused ones so nothing appears twice, and hiding ticklers whose `SCHEDULED` start date is still in the future — they resurface in the calendar on the day they land), **Waiting For** (`WAIT`), and the **Inbox** last. |
 | `C-c d p` | `mindwtr-projects` | Active projects, then **Waiting Projects** (those in the waiting state) under their own header. Among active projects, one with no `NEXT` action anywhere in its subtree is **stuck** — flagged inline with a plain-text `STUCK` marker and floated to the top of the list. |
 
 In the Engage view, each action line leads with its **owning project** (the
