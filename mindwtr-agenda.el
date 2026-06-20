@@ -153,6 +153,12 @@ would negate a non-existent tag and fail to dedup.  The inequality form also
 correctly matches the common case where the property is absent (every
 non-focused task), so those still appear under Next Actions.
 
+The Next Actions block also defers ticklers: a NEXT task with a SCHEDULED date
+in the future is not yet actionable, so it is dropped from this block until its
+start date (`org-agenda-todo-ignore-scheduled' `future', enabled for the
+tags-todo search by `org-agenda-tags-todo-honor-ignore-options').  Today's and
+overdue scheduled tasks stay; deadlines are not ignored.
+
 The Waiting For block is scoped `+MW_TYPE=\"task\"': a project in the waiting
 state shares the WAIT keyword (`mindwtr-model--project-status-keywords'), but a
 waiting project is not a delegated action and belongs to the Projects view, so
@@ -178,7 +184,20 @@ column is preserved."
                    (org-agenda-prefix-format ',pf)))
        (tags-todo "TODO=\"NEXT\"+MW_FOCUS_TODAY<>\"t\""
                   ((org-agenda-overriding-header "Next Actions")
-                   (org-agenda-prefix-format ',pf)))
+                   (org-agenda-prefix-format ',pf)
+                   ;; A future SCHEDULED date marks a tickler (Clarify's defer
+                   ;; outcome: NEXT + SCHEDULED) -- not actionable until its
+                   ;; start date, so drop it from Next Actions until then; it
+                   ;; resurfaces in the calendar block on the day it lands.
+                   ;; `tags-todo' searches ignore planning dates unless
+                   ;; `org-agenda-tags-todo-honor-ignore-options' is set, so
+                   ;; both bindings are required.  `future' keeps today's and
+                   ;; overdue ticklers visible (still actionable / nagging) --
+                   ;; only strictly-future ones are deferred.  Deadlines are
+                   ;; left untouched: a due-but-not-started task is actionable
+                   ;; now, and its deadline surfaces in the calendar block.
+                   (org-agenda-tags-todo-honor-ignore-options t)
+                   (org-agenda-todo-ignore-scheduled 'future)))
        (tags-todo "TODO=\"WAIT\"+MW_TYPE=\"task\""
                   ((org-agenda-overriding-header "Waiting For")
                    (org-agenda-prefix-format ',pf)))

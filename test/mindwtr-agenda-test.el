@@ -234,6 +234,36 @@ agenda prefix, replacing the useless filename category (\"mindwtr:\")."
     (should (string-match-p "Atlas +NEXT Ship it" text))
     (should-not (string-match-p "mindwtr: +NEXT Ship it" text))))
 
+(defun mindwtr-agenda-test--block-slice (text start-header end-header)
+  "Return the slice of agenda TEXT under START-HEADER, up to END-HEADER.
+Isolates a single Engage block so a test can assert what that block lists --
+bare presence in the whole buffer is too weak, since the calendar block can
+surface the same task by its date."
+  (let* ((beg (string-match (regexp-quote start-header) text))
+         (end (and beg (string-match (regexp-quote end-header) text (1+ beg)))))
+    (substring text beg end)))
+
+(ert-deftest mindwtr-agenda-engage-next-actions-defers-future-ticklers ()
+  "Behavioral: a NEXT task SCHEDULED in the future is a tickler (Clarify's defer
+outcome) -- not actionable until its start date -- so it must not appear in Next
+Actions.  A task starting today, an overdue tickler, and a task with no start
+date all stay listed: only strictly-future ones are deferred."
+  (let* ((text (mindwtr-agenda-test--engage-text
+                `(:areas nil :projects nil :sections nil
+                  :tasks ((:id "t1" :title "Deferred" :status "next"
+                           :startTime ,(mindwtr-agenda-test--iso-days 7))
+                          (:id "t2" :title "StartsToday" :status "next"
+                           :startTime ,(mindwtr-agenda-test--iso-days 0))
+                          (:id "t3" :title "Overdue" :status "next"
+                           :startTime ,(mindwtr-agenda-test--iso-days -3))
+                          (:id "t4" :title "Anytime" :status "next"))
+                  :settings nil)))
+         (next (mindwtr-agenda-test--block-slice text "Next Actions" "Waiting For")))
+    (should-not (string-match-p "Deferred" next))
+    (should (string-match-p "Anytime" next))
+    (should (string-match-p "StartsToday" next))
+    (should (string-match-p "Overdue" next))))
+
 ;;; U4 -- Projects view --------------------------------------------------------
 
 (defun mindwtr-agenda-test--projects-match ()
