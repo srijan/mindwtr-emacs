@@ -95,6 +95,10 @@ untouched."
   (org-back-to-heading t)
   (let* ((level (org-current-level))
          (extra (mindwtr-parse--extra-props))
+         ;; Capture the running clock's id before insert/delete-region detaches
+         ;; org's clock markers (the CLOCK text is grafted back as preserved
+         ;; body, but the in-memory markers must be re-pointed too).
+         (clock-id (mindwtr-reconcile--running-clock-id))
          (beg (point))
          (end (save-excursion (outline-next-heading) (point)))
          (preserved (mindwtr-reconcile--preserved-body
@@ -120,7 +124,8 @@ untouched."
     ;; shifts and stays valid, so no O(n) marker rescan per update is needed.
     (goto-char beg)
     (insert rendered)
-    (delete-region (point) (+ (point) (- end beg)))))
+    (delete-region (point) (+ (point) (- end beg)))
+    (mindwtr-reconcile--restore-running-clock clock-id)))
 
 (defun mindwtr-reconcile--collect-org-only ()
   "Return a hash id -> (:body STR :extra PLIST) of preserved org-only content.
@@ -435,6 +440,37 @@ with `mindwtr-reconcile--quarantine-note'."
         (insert s)
         (unless (string-suffix-p "\n" s) (insert "\n"))))))
 
+(defun mindwtr-reconcile--running-clock-id ()
+  "Return the MW_ID of the entry holding the running clock in this buffer.
+Org tracks the active clock with `org-clock-hd-marker'/`org-clock-marker'.  A
+full buffer rebuild (`erase-buffer') detaches those markers -- the CLOCK text is
+preserved as org-only body, but the in-memory clock state collapses to
+`point-min', so a later clock-out lands on the wrong line.  Returns the id so
+the markers can be re-pointed after the rebuild; nil when no clock runs here."
+  (when (and (fboundp 'org-clocking-p) (org-clocking-p)
+             (markerp org-clock-hd-marker)
+             (eq (marker-buffer org-clock-hd-marker) (current-buffer)))
+    (save-excursion
+      (goto-char org-clock-hd-marker)
+      (mindwtr-parse--prop "MW_ID"))))
+
+(defun mindwtr-reconcile--restore-running-clock (id)
+  "Re-point the org clock markers at the open CLOCK line under MW_ID heading.
+ID is from `mindwtr-reconcile--running-clock-id', captured before the rebuild.
+A no-op when ID is nil or its heading no longer exists (a remote delete of the
+clocked entry).  Targets the open clock -- a `CLOCK:' line with a start stamp
+and no `--' end -- so the markers match org's own clock-in placement."
+  (when id
+    (let ((m (gethash id (mindwtr-reconcile--id-markers))))
+      (when m
+        (save-excursion
+          (goto-char m)
+          (org-back-to-heading t)
+          (move-marker org-clock-hd-marker (point) (current-buffer))
+          (let ((end (save-excursion (outline-next-heading) (point))))
+            (when (re-search-forward "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$" end t)
+              (move-marker org-clock-marker (point) (current-buffer)))))))))
+
 (defun mindwtr-reconcile-buffer (merged &optional render-fn)
   "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
 RENDER-FN is the (APPDATA &optional ORG-ONLY) -> string renderer, defaulting to
@@ -459,7 +495,10 @@ silently erased."
   ;; an already-committed sync into a spurious failure.  A nil view degrades to
   ;; "restore nothing", strictly safer than aborting (R4).
   (let ((view (condition-case nil (mindwtr-reconcile--snapshot-view)
-                (error nil))))
+                (error nil)))
+        ;; Capture the running clock's entry id before `erase-buffer' detaches
+        ;; org's clock markers, so they can be re-pointed at the rebuilt entry.
+        (clock-id (mindwtr-reconcile--running-clock-id)))
     (mindwtr-parse-ensure-keywords)
     (let* ((org-only (mindwtr-reconcile--collect-org-only))
            (at-id (mindwtr-reconcile--id-at-point))
@@ -486,7 +525,8 @@ silently erased."
       ;; `:top-id' window-start anchor instead.
       (unless (mindwtr-reconcile--goto-id at-id)
         (setq view (and view (plist-put view :anchor-line nil))))
-      (mindwtr-reconcile--restore-view view))))
+      (mindwtr-reconcile--restore-view view)
+      (mindwtr-reconcile--restore-running-clock clock-id))))
 
 (defun mindwtr-reconcile--find-parsed (id)
   "Parse the buffer and return the entity whose id is ID, or nil."
