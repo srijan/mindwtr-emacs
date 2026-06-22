@@ -98,6 +98,18 @@ The `%(...)' escape org evaluates with point on the source heading (the same
 mechanism the Projects view uses for its STUCK flag), so the per-line prefix is
 resolved by `mindwtr-agenda--resolve-prefix'.")
 
+(defconst mindwtr-agenda--calendar-prefix-format
+  "  %(mindwtr-agenda--resolve-prefix) %?-12t% s"
+  "`org-agenda-prefix-format' for the Engage view's `agenda' (calendar) block.
+Leads each line with the task's owning project/area via the same
+`mindwtr-agenda--resolve-prefix' column the TODO/tags blocks use, in place of
+org's default filename category -- which renders as a useless `mindwtr:' or,
+when the buffer's category cache was primed during a filename-less scan (see
+`mindwtr-util--map-entries'), the bare `???' placeholder.  The trailing
+`%?-12t% s' is org's own default tail: it keeps the time-of-day column and the
+scheduled/deadline leader (`Scheduled:', `In N d.:'), so only the leading
+category is replaced -- the calendar's date/time information is unchanged.")
+
 (defun mindwtr-agenda--nearest-project-marker ()
   "Return a marker on the nearest `MW_TYPE=project' ancestor of point, or nil.
 Walks up the outline from the heading at point (the heading itself counts).
@@ -132,11 +144,22 @@ carries none of its own."
 Fallback chain (R: most decision-relevant first): owning project title, else
 area of focus, else `mindwtr-agenda--prefix-empty'.  Padded with spaces to, and
 truncated with `mindwtr-agenda-prefix-ellipsis' at,
-`mindwtr-agenda-prefix-width' so titles stay column-aligned."
+`mindwtr-agenda-prefix-width' so titles stay column-aligned.
+
+Guarded for the calendar block, whose `org-agenda-prefix-format' also routes
+through here (`mindwtr-agenda--calendar-prefix-format').  Org evaluates a
+`%(...)' escape on a heading line with point in the Org source buffer, but on an
+auxiliary line (the time grid, the `now' marker) with point in the agenda buffer
+itself -- where `org-back-to-heading' would error.  `derived-mode-p' detects
+that case (`org-agenda-mode' is not derived from `org-mode') and returns a
+blank, width-padded column so grid lines stay aligned under the project/area
+heading column instead of crashing the agenda build."
   (truncate-string-to-width
-   (or (mindwtr-agenda--resolve-project)
-       (mindwtr-agenda--resolve-area)
-       mindwtr-agenda--prefix-empty)
+   (if (derived-mode-p 'org-mode)
+       (or (mindwtr-agenda--resolve-project)
+           (mindwtr-agenda--resolve-area)
+           mindwtr-agenda--prefix-empty)
+     "")
    mindwtr-agenda-prefix-width nil ?\s mindwtr-agenda-prefix-ellipsis))
 
 ;;; Engage view ----------------------------------------------------------------
@@ -169,15 +192,18 @@ The calendar block is a single day (`org-agenda-span' 1) and deliberately does
 NOT override `org-deadline-warning-days': upcoming deadlines surface through the
 user's own org default (R2).
 
-The four `tags-todo' blocks lead each line with the task's owning project (or
-area) via `mindwtr-agenda--prefix-format', replacing org's default filename
-category.  The calendar block keeps org's default prefix so its time/deadline
-column is preserved."
+All five blocks lead each line with the task's owning project (or area),
+replacing org's default filename category: the four `tags-todo' blocks via
+`mindwtr-agenda--prefix-format', and the calendar block via
+`mindwtr-agenda--calendar-prefix-format', which additionally retains org's
+time-of-day and scheduled/deadline columns so the calendar's date/time
+information is preserved."
   (let ((pf `((tags . ,mindwtr-agenda--prefix-format)
               (todo . ,mindwtr-agenda--prefix-format))))
     `("e" "Mindwtr Engage"
       ((agenda ""
                ((org-agenda-span 1)
+                (org-agenda-prefix-format ,mindwtr-agenda--calendar-prefix-format)
                 (org-agenda-overriding-header "Today")))
        (tags-todo "MW_FOCUS_TODAY=\"t\""
                   ((org-agenda-overriding-header "Today's Focus")
