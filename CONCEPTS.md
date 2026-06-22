@@ -64,6 +64,11 @@ The two vocabularies overlap — a waiting task and a waiting project carry the 
 
 A task's status is independent of its parent's: a project's deferral (someday, waiting) is carried by the task's container placement, never cascaded onto the task's own keyword. So a keyword-less task created inside a project rests at next — actionable — whatever the project's status, while a keyword-less task with no container parent rests at inbox. This independence matches upstream, which leaves a task's status untouched when its project becomes someday.
 
+### Tickler
+A next action deferred to a future start date so it stays out of actionable views until that date arrives — the result of the defer-to-a-date Outcome during Clarify. It is a next-status task carrying a start date (not a due date): the start date gates *when it becomes actionable*, distinct from a deadline, which gates *when it is due* and leaves the task actionable before then.
+
+A future tickler is suppressed from the actionable next-actions surface until its start date and resurfaces on the day it lands; a tickler dated today is actionable now, and one whose start date has passed (an overdue tickler) stays listed rather than disappearing. Only a strictly-future start date defers — this is why a surface that lists next actions must consult planning dates explicitly, since a plain keyword query ignores them.
+
 ## Agenda views
 
 ### Engage
