@@ -234,6 +234,36 @@ agenda prefix, replacing the useless filename category (\"mindwtr:\")."
     (should (string-match-p "Atlas +NEXT Ship it" text))
     (should-not (string-match-p "mindwtr: +NEXT Ship it" text))))
 
+(ert-deftest mindwtr-agenda-engage-calendar-shows-owning-project ()
+  "Behavioral: a task scheduled today under a project leads its calendar-block
+line with the project name, in place of org's filename category -- which would
+otherwise render as \"mindwtr:\" or the bare \"???\" placeholder."
+  (let* ((text (mindwtr-agenda-test--engage-text
+                `(:areas nil
+                  :projects ((:id "p1" :title "Atlas" :status "active"))
+                  :sections nil
+                  :tasks ((:id "t1" :title "Order supplies" :status "next"
+                           :projectId "p1"
+                           :startTime ,(mindwtr-agenda-test--iso-days 0)))
+                  :settings nil)))
+         ;; Isolate the calendar block ("Today" .. "Today's Focus") so the
+         ;; project prefix is asserted there, not in Next Actions.
+         (today (mindwtr-agenda-test--block-slice text "Today" "Today's Focus")))
+    (should (string-match-p "Atlas +.*NEXT Order supplies" today))
+    (should-not (string-match-p "\\?\\?\\?" today))
+    (should-not (string-match-p "mindwtr:" today))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-blank-off-heading ()
+  "Unit: on an auxiliary agenda line (time grid, `now' marker) the `%(...)'
+escape evaluates with point in the agenda buffer, not an Org heading.  The
+resolver must not error there -- it returns a blank, width-padded column so grid
+lines stay aligned under the project/area heading column."
+  (with-temp-buffer
+    (fundamental-mode)
+    (let ((prefix (mindwtr-agenda--resolve-prefix)))
+      (should (string-match-p "\\`[ ]+\\'" prefix))
+      (should (= (length prefix) mindwtr-agenda-prefix-width)))))
+
 (defun mindwtr-agenda-test--block-slice (text start-header end-header)
   "Return the slice of agenda TEXT under START-HEADER, up to END-HEADER.
 Isolates a single Engage block so a test can assert what that block lists --
