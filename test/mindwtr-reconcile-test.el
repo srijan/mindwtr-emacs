@@ -372,6 +372,78 @@ matched by id (no spurious duplicate insert)."
         (while (re-search-forward "^\\*\\* .* renamed$" nil t) (setq n (1+ n)))
         (should (= n 1))))))
 
+(ert-deftest mindwtr-reconcile-keeps-running-clock-state ()
+  "A running clock (`org-clock-in') keeps its markers pointing at the clocked
+entry after a full buffer rebuild, so the user can still clock out.  The CLOCK
+text is preserved as org-only body, but the in-memory clock markers must be
+re-pointed at the rebuilt entry too (`erase-buffer' detaches them)."
+  (require 'org-clock)
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT do a thing\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (search-forward "do a thing")
+    (org-back-to-heading t)
+    (let ((org-clock-into-drawer t) (org-log-into-drawer nil))
+      (org-clock-in))
+    (unwind-protect
+        (let ((merged '(:tasks ((:id "t1" :title "do a thing" :status "next" :areaId "a1"
+                                 :description "new prose"
+                                 :rev 5 :createdAt "2026-01-01T00:00:00Z"
+                                 :updatedAt "2026-06-01T00:00:00Z"))
+                        :projects nil :sections nil
+                        :areas ((:id "a1" :name "Work")) :settings nil)))
+          (mindwtr-reconcile-buffer merged)
+          ;; hd-marker still resolves to the t1 heading, not point-min garbage.
+          (should (eq (marker-buffer org-clock-hd-marker) (current-buffer)))
+          (should (string-match-p
+                   "do a thing"
+                   (save-excursion (goto-char org-clock-hd-marker)
+                                   (buffer-substring-no-properties
+                                    (line-beginning-position) (line-end-position)))))
+          ;; clock-marker sits on the open CLOCK line (so org-clock-out lands there).
+          (should (string-match-p
+                   "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$"
+                   (save-excursion (goto-char org-clock-marker)
+                                   (buffer-substring-no-properties
+                                    (line-beginning-position) (line-end-position))))))
+      (when (org-clock-is-active) (org-clock-out nil t)))))
+
+(ert-deftest mindwtr-reconcile-restore-entity-keeps-running-clock-state ()
+  "The in-place single-heading rebuild (`mindwtr-reconcile-restore-entity', used
+by the conflict-restore action) also keeps a running clock's markers pointing at
+the entry -- insert + delete-region detaches them just like a full rebuild."
+  (require 'org-clock)
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT theirs\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (search-forward "theirs")
+    (org-back-to-heading t)
+    (let ((org-clock-into-drawer t) (org-log-into-drawer nil))
+      (org-clock-in))
+    (unwind-protect
+        (let ((mine '(:id "t1" :title "mine" :status "next" :areaId "a1"
+                      :rev 9 :createdAt "2026-01-01T00:00:00Z"
+                      :updatedAt "2026-06-01T00:00:00Z")))
+          (should (eq (mindwtr-reconcile-restore-entity mine 'task) 'restored))
+          (should (eq (marker-buffer org-clock-hd-marker) (current-buffer)))
+          (should (string-match-p
+                   "mine"
+                   (save-excursion (goto-char org-clock-hd-marker)
+                                   (buffer-substring-no-properties
+                                    (line-beginning-position) (line-end-position)))))
+          (should (string-match-p
+                   "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$"
+                   (save-excursion (goto-char org-clock-marker)
+                                   (buffer-substring-no-properties
+                                    (line-beginning-position) (line-end-position))))))
+      (when (org-clock-is-active) (org-clock-out nil t)))))
+
 (ert-deftest mindwtr-reconcile-restore-roundtrips-field-edit ()
   "Restoring a simple field edit reproduces it exactly -> `restored'."
   (with-temp-buffer
