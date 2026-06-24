@@ -118,13 +118,16 @@ untouched."
             (setq rendered (concat (substring rendered 0 cut)
                                    preserved
                                    (substring rendered cut)))))))
-    ;; Insert the rebuilt entry BEFORE deleting the old one.  Deleting first
-    ;; would collapse the next heading's marker onto the rebuild point; by
-    ;; inserting ahead of the old region the following heading's marker simply
-    ;; shifts and stays valid, so no O(n) marker rescan per update is needed.
-    (goto-char beg)
-    (insert rendered)
-    (delete-region (point) (+ (point) (- end beg)))
+    ;; Replace the entry's region by diff, not insert+delete-region, so a marker
+    ;; another buffer holds onto THIS entry -- an open `org-agenda' line -- stays
+    ;; on it instead of drifting onto the next heading (insert+delete-region
+    ;; carried an insertion-type-t marker off the rebuilt region).  Narrowing
+    ;; scopes the whole-buffer `replace-buffer-contents' to just [beg,end];
+    ;; headings after END are outside the restriction, so their markers shift
+    ;; normally as the entry's length changes.
+    (save-restriction
+      (narrow-to-region beg end)
+      (mindwtr-reconcile--replace-buffer-contents rendered))
     (mindwtr-reconcile--restore-running-clock clock-id)))
 
 (defun mindwtr-reconcile--collect-org-only ()
@@ -471,6 +474,30 @@ and no `--' end -- so the markers match org's own clock-in placement."
             (when (re-search-forward "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$" end t)
               (move-marker org-clock-marker (point) (current-buffer)))))))))
 
+(defun mindwtr-reconcile--replace-buffer-contents (string)
+  "Replace the current buffer's contents with STRING, preserving markers.
+Unlike `erase-buffer'+`insert' -- which moves every live marker in the buffer to
+point-max -- `replace-buffer-contents' diffs the new text against the old and
+makes only the minimal edits, so markers OTHER buffers hold into this one keep
+pointing at their original headings.  This matters for an open `org-agenda' over
+the Mindwtr file: each agenda line holds a marker into this buffer, and a sync
+that rebuilds it must not collapse those markers to point-max (the file's
+trailing `Areas of Focus' heading) -- otherwise the next agenda clock-in or
+schedule lands on that last area instead of the task the user is on.
+`replace-buffer-contents' takes its replacement from a buffer, so STRING is
+staged in a temporary one."
+  (let ((dest (current-buffer)))
+    (with-temp-buffer
+      (insert string)
+      (let ((source (current-buffer)))
+        (with-current-buffer dest
+          ;; `replace-buffer-contents' is the right call on the Org/Emacs CI
+          ;; baseline (29.3); it was marked obsolete in 31.1 (in favour of a
+          ;; reworked `replace-region-contents' with an incompatible signature),
+          ;; so suppress that newer-Emacs warning rather than branch on version.
+          (with-suppressed-warnings ((obsolete replace-buffer-contents))
+            (replace-buffer-contents source)))))))
+
 (defun mindwtr-reconcile-buffer (merged &optional render-fn)
   "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
 RENDER-FN is the (APPDATA &optional ORG-ONLY) -> string renderer, defaulting to
@@ -502,16 +529,18 @@ silently erased."
     (mindwtr-parse-ensure-keywords)
     (let* ((org-only (mindwtr-reconcile--collect-org-only))
            (at-id (mindwtr-reconcile--id-at-point))
-           ;; Collect orphans from the LIVE buffer, before the erase below (R7).
+           ;; Collect orphans from the LIVE buffer, before the rebuild below (R7).
            (orphans (mindwtr-reconcile--collect-orphans))
-           ;; Render BEFORE erasing: if rendering signals (e.g. an unexpected
+           ;; Render BEFORE replacing: if rendering signals (e.g. an unexpected
            ;; status from the server), the buffer is left intact rather than
-           ;; wiped between erase and insert.
+           ;; wiped mid-rebuild.
            (rendered (funcall (or render-fn #'mindwtr-render-appdata)
                               merged org-only)))
+      ;; Replace via diff (not erase+insert) so markers other buffers hold into
+      ;; this one -- an open `org-agenda's per-line markers especially -- survive
+      ;; the rebuild instead of collapsing to point-max.
       (let ((inhibit-message t))
-        (erase-buffer)
-        (insert rendered))
+        (mindwtr-reconcile--replace-buffer-contents rendered))
       ;; Re-emit orphans before view restore, so fold/scroll restore runs over a
       ;; buffer that already includes the quarantined headings.
       (mindwtr-reconcile--emit-quarantine orphans)
