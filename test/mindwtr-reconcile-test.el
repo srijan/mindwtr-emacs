@@ -444,6 +444,58 @@ the entry -- insert + delete-region detaches them just like a full rebuild."
                                     (line-beginning-position) (line-end-position))))))
       (when (org-clock-is-active) (org-clock-out nil t)))))
 
+(ert-deftest mindwtr-reconcile-restore-entity-keeps-external-buffer-markers-valid ()
+  "The in-place conflict-restore rebuild also keeps a marker another buffer
+holds onto the rebuilt entry -- an open `org-agenda' line, say -- resolving to
+that entry, instead of drifting onto the following heading.  `insert'+
+`delete-region' moved an insertion-type-t marker off the entry; `org-agenda'
+markers carry that insertion type (`org-agenda-new-marker'), so reproduce it."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+              "** NEXT first\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+              "** NEXT second\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (search-forward "first")
+    (org-back-to-heading t)
+    (let ((agenda-marker (copy-marker (point) t))
+          (mine '(:id "t1" :title "first edited" :status "next" :areaId "a1"
+                  :rev 9 :createdAt "2026-01-01T00:00:00Z"
+                  :updatedAt "2026-06-01T00:00:00Z")))
+      (should (eq (mindwtr-reconcile-restore-entity mine 'task) 'restored))
+      (should (equal (org-with-point-at agenda-marker (org-get-heading t t t t))
+                     "first edited")))))
+
+(ert-deftest mindwtr-reconcile-keeps-external-buffer-markers-valid ()
+  "A marker another buffer holds into a task -- e.g. an open `org-agenda' line --
+still resolves to that task after a full buffer rebuild, instead of collapsing
+to the file's trailing heading.  The canonical layout ends with `Areas of
+Focus', so a marker destroyed by the rebuild (`erase-buffer'+`insert' moved
+every live marker to point-max) sent agenda clock-in/schedule to the last area
+heading.  `org-agenda' markers carry insertion-type t (`org-agenda-new-marker'),
+so reproduce that here."
+  (let ((appdata '(:areas ((:id "a1" :name "Work"))
+                   :projects nil :sections nil
+                   :tasks ((:id "t1" :title "Send the report" :status "next"
+                            :areaId "a1" :rev 5
+                            :createdAt "2026-01-01T00:00:00Z"
+                            :updatedAt "2026-06-01T00:00:00Z"))
+                   :settings nil)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)
+            (org-todo-keywords mindwtr-model-todo-keywords))
+        (insert (mindwtr-render-appdata appdata))
+        (org-mode))
+      (goto-char (point-min))
+      (search-forward "Send the report")
+      (org-back-to-heading t)
+      (let ((agenda-marker (copy-marker (point) t)))
+        (mindwtr-reconcile-buffer appdata)
+        (should (equal (org-with-point-at agenda-marker
+                         (org-get-heading t t t t))
+                       "Send the report"))))))
+
 (ert-deftest mindwtr-reconcile-restore-roundtrips-field-edit ()
   "Restoring a simple field edit reproduces it exactly -> `restored'."
   (with-temp-buffer
