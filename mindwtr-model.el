@@ -218,9 +218,9 @@ Empty for kinds that carry none (section, area)."
 
 (defun mindwtr-model-entity-title (entity)
   "Return ENTITY's human-readable label, or nil when it carries neither key.
-task/project/section carry `:title'; area carries `:name'.  One place for the
-kind-agnostic title lookup so callers (the sync report, incoming-changes) do
-not each re-spell the `(or :title :name)' idiom."
+task/project/section carry `:title'; area and person carry `:name'.  One place
+for the kind-agnostic title lookup so callers (the sync report,
+incoming-changes) do not each re-spell the `(or :title :name)' idiom."
   (or (plist-get entity :title) (plist-get entity :name)))
 
 (defconst mindwtr-model-known-fields
