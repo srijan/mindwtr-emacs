@@ -3,7 +3,7 @@
 ;; Parse org headings into Mindwtr entity content plists.  Sync metadata
 ;; and shadow-only fields are NOT produced here; they are merged from the
 ;; shadow later.  Each parsed entity carries internal keys:
-;;   :mw-kind  -> one of area|project|section|task
+;;   :mw-kind  -> one of area|person|project|section|task
 ;;   :mw-extra-props -> plist of unknown PROPERTIES keys to preserve
 ;;; Code:
 
@@ -17,7 +17,7 @@
     "MW_ASSIGNED_TO" "MW_FOCUS_TODAY" "MW_REVIEW_AT" "MW_LOCATION"
     "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "MW_AREA_ID" "MW_AREA" "MW_ATTACH"
     "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS"
-    "MW_PROJECT_ID" "MW_SECTION_ID")
+    "MW_PROJECT_ID" "MW_SECTION_ID" "MW_REFERENCE_LINK")
   "PROPERTIES keys the parser interprets; all others are preserved verbatim.
 MW_PROJECT_ID/MW_SECTION_ID carry an archived task's containment explicitly
 across the file split (KTD4): in the archive file a task whose project is still
@@ -221,7 +221,7 @@ type was inferred from context).  When omitted it is read from the
          (e (list :id id :mw-kind kind
                   :mw-extra-props (mindwtr-parse--extra-props))))
     (pcase kind
-      ('area (setq e (plist-put e :name title)))
+      ((or 'area 'person) (setq e (plist-put e :name title)))
       ((or 'project 'section 'task) (setq e (plist-put e :title title))))
     (when (memq kind '(task project))
       (let ((status (and todo (mindwtr-model-keyword->status-safe kind todo))))
@@ -295,6 +295,12 @@ type was inferred from context).  When omitted it is read from the
     (let ((rv (mindwtr-parse--prop "MW_REVIEW_AT")))
       (when (and rv (not (string-empty-p (string-trim rv))))
         (setq e (plist-put e :reviewAt rv))))
+    ;; MW_REFERENCE_LINK is person-only, but parsed kind-agnostically (mirrors
+    ;; MW_REVIEW_AT above): a kind that never carries it simply lacks the key.
+    ;; A blank value omits the key (the blank-guard discipline).
+    (let ((rl (mindwtr-parse--prop "MW_REFERENCE_LINK")))
+      (when (and rl (not (string-empty-p (string-trim rl))))
+        (setq e (plist-put e :referenceLink rl))))
     (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
       (when aid (setq e (plist-put e :areaId aid))))
     e))
@@ -335,15 +341,16 @@ walk of `mindwtr-parse--ancestor-id'."
 
 (defun mindwtr-parse--infer-kind ()
   "Infer an entity kind for a heading lacking :MW_TYPE: from its outline context.
-Returns `task', `project', or `area', or nil when the position implies no
-mindwtr entity (no recognized container ancestor -- e.g. a stray top-level
-heading, or one parked under `* Sync Failures').  Keyed on the nearest
+Returns `task', `project', `area', or `person', or nil when the position
+implies no mindwtr entity (no recognized container ancestor -- e.g. a stray
+top-level heading, or one parked under `* Sync Failures').  Keyed on the nearest
 container's :MW_LIST: plus project/section ancestry:
 
   inbox / single-actions / someday-single-actions / reference -> task
   projects / someday-projects, under a project or section       -> task
   projects / someday-projects, direct child of the container    -> project
-  areas                                                         -> area"
+  areas                                                         -> area
+  people                                                        -> person"
   (pcase (mindwtr-parse--ancestor-list-role)
     ((or "inbox" "single-actions" "someday-single-actions" "reference") 'task)
     ((or "projects" "someday-projects")
@@ -351,6 +358,7 @@ container's :MW_LIST: plus project/section ancestry:
              (mindwtr-parse--ancestor-id 'project))
          'task 'project))
     ("areas" 'area)
+    ("people" 'person)
     (_ nil)))
 
 (defun mindwtr-parse-buffer ()
@@ -358,7 +366,7 @@ container's :MW_LIST: plus project/section ancestry:
   (setq mindwtr-parse--warnings nil)
   (mindwtr-parse-ensure-keywords)
   (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
-        tasks projects sections areas)
+        tasks projects sections areas people)
     (mindwtr-util--map-entries
      (lambda ()
        ;; A heading's kind comes from its :MW_TYPE: property; a `container'
@@ -374,6 +382,7 @@ container's :MW_LIST: plus project/section ancestry:
            (let ((e (mindwtr-parse-heading kind)))
              (pcase kind
                ('area (push (mindwtr-parse--strip-internal e) areas))
+               ('person (push (mindwtr-parse--strip-internal e) people))
                ('project (push (mindwtr-parse--strip-internal e) projects))
                ('section
                 (let ((pid (mindwtr-parse--ancestor-id 'project)))
@@ -394,7 +403,8 @@ container's :MW_LIST: plus project/section ancestry:
                         (pid (setq e (plist-put e :projectId pid)))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)
-          :sections (nreverse sections) :areas (nreverse areas))))
+          :sections (nreverse sections) :areas (nreverse areas)
+          :people (nreverse people))))
 
 (provide 'mindwtr-parse)
 ;;; mindwtr-parse.el ends here

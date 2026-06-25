@@ -806,3 +806,47 @@ props) gets :projectId from ancestry, exactly like the main file."
         (should (null (plist-get ad :projects)))
         (should (null (plist-get ad :sections)))
         (should (null (plist-get ad :areas)))))))
+
+(ert-deftest mindwtr-parse-person-infers-kind-from-people-container ()
+  "A heading under a `MW_LIST: people' container with no MW_TYPE infers person."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* People\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: people\n:END:\n"
+              "** Alex Rivera\n:PROPERTIES:\n:MW_ID: pe1\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (p (car (plist-get ad :people))))
+      (should (= (length (plist-get ad :people)) 1))
+      (should (string= (plist-get p :name) "Alex Rivera"))
+      (should (string= (plist-get p :id) "pe1"))
+      ;; not misfiled as another kind
+      (should (null (plist-get ad :tasks)))
+      (should (null (plist-get ad :areas))))))
+
+(ert-deftest mindwtr-parse-person-name-note-and-reference-link ()
+  "A person heading parses :name from the heading, :note from body prose, and
+:referenceLink from MW_REFERENCE_LINK."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* People\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: people\n:END:\n"
+              "** Sam Park\n:PROPERTIES:\n:MW_TYPE: person\n:MW_ID: pe2"
+              "\n:MW_REFERENCE_LINK: https://example.com/sam\n:END:\n"
+              "Met at the conference.\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (p (car (plist-get ad :people))))
+      (should (string= (plist-get p :name) "Sam Park"))
+      (should (string= (plist-get p :note) "Met at the conference."))
+      (should (string= (plist-get p :referenceLink) "https://example.com/sam"))
+      ;; MW_REFERENCE_LINK is a known prop -- it does not leak into extra-props
+      (should-not (plist-get p :mw-extra-props)))))
+
+(ert-deftest mindwtr-parse-buffer-returns-people-key ()
+  "`mindwtr-parse-buffer' always returns a :people key (empty when none)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n")
+      (org-mode))
+    (let ((ad (mindwtr-parse-buffer)))
+      (should (plist-member ad :people))
+      (should (null (plist-get ad :people))))))

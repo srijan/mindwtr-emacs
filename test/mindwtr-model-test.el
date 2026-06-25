@@ -79,8 +79,13 @@ with fast-access keys and the done-state separator."
   (should (assq 'project mindwtr-model-known-fields))
   (should (assq 'section mindwtr-model-known-fields))
   (should (assq 'area mindwtr-model-known-fields))
+  (should (assq 'person mindwtr-model-known-fields))
   ;; settings is intentionally excluded (verbatim passthrough)
   (should-not (assq 'settings mindwtr-model-known-fields))
+  ;; Person field set is exactly the core `Person' (KTD3): no color/icon/order.
+  (should (equal (cdr (assq 'person mindwtr-model-known-fields))
+                 '(:id :name :note :referenceLink :rev :revBy
+                   :createdAt :updatedAt :deletedAt)))
   ;; representative keys transcribed from Mindwtr core types.ts
   (let ((task (cdr (assq 'task mindwtr-model-known-fields)))
         (proj (cdr (assq 'project mindwtr-model-known-fields)))
@@ -107,11 +112,12 @@ with fast-access keys and the done-state separator."
   (should (equal mindwtr-model-list-roles
                  '("inbox" "single-actions" "projects"
                    "someday" "someday-single-actions" "someday-projects"
-                   "reference" "areas" "archive")))
+                   "reference" "areas" "people" "archive")))
   (should (string= (mindwtr-model-list-title "single-actions") "Single Actions"))
   (should (string= (mindwtr-model-list-title "someday-single-actions") "Single Actions"))
   (should (string= (mindwtr-model-list-title "someday-projects") "Projects"))
   (should (string= (mindwtr-model-list-title "areas") "Areas of Focus"))
+  (should (string= (mindwtr-model-list-title "people") "People"))
   (should (string= (mindwtr-model-list-title "archive") "Archive")))
 
 (ert-deftest mindwtr-model-status->list-maps-standalone-statuses ()
@@ -156,3 +162,28 @@ with fast-access keys and the done-state separator."
     (should (equal proj '(("ACTIVE" . ?a) ("SOMEDAY" . ?s) ("WAIT" . ?w) ("ARCH" . ?x))))
     (should-not (assoc "ACTIVE" task))
     (should-not (assoc "NEXT" proj))))
+
+(ert-deftest mindwtr-model-notes-field-person-is-note ()
+  "Person's inline body-prose field is `:note' (KTD4)."
+  (should (eq (mindwtr-model-notes-field 'person) :note))
+  ;; area still has none
+  (should (null (mindwtr-model-notes-field 'area))))
+
+(ert-deftest mindwtr-model-content-fields-include-person-fields ()
+  "`:note' and `:referenceLink' are signed content fields (KTD4)."
+  (should (memq :note mindwtr-model-content-fields))
+  (should (memq :referenceLink mindwtr-model-content-fields)))
+
+(ert-deftest mindwtr-model-validate-appdata-accepts-people ()
+  "A people list with id-bearing persons validates."
+  (should (mindwtr-model-validate-appdata
+           '(:tasks nil :projects nil :sections nil :areas nil
+             :people ((:id "pe1" :name "Alex" :note "notes" :rev 1))
+             :settings nil))))
+
+(ert-deftest mindwtr-model-validate-appdata-rejects-person-without-id ()
+  "A person missing :id is rejected."
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks nil :projects nil :sections nil :areas nil
+      :people ((:name "Alex")) :settings nil))))
