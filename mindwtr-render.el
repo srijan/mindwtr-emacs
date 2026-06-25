@@ -13,8 +13,10 @@ Dynamically bound by `mindwtr-render-appdata' / reconcile.")
 
 (defconst mindwtr-render--drawer-order
   '(:energyLevel :timeEstimate :recurrence :assignedTo :isFocusedToday
-    :reviewAt :location :taskMode :isSequential :isFocused :attach)
-  "Canonical order of content properties in the drawer.")
+    :reviewAt :location :taskMode :isSequential :isFocused :referenceLink :attach)
+  "Canonical order of content properties in the drawer.
+`:referenceLink' is person-only; it is iterated for every kind but inert on
+entities that do not carry it.")
 
 (defconst mindwtr-render--prop-names
   '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
@@ -22,6 +24,7 @@ Dynamically bound by `mindwtr-render-appdata' / reconcile.")
     (:isFocusedToday . "MW_FOCUS_TODAY") (:reviewAt . "MW_REVIEW_AT")
     (:location . "MW_LOCATION") (:taskMode . "MW_TASK_MODE")
     (:isSequential . "MW_SEQUENTIAL") (:isFocused . "MW_FOCUSED")
+    (:referenceLink . "MW_REFERENCE_LINK")
     (:attach . "MW_ATTACH")))
 
 (defconst mindwtr-render--boolean-fields '(:isFocusedToday :isSequential :isFocused)
@@ -254,6 +257,15 @@ and sort after all ordered entries."
                     (if (= (nth 0 a) (nth 0 b)) (< (nth 1 a) (nth 1 b))
                       (< (nth 0 a) (nth 0 b))))))))
 
+(defun mindwtr-render--people-sorted (people)
+  "Stable-sort PEOPLE by :name for a byte-stable render (KTD5).
+Person has no `:order' field, so `mindwtr-render--sorted' would leave people
+in server order (non-deterministic across pulls); sort by name instead.  Copies
+the list because `sort' is destructive on the caller's structure."
+  (sort (copy-sequence people)
+        (lambda (a b)
+          (string< (or (plist-get a :name) "") (or (plist-get b :name) "")))))
+
 (defun mindwtr-render--sorted-projects (projects area-order)
   "Stable-sort PROJECTS grouped by area then project order, area-less last.
 AREA-ORDER is a hash areaId->order; projects without an areaId sort after
@@ -391,6 +403,11 @@ are not rendered."
     (setq out (concat out (mindwtr-render--container "areas" 1)))
     (dolist (a (mindwtr-render--sorted areas))
       (setq out (concat out (mindwtr-render--entity a 'area 2 org-only))))
+    ;; People reference section (modeled on Areas; sorted by name, KTD5)
+    (setq out (concat out (mindwtr-render--container "people" 1)))
+    (dolist (p (mindwtr-render--people-sorted
+                (mindwtr-render--live (plist-get appdata :people))))
+      (setq out (concat out (mindwtr-render--entity p 'person 2 org-only))))
     out))
 
 ;;; Archive surface render -----------------------------------------------------

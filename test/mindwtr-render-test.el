@@ -355,3 +355,55 @@ archived project subtree with its done child; live + tombstoned absent."
                  :projects nil :sections nil :areas nil :settings nil))))
     (should (string-match-p "^\\* Archive" text))
     (should-not (string-match-p "^\\*\\*" text))))
+
+(ert-deftest mindwtr-render-appdata-emits-people-container ()
+  "Appdata with people emits a `MW_LIST: people' container with a heading per
+person: name as heading text, MW_ID in the drawer."
+  (let* ((ad '(:tasks nil :projects nil :sections nil :areas nil
+               :people ((:id "pe1" :name "Alex Rivera")
+                        (:id "pe2" :name "Sam Park"))
+               :settings nil))
+         (text (mindwtr-render-appdata ad)))
+    (should (string-match-p "^\\* People$" text))
+    (should (string-match-p "^:MW_LIST: people$" text))
+    (should (string-match-p "^\\*\\* Alex Rivera$" text))
+    (should (string-match-p "^\\*\\* Sam Park$" text))
+    (should (string-match-p ":MW_ID: pe1" text))
+    (should (string-match-p ":MW_TYPE: person" text))))
+
+(ert-deftest mindwtr-render-person-note-and-reference-link ()
+  "A person with :note renders body prose; :referenceLink renders the drawer prop."
+  (let* ((ad '(:tasks nil :projects nil :sections nil :areas nil
+               :people ((:id "pe1" :name "Sam Park"
+                         :note "Met at the conference."
+                         :referenceLink "https://example.com/sam"))
+               :settings nil))
+         (text (mindwtr-render-appdata ad)))
+    (should (string-match-p "^:MW_REFERENCE_LINK: https://example.com/sam$" text))
+    (should (string-match-p "^Met at the conference\\.$" text))))
+
+(ert-deftest mindwtr-render-people-sorted-by-name ()
+  "People render sorted by name regardless of input order (KTD5)."
+  (let* ((ad '(:tasks nil :projects nil :sections nil :areas nil
+               :people ((:id "pe1" :name "Zoe")
+                        (:id "pe2" :name "Alex")
+                        (:id "pe3" :name "Maria"))
+               :settings nil))
+         (text (mindwtr-render-appdata ad))
+         (a (string-match "Alex" text))
+         (m (string-match "Maria" text))
+         (z (string-match "Zoe" text)))
+    (should (and a m z))
+    (should (< a m))
+    (should (< m z))))
+
+(ert-deftest mindwtr-render-people-tombstones-not-rendered ()
+  "A tombstoned person is filtered by render--live."
+  (let* ((ad '(:tasks nil :projects nil :sections nil :areas nil
+               :people ((:id "pe1" :name "Live Person")
+                        (:id "pe2" :name "Dead Person"
+                         :deletedAt "2026-01-01T00:00:00Z"))
+               :settings nil))
+         (text (mindwtr-render-appdata ad)))
+    (should (string-match-p "Live Person" text))
+    (should-not (string-match-p "Dead Person" text))))

@@ -451,5 +451,42 @@ render->parse with an unchanged signature."
       (let ((parsed (car (plist-get (mindwtr-parse-buffer) :projects))))
         (should (string= (mindwtr-signature parsed) sig-before))))))
 
+(defun mindwtr-roundtrip--wrap-person (person-text)
+  "Wrap a rendered level-2 PERSON-TEXT under a `* People' container.
+A person's kind is inferred from the People container ancestor, so it must sit
+directly under a `MW_LIST: people' heading to round-trip."
+  (concat "* People\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: people\n:END:\n"
+          person-text))
+
+(ert-deftest mindwtr-roundtrip-person-signature-stable ()
+  "Covers R6.  render -> parse preserves a person's content signature
+(name + note body + referenceLink drawer property byte-stable)."
+  (let* ((mw-person (list :id "pe1" :mw-kind 'person :name "Sam Park"
+                          :note "Line one.\nLine two."
+                          :referenceLink "https://example.com/sam"
+                          :mw-extra-props nil))
+         (sig-before (mindwtr-signature mw-person))
+         (text (mindwtr-roundtrip--wrap-person
+                (mindwtr-render-heading mw-person 2 nil))))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let ((parsed (car (plist-get (mindwtr-parse-buffer) :people))))
+        (should (string= (mindwtr-signature parsed) sig-before))))))
+
+(ert-deftest mindwtr-roundtrip-person-render-stable ()
+  "render == render(parse(render(x))) byte-identical for a person."
+  (let* ((mw-person (list :id "pe1" :mw-kind 'person :name "Sam Park"
+                          :note "Met at the conference."
+                          :referenceLink "https://example.com/sam"
+                          :mw-extra-props nil))
+         (t1 (mindwtr-render-heading mw-person 2 nil))
+         (text (mindwtr-roundtrip--wrap-person t1)))
+    (with-temp-buffer
+      (let ((org-inhibit-startup t)) (insert text) (org-mode))
+      (let* ((parsed (car (plist-get (mindwtr-parse-buffer) :people)))
+             (t2 (mindwtr-render-heading
+                  (plist-put (copy-sequence parsed) :mw-kind 'person) 2 nil)))
+        (should (string= t1 t2))))))
+
 (provide 'mindwtr-roundtrip-test)
 ;;; mindwtr-roundtrip-test.el ends here
