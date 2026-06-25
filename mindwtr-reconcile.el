@@ -562,7 +562,8 @@ silently erased."
   (let ((ad (mindwtr-parse-buffer)))
     (seq-find (lambda (e) (equal (plist-get e :id) id))
               (append (plist-get ad :tasks) (plist-get ad :projects)
-                      (plist-get ad :sections) (plist-get ad :areas)))))
+                      (plist-get ad :sections) (plist-get ad :areas)
+                      (plist-get ad :people)))))
 
 (defun mindwtr-reconcile-restore-entity (entity kind)
   "Re-apply ENTITY (kind KIND) onto its existing heading in the current buffer.

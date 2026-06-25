@@ -2303,3 +2303,79 @@ the first (main) copy and records the dropped id in :duplicates and as a
               (should (equal (plist-get task :status) "next")))))
       (kill-buffer main)
       (kill-buffer arch))))
+
+;;; People sync (U4) ----------------------------------------------------------
+
+(ert-deftest mindwtr-sync-key->kind-maps-people-to-person ()
+  "The irregular plural :people maps to person, not `peopl' (KTD2)."
+  (should (eq (mindwtr-sync--key->kind :people) 'person))
+  ;; regular plurals unaffected
+  (should (eq (mindwtr-sync--key->kind :tasks) 'task))
+  (should (eq (mindwtr-sync--key->kind :areas) 'area)))
+
+(ert-deftest mindwtr-sync-build-candidate-person-create ()
+  "A person heading with no id/not in shadow is created: rev 1 + timestamps."
+  (let* ((local '(:tasks nil :projects nil :sections nil :areas nil
+                  :people ((:id nil :mw-kind person :name "Alex"))))
+         (shadow '(:tasks nil :projects nil :sections nil :areas nil
+                   :people nil :settings nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1"
+                                             "2026-06-01T00:00:00Z"))
+         (p (car (plist-get cand :people))))
+    (should (stringp (plist-get p :id)))
+    (should (string= (plist-get p :name) "Alex"))
+    (should (= (plist-get p :rev) 1))
+    (should (string= (plist-get p :createdAt) "2026-06-01T00:00:00Z"))
+    (should (string= (plist-get p :revBy) "dev-1"))))
+
+(ert-deftest mindwtr-sync-build-candidate-person-update-bumps-rev ()
+  "Editing a person's name classifies as update: rev incremented, content merged."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil
+                   :people ((:id "pe1" :name "Alex" :rev 2 :createdAt "C"))
+                   :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil
+                  :people ((:id "pe1" :mw-kind person :name "Alexandra"))))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (p (car (plist-get cand :people))))
+    (should (string= (plist-get p :name) "Alexandra"))
+    (should (= (plist-get p :rev) 3))
+    (should (string= (plist-get p :updatedAt) "NOW"))))
+
+(ert-deftest mindwtr-sync-person-absence-is-pull-only-no-tombstone ()
+  "Covers R4.  Removing a rendered person from the buffer echoes the shadow
+person verbatim -- no :deletedAt is stamped (people deletion is pull-only)."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil
+                   :people ((:id "pe1" :name "Alex" :rev 5 :createdAt "C"))
+                   :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil :people nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (p (car (plist-get cand :people))))
+    ;; echoed verbatim: present, unchanged rev, NO deletedAt
+    (should p)
+    (should (string= (plist-get p :name) "Alex"))
+    (should (= (plist-get p :rev) 5))
+    (should-not (plist-get p :deletedAt))))
+
+(ert-deftest mindwtr-sync-first-upgrade-does-not-tombstone-people ()
+  "Covers R5.  Shadow holds people but the (pre-upgrade) buffer has no People
+container, so local parses none -> every person is echoed verbatim, none
+tombstoned, so the first post-upgrade sync cannot lose server people."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil
+                   :people ((:id "pe1" :name "Alex" :rev 1 :createdAt "C")
+                            (:id "pe2" :name "Sam" :rev 1 :createdAt "C"))
+                   :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil :people nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (people (plist-get cand :people)))
+    (should (= (length people) 2))
+    (dolist (p people)
+      (should-not (plist-get p :deletedAt)))))
+
+(ert-deftest mindwtr-sync-person-stats-never-counts-absence-as-delete ()
+  "A person absent from local never appears in the deleted stat (pull-only)."
+  (let* ((shadow '(:tasks nil :projects nil :sections nil :areas nil
+                   :people ((:id "pe1" :name "Alex" :rev 1 :createdAt "C"))
+                   :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil :people nil))
+         (stats (mindwtr-sync--stats local shadow)))
+    (should (= (plist-get stats :deleted) 0))))
