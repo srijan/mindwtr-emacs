@@ -96,6 +96,51 @@ re-parents on the next PUT.  No-ops off a task/project heading."
                 (org-back-to-heading t)
                 (org-set-property "MW_AREA" name))))))))))
 
+(defun mindwtr-set-assignee--candidates ()
+  "Return assignee completion candidates for the current buffer.
+The union of the People roster (person headings, mirroring
+`mindwtr-set-area--names') and the MW_ASSIGNED_TO values already present on
+tasks, de-duplicated in document order.  Roster people that have never been
+assigned still appear, so a never-used person is offered as a candidate."
+  (let (names)
+    (mindwtr-util--map-entries
+     (lambda ()
+       (if (equal (mindwtr-parse--prop "MW_TYPE") "person")
+           (let ((name (org-get-heading t t t t)))
+             (when (and name (not (string-empty-p name)))
+               (push name names)))
+         (let ((a (mindwtr-parse--prop "MW_ASSIGNED_TO")))
+           (when (and a (not (string-empty-p (string-trim a))))
+             (push (string-trim a) names))))))
+    (delete-dups (nreverse names))))
+
+;;;###autoload
+(defun mindwtr-set-assignee ()
+  "Set or clear the assignee (MW_ASSIGNED_TO) of the task at point.
+Prompts with `completing-read' over the People roster plus the assignee names
+already used in this buffer, prefilled with the task's current assignee.  A new
+name not in the roster is accepted verbatim (`require-match' nil) -- the app
+backfills a Person from any new `assignedTo' name, so Emacs only writes the
+name.  Empty input clears MW_ASSIGNED_TO.  No-ops off a task heading:
+`assignedTo' is task-only in the model.
+
+The task->person link is free-text name (no `personId'), exactly as the server
+stores it; this command never touches the People roster itself."
+  (interactive)
+  (let ((kind (or (mindwtr-commands--kind-at-point)
+                  (ignore-errors (mindwtr-parse--infer-kind)))))
+    (if (not (eq kind 'task))
+        (message "mindwtr-set-assignee: point is not on a task")
+      (save-excursion
+        (org-back-to-heading t)
+        (let* ((current (mindwtr-parse--prop "MW_ASSIGNED_TO"))
+               (cands (mindwtr-set-assignee--candidates))
+               (choice (string-trim
+                        (completing-read "Assignee: " cands nil nil current))))
+          (if (string-empty-p choice)
+              (org-entry-delete nil "MW_ASSIGNED_TO")
+            (org-set-property "MW_ASSIGNED_TO" choice)))))))
+
 (defun mindwtr-set-context--candidates ()
   "Return every @context used as an org tag in the current buffer, sorted."
   (let (out)
