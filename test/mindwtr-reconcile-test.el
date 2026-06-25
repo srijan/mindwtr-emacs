@@ -265,6 +265,32 @@ still preserved verbatim across a rebuild (the area branch is unchanged)."
       (should (= 1 (mindwtr-reconcile-test--count "Free-form area reference notes.")))
       (should (= 1 (mindwtr-reconcile-test--count "- [ ] even a checkbox"))))))
 
+(ert-deftest mindwtr-reconcile-person-note-and-logbook-coexist ()
+  "A person's :note round-trips through a rebuild emitted exactly once (the
+merged entity is the prose source, so render must not double-graft it with
+preserved-body), while a LOGBOOK drawer survives as org-only content."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* People\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: people\n:END:\n"
+              "** Alex\n:PROPERTIES:\n:MW_TYPE: person\n:MW_ID: pe1\n:END:\n"
+              ":LOGBOOK:\n- note KEEPME\n:END:\n"
+              "Old note text.\n")
+      (org-mode))
+    (let ((merged '(:tasks nil :projects nil :sections nil :areas nil
+                    :people ((:id "pe1" :name "Alexandra"
+                              :note "Updated note text."
+                              :referenceLink "https://example.com/a"
+                              :rev 4 :createdAt "2026-01-01T00:00:00Z"
+                              :updatedAt "2026-06-01T00:00:00Z"))
+                    :settings nil)))
+      (mindwtr-reconcile-buffer merged)
+      (should (= 1 (mindwtr-reconcile-test--count "Alexandra")))
+      (should (= 1 (mindwtr-reconcile-test--count "Updated note text.")))
+      (should (= 1 (mindwtr-reconcile-test--count "KEEPME")))
+      (should (= 1 (mindwtr-reconcile-test--count ":MW_REFERENCE_LINK: https://example.com/a")))
+      ;; the stale buffer prose was replaced by the merged note, not duplicated
+      (should (= 0 (mindwtr-reconcile-test--count "Old note text."))))))
+
 (ert-deftest mindwtr-reconcile-project-note-no-double-graft-across-two-syncs ()
   "Covers R12 (no-double-graft).  Two reconciles in a row leave the project note
 emitted exactly once.  After the first reconcile the note is in the buffer as
