@@ -8,7 +8,7 @@
 (require 'mindwtr-util)
 
 (defvar mindwtr-render-area-names nil
-  "Hash table id->name for resolving `:MW_AREA:' during rendering.
+  "Hash table id->name for resolving the area `:CATEGORY:' during rendering.
 Dynamically bound by `mindwtr-render-appdata' / reconcile.")
 
 (defconst mindwtr-render--drawer-order
@@ -160,7 +160,7 @@ Returns a string ending with a newline."
     (let ((aid (plist-get entity :areaId)))
       (when (and aid mindwtr-render-area-names)
         (let ((name (gethash aid mindwtr-render-area-names)))
-          (when name (push (format ":MW_AREA: %s" name) lines)))))
+          (when name (push (format ":CATEGORY: %s" name) lines)))))
     (dolist (k mindwtr-render--drawer-order)
       (let ((v (plist-get entity k)))
         (cond

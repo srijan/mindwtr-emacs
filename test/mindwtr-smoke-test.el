@@ -133,7 +133,7 @@ returns it re-encoded through JSON so nil/false/[] normalize as on the wire."
     :settings nil)
   "A minimal but valid server snapshot for offline phase tests.
 Exercises the new GTD-list layout: a standalone task carrying an area
-\(round-tripped via `:MW_AREA:'), an active project in that area, and a
+\(round-tripped via `:CATEGORY:'), an active project in that area, and a
 task nested under the project (`:projectId' round-tripped via nesting).")
 
 (ert-deftest mindwtr-smoke-readonly-phases-pass-on-clean-data ()

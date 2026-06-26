@@ -103,15 +103,16 @@ into the title and yielding a nil status that aborted the whole sync."
                        "keepme")))))
 
 (ert-deftest mindwtr-parse-area-from-property ()
-  "areaId comes from :MW_AREA: resolved against Areas-of-Focus headings,
-not from an ancestor area heading; project/section come from ancestry."
+  "areaId comes from :CATEGORY: resolved against Areas-of-Focus headings,
+not from an ancestor area heading; project/section come from ancestry.
+A nested task carries no local :CATEGORY: and parses with no areaId (R2/R3)."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
-              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:MW_AREA: Personal\n:END:\n"
+              "** ACTIVE Proj\n:PROPERTIES:\n:MW_TYPE: project\n:MW_ID: p1\n:CATEGORY: Personal\n:END:\n"
               "*** NEXT child\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
               "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
-              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:MW_AREA: Personal\n:END:\n"
+              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:CATEGORY: Personal\n:END:\n"
               "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
               "** Personal\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
       (org-mode))
@@ -119,16 +120,61 @@ not from an ancestor area heading; project/section come from ancestry."
            (proj (car (plist-get ad :projects)))
            (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get ad :tasks)))
            (t2 (seq-find (lambda (e) (equal (plist-get e :id) "t2")) (plist-get ad :tasks))))
-      ;; project's area from its MW_AREA property
+      ;; project's area from its CATEGORY property
       (should (string= (plist-get proj :areaId) "a1"))
-      ;; nested task: projectId from ancestry, NO areaId (no MW_AREA)
+      ;; nested task: projectId from ancestry, NO areaId (no local CATEGORY) --
+      ;; the model never carries the inherited area, only the project (R3).
       (should (string= (plist-get t1 :projectId) "p1"))
       (should-not (plist-get t1 :areaId))
-      ;; loose task: areaId from MW_AREA, no project
+      ;; loose task: areaId from CATEGORY, no project
       (should (string= (plist-get t2 :areaId) "a1"))
       (should-not (plist-get t2 :projectId))
       ;; containers are not entities
       (should (= (length (plist-get ad :areas)) 1)))))
+
+(ert-deftest mindwtr-parse-area-legacy-mw-area-fallback ()
+  "A legacy heading with :MW_AREA: and no :CATEGORY: still resolves :areaId
+via the transitional fallback (R9/KTD3) -- guards the first-post-upgrade
+false-clear -- and :MW_AREA: is consumed, not preserved into extra-props."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:MW_AREA: Work\n:END:\n"
+              "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get ad :tasks))))
+      (should (string= (plist-get t1 :areaId) "a1"))
+      (should-not (plist-get (plist-get t1 :mw-extra-props) "MW_AREA" #'equal)))))
+
+(ert-deftest mindwtr-parse-area-category-wins-over-stale-mw-area ()
+  "When a heading carries both :CATEGORY: and a stale :MW_AREA:, CATEGORY wins."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:CATEGORY: Work\n:MW_AREA: Personal\n:END:\n"
+              "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a-work\n:END:\n"
+              "** Personal\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a-pers\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get ad :tasks))))
+      (should (string= (plist-get t1 :areaId) "a-work")))))
+
+(ert-deftest mindwtr-parse-category-not-leaked-to-extra-props ()
+  "The area :CATEGORY: is consumed by the parser, never preserved verbatim
+into :mw-extra-props (KTD4 -- it is non-MW_-prefixed but known)."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
+              "** NEXT loose\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:CATEGORY: Personal\n:END:\n"
+              "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
+              "** Personal\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+      (org-mode))
+    (let* ((ad (mindwtr-parse-buffer))
+           (t1 (seq-find (lambda (e) (equal (plist-get e :id) "t1")) (plist-get ad :tasks))))
+      (should-not (plist-get (plist-get t1 :mw-extra-props) "CATEGORY" #'equal)))))
 
 (ert-deftest mindwtr-parse-buffer-containment ()
   (with-temp-buffer
@@ -142,7 +188,7 @@ not from an ancestor area heading; project/section come from ancestry."
 :PROPERTIES:
 :MW_TYPE: project
 :MW_ID: p1
-:MW_AREA: Work
+:CATEGORY: Work
 :END:
 *** Planning
 :PROPERTIES:
@@ -202,7 +248,7 @@ would corrupt containment on write (the server stores projectId alone)."
         (should (null (plist-get task :sectionId)))))))
 
 (ert-deftest mindwtr-parse-task-directly-in-area-keeps-area ()
-  "A loose task keeps :areaId from its :MW_AREA: property."
+  "A loose task keeps :areaId from its :CATEGORY: property."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Personal
@@ -214,7 +260,7 @@ would corrupt containment on write (the server stores projectId alone)."
 :PROPERTIES:
 :MW_TYPE: task
 :MW_ID: t1
-:MW_AREA: Personal
+:CATEGORY: Personal
 :END:
 ")
       (org-mode)

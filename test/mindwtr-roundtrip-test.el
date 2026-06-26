@@ -16,7 +16,7 @@
 (defun mindwtr-roundtrip--wrap (task-text)
   "Wrap rendered TASK-TEXT in a minimal buffer with an Areas-of-Focus section.
 The `** Personal' area heading (MW_ID a1) supplies the name->id mapping that
-parse uses to resolve a task's :MW_AREA: property back to :areaId \"a1\"."
+parse uses to resolve a task's :CATEGORY: property back to :areaId \"a1\"."
   (concat "* Next Actions\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: next-actions\n:END:\n"
           task-text
           "* Areas of Focus\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: areas\n:END:\n"
@@ -140,7 +140,7 @@ and the signature normalizes items to (:title :isCompleted) so the lost
 
 (ert-deftest mindwtr-roundtrip-appdata-signature-stable ()
   "render-appdata -> parse-buffer preserves every entity's content signature,
-with areaId via MW_AREA and projectId via nesting."
+with areaId via :CATEGORY: and projectId via nesting."
   (let* ((ad '(:areas ((:id "a1" :name "Personal" :order 0))
                :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1" :order 0
                            :supportNotes "Project planning notes.")

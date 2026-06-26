@@ -62,13 +62,24 @@
     (let ((text (mindwtr-render-heading
                  '(:id "p1" :mw-kind project :title "Proj" :status "active" :areaId "a1")
                  2 nil)))
-      (should (string-match-p ":MW_AREA: Personal" text))
+      (should (string-match-p ":CATEGORY: Personal" text))
+      (should-not (string-match-p ":MW_AREA:" text))
       (should-not (string-match-p ":MW_AREA_ID:" text)))))
 
 (ert-deftest mindwtr-render-no-area-when-absent ()
   (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
     (let ((text (mindwtr-render-heading
                  '(:id "t1" :mw-kind task :title "x" :status "next") 2 nil)))
+      (should-not (string-match-p ":CATEGORY:" text))
+      (should-not (string-match-p ":MW_AREA:" text)))))
+
+(ert-deftest mindwtr-render-no-category-when-area-unresolvable ()
+  "An :areaId absent from the names map renders no category line, no crash."
+  (let ((mindwtr-render-area-names (make-hash-table :test 'equal)))
+    (let ((text (mindwtr-render-heading
+                 '(:id "p1" :mw-kind project :title "Proj" :status "active" :areaId "missing")
+                 2 nil)))
+      (should-not (string-match-p ":CATEGORY:" text))
       (should-not (string-match-p ":MW_AREA:" text)))))
 
 (ert-deftest mindwtr-render-appdata-builds-lists ()
@@ -94,7 +105,7 @@
     (should (string-match-p "old captured" text))
     (should (string-match-p "Proj" text))
     (should (string-match-p "in project" text))
-    (should (string-match-p ":MW_AREA: Personal" text))
+    (should (string-match-p ":CATEGORY: Personal" text))
     ;; archived + tombstoned tasks NOT rendered
     (should-not (string-match-p "gone" text))
     (should-not (string-match-p "deleted" text))
