@@ -44,7 +44,7 @@ export COMPOSE_PROJECT_NAME="$PROJECT"
 # Renovate bumps this line automatically (see renovate.json); a new tag opens a
 # PR whose CI runs the smoke suite against that version before it can merge.
 # renovate: datasource=docker depName=ghcr.io/dongdongbh/mindwtr-cloud
-DEFAULT_CLOUD_TAG="1.0.0"
+DEFAULT_CLOUD_TAG="1.0.5"
 export MINDWTR_CLOUD_TAG="${MINDWTR_CLOUD_TAG:-$DEFAULT_CLOUD_TAG}"
 CLOUD_IMAGE="${MINDWTR_CLOUD_IMAGE:-ghcr.io/dongdongbh/mindwtr-cloud:${MINDWTR_CLOUD_TAG}}"
 
