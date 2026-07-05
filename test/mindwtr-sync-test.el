@@ -363,7 +363,11 @@ no spurious change."
     (should (string= (plist-get proj :revBy) "phone"))))
 
 (ert-deftest mindwtr-sync-update-adopts-genuine-checklist-change ()
-  "When the checklist content actually changes, the new value is taken."
+  "When the checklist content actually changes, the new value is taken, but the
+server-assigned item id is re-attached by matching title so the item keeps its
+identity across the org round-trip (the phone's conflict comparison is id-
+sensitive; a toggled item that lost its id looks like a delete+add and gets
+overwritten -- the checklist-overwrite loop)."
   (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1
                                        :checklist ((:id "c1" :title "a" :isCompleted :false))))
                        :projects nil :sections nil :areas nil :settings nil))
@@ -373,7 +377,42 @@ no spurious change."
          (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
          (item (car (plist-get (car (plist-get cand :tasks)) :checklist))))
     (should (eq (plist-get item :isCompleted) t))             ; flipped
-    (should (null (plist-get item :id)))))                    ; org can't carry it
+    (should (string= (plist-get item :id) "c1"))))            ; id re-attached by title
+
+(ert-deftest mindwtr-sync-checklist-reorder-preserves-ids ()
+  "Reordering checklist items in org (which drops ids) must re-attach each id by
+title, so the phone sees the same items reordered -- not two foreign items."
+  (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1
+                                       :checklist ((:id "c1" :title "a" :isCompleted :false)
+                                                   (:id "c2" :title "b" :isCompleted :false))))
+                       :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "x" :status "next"
+                                      :checklist ((:title "b" :isCompleted t)
+                                                  (:title "a" :isCompleted :false))))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (items (plist-get (car (plist-get cand :tasks)) :checklist)))
+    (should (string= (plist-get (nth 0 items) :title) "b"))
+    (should (string= (plist-get (nth 0 items) :id) "c2"))        ; id follows the item
+    (should (string= (plist-get (nth 1 items) :id) "c1"))))
+
+(ert-deftest mindwtr-sync-checklist-add-mints-id-keeps-existing ()
+  "Adding a new item keeps existing item ids and mints a fresh uuid for the new
+one (never nil), so the phone accepts it as a clean add rather than rejecting an
+id-less item."
+  (let* ((shadow (list :tasks (list '(:id "t1" :title "x" :status "next" :rev 1
+                                       :checklist ((:id "c1" :title "a" :isCompleted :false))))
+                       :projects nil :sections nil :areas nil :settings nil))
+         (local (list :tasks (list '(:id "t1" :mw-kind task :title "x" :status "next"
+                                      :checklist ((:title "a" :isCompleted :false)
+                                                  (:title "new" :isCompleted :false))))
+                      :projects nil :sections nil :areas nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1" "NOW"))
+         (items (plist-get (car (plist-get cand :tasks)) :checklist)))
+    (should (string= (plist-get (nth 0 items) :id) "c1"))        ; existing kept
+    (let ((new-id (plist-get (nth 1 items) :id)))
+      (should (stringp new-id))                               ; minted, not nil
+      (should-not (string= new-id "c1")))))                   ; distinct from existing
 
 (ert-deftest mindwtr-sync-update-clears-emptied-field ()
   "Clearing a field in org (e.g. deleting the description) clears it on write."
