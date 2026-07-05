@@ -294,6 +294,50 @@ date all stay listed: only strictly-future ones are deferred."
     (should (string-match-p "StartsToday" next))
     (should (string-match-p "Overdue" next))))
 
+(defun mindwtr-agenda-test--engage-category-of (appdata title)
+  "Run `mindwtr-engage' on APPDATA; return the `org-category' text property of
+the agenda line whose heading matches TITLE (as a string), or nil.
+This is the exact key `org-agenda-filter-by-category' (`<') compares, so it is
+the faithful proxy for what the native category filter would keep.
+`org-element-use-cache' is bound nil per the Org 9.6 cold-scan note on
+`mindwtr-agenda-test--engage-text'."
+  (let ((file (make-temp-file "mw-agenda" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert (mindwtr-render-appdata appdata)))
+          (let ((mindwtr-file file)
+                (org-element-use-cache nil)
+                (org-agenda-window-setup 'current-window)
+                (org-agenda-sticky nil))
+            (mindwtr-engage))
+          (with-current-buffer org-agenda-buffer-name
+            (goto-char (point-min))
+            (when (re-search-forward (regexp-quote title) nil t)
+              (let ((cat (get-text-property (match-beginning 0) 'org-category)))
+                (and cat (format "%s" cat))))))
+      (when (get-buffer org-agenda-buffer-name)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer org-agenda-buffer-name)))
+      (delete-file file))))
+
+(ert-deftest mindwtr-agenda-engage-categories-inherit-for-native-filter ()
+  "R6/AE1: org's native category filter (`<') narrows the Engage agenda by area.
+A project's drawer `:CATEGORY:' inherits to its child NEXT task (which carries no
+local category), while a standalone task carries its own -- so the two lines hold
+distinct `org-category' text properties, the exact key
+`org-agenda-filter-by-category' compares.  Asserting the inherited value proves
+`<' on the area would keep the project-child line visible."
+  (let ((appdata '(:areas ((:id "a1" :name "Work") (:id "a2" :name "Home"))
+                   :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+                   :sections nil
+                   :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1")
+                           (:id "t2" :title "Chore" :status "next" :areaId "a2"))
+                   :settings nil)))
+    ;; Child task inherits the project's area category (the inherited-filter case).
+    (should (equal (mindwtr-agenda-test--engage-category-of appdata "Sub") "Work"))
+    ;; Standalone task carries its own -- distinct, so `<' separates the two.
+    (should (equal (mindwtr-agenda-test--engage-category-of appdata "Chore") "Home"))))
+
 ;;; U4 -- Projects view --------------------------------------------------------
 
 (defun mindwtr-agenda-test--projects-match ()
@@ -452,7 +496,7 @@ ancestry walk, not just the direct parent)."
     (should (equal (mindwtr-agenda--resolve-project) "Deep Proj"))))
 
 (ert-deftest mindwtr-agenda-resolve-area-inherits-project-area ()
-  "A project task with no area of its own inherits its project's MW_AREA."
+  "A project task with no category of its own inherits its project's :CATEGORY:."
   (mindwtr-agenda-test--with-appdata
       '(:areas ((:id "a1" :name "Work"))
         :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
@@ -461,6 +505,27 @@ ancestry walk, not just the direct parent)."
         :settings nil)
     (mindwtr-agenda-test--at-task "Sub")
     (should (equal (mindwtr-agenda--resolve-area) "Work"))))
+
+(ert-deftest mindwtr-agenda-resolve-area-on-standalone-category ()
+  "On a standalone task with its own :CATEGORY:, the resolver returns it."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Solo" :status "next" :areaId "a1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Solo")
+    (should (equal (mindwtr-agenda--resolve-area) "Work"))))
+
+(ert-deftest mindwtr-agenda-resolve-area-nil-not-filename-category ()
+  "A heading with no CATEGORY anywhere in its ancestry resolves to nil -- NOT
+org's filename/buffer category fallback (KTD5) -- so the prefix falls through
+to the empty marker instead of leaking the dead `???' / `mindwtr:' slot."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Bare" :status "next"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Bare")
+    (should-not (mindwtr-agenda--resolve-area))))
 
 (ert-deftest mindwtr-agenda-resolve-prefix-prefers-project-over-area ()
   "When a task has both an owning project and an area, the prefix shows the
@@ -472,6 +537,22 @@ project (R: project leads the fallback chain)."
         :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
         :settings nil)
     (mindwtr-agenda-test--at-task "Sub")
+    (should (string-match-p "\\`Proj *\\'" (mindwtr-agenda--resolve-prefix)))))
+
+(ert-deftest mindwtr-agenda-resolve-prefix-shows-inherited-area-for-nested-task ()
+  "A task nested under a project still shows the owning project title (project
+wins over the inherited area in the fallback chain), even though its area is
+inherited from the project's :CATEGORY:."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas ((:id "a1" :name "Work"))
+        :projects ((:id "p1" :title "Proj" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Sub" :status "next" :projectId "p1"))
+        :settings nil)
+    (mindwtr-agenda-test--at-task "Sub")
+    ;; resolver reports the inherited area...
+    (should (equal (mindwtr-agenda--resolve-area) "Work"))
+    ;; ...but the prefix shows the project, which leads the chain.
     (should (string-match-p "\\`Proj *\\'" (mindwtr-agenda--resolve-prefix)))))
 
 (ert-deftest mindwtr-agenda-resolve-prefix-uses-area-when-no-project ()

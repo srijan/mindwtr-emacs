@@ -147,7 +147,7 @@
             (plist-get (mindwtr-parse-buffer) :tasks)))
 
 (ert-deftest mindwtr-commands-set-area-on-standalone-task ()
-  "On a standalone task, choosing an area writes MW_AREA and parse resolves :areaId."
+  "On a standalone task, choosing an area writes :CATEGORY: and parse resolves :areaId."
   (mindwtr-commands-test--with-appdata
       '(:areas ((:id "a1" :name "Personal" :order 0)
                 (:id "a2" :name "Work" :order 1))
@@ -158,7 +158,9 @@
       (mindwtr-set-area))
     (save-excursion
       (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
-      (should (string= (org-entry-get nil "MW_AREA") "Work")))
+      ;; Read the drawer-local value, not `org-entry-get' -- CATEGORY is a
+      ;; special property org would resolve to the filename fallback (KTD5).
+      (should (string= (mindwtr-parse--prop "CATEGORY") "Work")))
     (should (string= (plist-get (mindwtr-commands-test--task-by-id "t1") :areaId) "a2"))))
 
 (ert-deftest mindwtr-commands-set-area-on-project ()
@@ -172,10 +174,10 @@
       (mindwtr-set-area))
     (save-excursion
       (goto-char (point-min)) (re-search-forward "ACTIVE Proj") (org-back-to-heading t)
-      (should (string= (org-entry-get nil "MW_AREA") "Personal")))))
+      (should (string= (mindwtr-parse--prop "CATEGORY") "Personal")))))
 
 (ert-deftest mindwtr-commands-set-area-refuses-task-under-project ()
-  "On a task under a project, the command refuses: no MW_AREA written, and parse
+  "On a task under a project, the command refuses: no :CATEGORY: written, and parse
 yields :projectId with NO :areaId (guards the dual-container over-stamp)."
   (mindwtr-commands-test--with-appdata
       '(:areas ((:id "a1" :name "Personal" :order 0))
@@ -189,14 +191,14 @@ yields :projectId with NO :areaId (guards the dual-container over-stamp)."
       (mindwtr-set-area))
     (save-excursion
       (goto-char (point-min)) (re-search-forward "Child") (org-back-to-heading t)
-      (should-not (org-entry-get nil "MW_AREA")))
+      (should-not (mindwtr-parse--prop "CATEGORY")))
     (let ((task (mindwtr-commands-test--task-by-id "t1")))
       (should (string= (plist-get task :projectId) "p1"))
       (should-not (plist-get task :areaId)))))
 
 (ert-deftest mindwtr-commands-set-area-noop-off-entity ()
   "Off a non-task/project heading (a container), the command no-ops -- it does
-not prompt and writes no MW_AREA."
+not prompt and writes no :CATEGORY:."
   (mindwtr-commands-test--with-appdata
       '(:areas ((:id "a1" :name "Personal" :order 0))
         :projects nil :sections nil :tasks nil :settings nil)
@@ -206,7 +208,7 @@ not prompt and writes no MW_AREA."
                (lambda (&rest _) (error "should not prompt off an entity"))))
       (mindwtr-set-area))
     (org-back-to-heading t)
-    (should-not (org-entry-get nil "MW_AREA"))))
+    (should-not (mindwtr-parse--prop "CATEGORY"))))
 
 (ert-deftest mindwtr-commands-set-area-offers-exactly-area-names ()
   "Completion offers exactly the buffer's existing area names."
@@ -223,7 +225,7 @@ not prompt and writes no MW_AREA."
       (should (equal (sort (copy-sequence offered) #'string<) '("Personal" "Work"))))))
 
 (ert-deftest mindwtr-commands-set-area-replaces-existing-no-duplicate ()
-  "Changing an already-set area replaces the MW_AREA value (no duplicate property)."
+  "Changing an already-set area replaces the :CATEGORY: value (no duplicate property)."
   (mindwtr-commands-test--with-appdata
       '(:areas ((:id "a1" :name "Personal" :order 0)
                 (:id "a2" :name "Work" :order 1))
@@ -233,10 +235,10 @@ not prompt and writes no MW_AREA."
     (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work")))
       (mindwtr-set-area))
     (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
-    (should (string= (org-entry-get nil "MW_AREA") "Work"))
+    (should (string= (mindwtr-parse--prop "CATEGORY") "Work"))
     (let ((end (save-excursion (outline-next-heading) (point))) (count 0))
       (save-excursion
-        (while (re-search-forward "^:MW_AREA:" end t) (setq count (1+ count))))
+        (while (re-search-forward "^[ \t]*:CATEGORY:" end t) (setq count (1+ count))))
       (should (= count 1)))))
 
 (ert-deftest mindwtr-commands-promote-task-with-children-to-project ()
