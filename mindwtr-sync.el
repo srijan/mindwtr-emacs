@@ -89,6 +89,34 @@ change detection agree on what \"the same content\" means."
       (setq i (+ i 2)))
     out))
 
+(defun mindwtr-sync--reattach-checklist-ids (local shadow)
+  "Return LOCAL checklist items with server-assigned ids re-attached from SHADOW.
+LOCAL items come from the lossy org parse and carry no :id (org checkbox
+syntax cannot hold one).  Each LOCAL item is matched, greedily in order, to an
+as-yet-unconsumed SHADOW item with the same :title -- completion may differ, so
+a toggled item keeps its identity -- and inherits that item's :id; a LOCAL item
+with no title match is genuinely new and gets a fresh uuid.  Every returned
+item therefore carries an :id.
+
+This exists because the mobile/desktop clients compare checklists for sync
+conflicts BY ITEM ID (and merge the whole task as a unit): an edited checklist
+pushed with id-less items never matches the client's copy, so it loses the
+deterministic tie-break every cycle and the edit is silently overwritten.
+Re-attaching the ids keeps each item's identity stable across the org
+round-trip (a toggle reads as a completion change, not delete+add), which is
+what lets a client accept the edit instead of discarding it."
+  (let ((pool (copy-sequence shadow)))
+    (mapcar
+     (lambda (it)
+       (let* ((title (plist-get it :title))
+              (match (seq-find (lambda (s) (equal (plist-get s :title) title)) pool))
+              (id (if match (plist-get match :id) (mindwtr-util-uuid))))
+         (when match (setq pool (delq match pool)))
+         (list :id id
+               :title title
+               :isCompleted (if (eq (plist-get it :isCompleted) t) t :false))))
+     local)))
+
 (defun mindwtr-sync--merge-content (le se &optional protected-set)
   "Overlay LE's genuinely-changed content onto SE (the full shadow entity).
 LE is the lossy org projection (no checklist item ids, minute-precision
@@ -130,7 +158,14 @@ recovered here -- the caller resolves the set."
                           (and (memq k protected-set)
                                (not (mindwtr-sync--empty-p sv))))
                 (setq out (mindwtr-sync--plist-remove out k)))
-            (setq out (plist-put out k lv))))))
+            ;; The clients compare checklists by item id and merge the whole
+            ;; task as a unit, so an adopted checklist must carry ids (the lossy
+            ;; org parse strips them); re-attach the shadow's by title match so
+            ;; the edit is not overwritten every sync.
+            (setq out (plist-put out k
+                                 (if (eq k :checklist)
+                                     (mindwtr-sync--reattach-checklist-ids lv sv)
+                                   lv)))))))
     out))
 
 (defun mindwtr-sync--classify (local-entity shadow-entity)

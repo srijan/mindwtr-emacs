@@ -468,6 +468,26 @@ the buffer has areas and the item none -- the area prompt."
         (should (string= (plist-get task :areaId) "a1"))
         (should (string= (plist-get task :status) "next"))))))
 
+(ert-deftest mindwtr-clarify-post-prompts-skips-area-when-already-set ()
+  "When the item already carries an area (org-native :CATEGORY:), the area
+prompt does not fire again -- the guard reads :CATEGORY:, not the legacy
+:MW_AREA:, so a clarified item with an area is left as-is."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "One" :status "inbox" :areaId "a1"))
+        :settings nil)
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (&rest _) nil))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) (error "unexpected area prompt"))))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?n))
+    (with-current-buffer src
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        ;; the pre-set area survives untouched (no re-prompt clobbered it)
+        (should (string= (plist-get task :areaId) "a1"))))))
+
 ;;; Hand-written items
 
 (ert-deftest mindwtr-clarify-drawerless-item-gets-id-and-clarifies ()

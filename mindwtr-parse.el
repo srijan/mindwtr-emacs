@@ -15,10 +15,15 @@
 (defconst mindwtr-parse--known-props
   '("MW_TYPE" "MW_ID" "MW_ENERGY" "MW_TIME_ESTIMATE" "MW_RECURRENCE"
     "MW_ASSIGNED_TO" "MW_FOCUS_TODAY" "MW_REVIEW_AT" "MW_LOCATION"
-    "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "MW_AREA_ID" "MW_AREA" "MW_ATTACH"
-    "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS"
+    "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "CATEGORY" "MW_AREA_ID" "MW_AREA"
+    "MW_ATTACH" "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS"
     "MW_PROJECT_ID" "MW_SECTION_ID" "MW_REFERENCE_LINK")
   "PROPERTIES keys the parser interprets; all others are preserved verbatim.
+CATEGORY holds the per-item area name (org's native vehicle); MW_AREA is the
+legacy vehicle kept here for the transitional read-fallback so a stale
+`:MW_AREA:' is consumed (and dropped on rebuild) rather than preserved into
+`:mw-extra-props' and re-rendered forever.  MW_AREA_ID is a defensive unread
+reservation.
 MW_PROJECT_ID/MW_SECTION_ID carry an archived task's containment explicitly
 across the file split (KTD4): in the archive file a task whose project is still
 live cannot nest under it, so the render emits the parent id as a drawer prop
@@ -165,7 +170,7 @@ have a checkbox line amputated into a dropped checklist on the next sync (R9)."
     extra))
 
 (defvar mindwtr-parse--area-names nil
-  "Hash name->id for resolving :MW_AREA:.
+  "Hash name->id for resolving an area `:CATEGORY:' name.
 Dynamically bound by `mindwtr-parse-buffer'.")
 
 (defvar mindwtr-parse--warnings nil
@@ -196,7 +201,7 @@ Warns on a duplicate name (keeps the first id)."
     h))
 
 (defun mindwtr-parse--area-id (entity-area-name)
-  "Resolve an :MW_AREA: ENTITY-AREA-NAME to an area id, or nil."
+  "Resolve an area `:CATEGORY:' ENTITY-AREA-NAME to an area id, or nil."
   (and entity-area-name mindwtr-parse--area-names
        (gethash entity-area-name mindwtr-parse--area-names)))
 
@@ -301,7 +306,14 @@ type was inferred from context).  When omitted it is read from the
     (let ((rl (mindwtr-parse--prop "MW_REFERENCE_LINK")))
       (when (and rl (not (string-empty-p (string-trim rl))))
         (setq e (plist-put e :referenceLink rl))))
-    (let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
+    ;; Area: org-native `:CATEGORY:' is the vehicle; fall back to a legacy
+    ;; `:MW_AREA:' when no `:CATEGORY:' is present so the first post-upgrade
+    ;; parse of an old buffer reads the real area (never a false-empty that
+    ;; reads as the user clearing the area).  Both reads are drawer-local
+    ;; (KTD2/KTD3).
+    (let ((aid (mindwtr-parse--area-id
+                (or (mindwtr-parse--prop "CATEGORY")
+                    (mindwtr-parse--prop "MW_AREA")))))
       (when aid (setq e (plist-put e :areaId aid))))
     e))
 

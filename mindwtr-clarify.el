@@ -274,7 +274,7 @@ records a completion time on done tasks; quick actions should sync one)."
   "Shared prompts after an actionable decision: contexts, then area.
 Contexts are always offered (RET keeps them; completion over the buffer's
 @contexts); an org-unrepresentable existing value is reported, not fatal.
-The area prompt fires only when the item has no MW_AREA yet, sits outside
+The area prompt fires only when the item has no area yet, sits outside
 any project, and the buffer defines areas at all.  CONTEXTS-ONLY skips it --
 used before refiling under a project, where the task's area comes from the
 project."
@@ -282,6 +282,10 @@ project."
       (mindwtr-set-context)
     (user-error (message "%s" (error-message-string err)) (sit-for 1)))
   (unless (or contexts-only
+              ;; Area lives in `:CATEGORY:' now; the legacy `:MW_AREA:' fallback
+              ;; keeps a pre-upgrade item from being re-prompted before its
+              ;; buffer rebuilds (mirrors the parser's read, KTD3).
+              (mindwtr-parse--prop "CATEGORY")
               (mindwtr-parse--prop "MW_AREA")
               (mindwtr-commands--in-project-p)
               (null (mindwtr-set-area--names)))
