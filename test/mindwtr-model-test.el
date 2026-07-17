@@ -24,6 +24,8 @@
 (ert-deftest mindwtr-model-shadow-only-field-p ()
   (should (mindwtr-model-shadow-only-field-p :rev))
   (should (mindwtr-model-shadow-only-field-p :color))
+  (should (mindwtr-model-shadow-only-field-p :boardOrder))
+  (should (mindwtr-model-shadow-only-field-p :focusOrder))
   (should-not (mindwtr-model-shadow-only-field-p :title)))
 
 (ert-deftest mindwtr-model-validate-appdata-accepts-minimal ()
@@ -87,10 +89,13 @@ with fast-access keys and the done-state separator."
         (sec  (cdr (assq 'section mindwtr-model-known-fields)))
         (area (cdr (assq 'area mindwtr-model-known-fields))))
     (dolist (k '(:id :title :status :checklist :attachments :recurrence
-                 :completedAt :purgedAt :deletedAt :rev :revBy))
+                 :completedAt :purgedAt :deletedAt :rev :revBy
+                 ;; recognized-only fields transcribed from later types.ts revs
+                 :timeSpentMinutes :relativeStartOffset :suppressMindwtrReminders
+                 :repeatReminderMinutes :boardOrder :focusOrder))
       (should (memq k task)))
     (dolist (k '(:sequentialScope :supportNotes :attachments :dueDate :reviewAt
-                 :isSequential :isFocused :areaTitle))
+                 :isSequential :isFocused :areaTitle :purgedAt))
       (should (memq k proj)))
     (dolist (k '(:description :isCollapsed :deletedAtBeforeProjectArchive
                  :projectArchivedAt))

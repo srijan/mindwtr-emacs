@@ -145,7 +145,8 @@ each keyword is paired with its fast-access char from the shared sequence."
 
 (defconst mindwtr-model-shadow-only-fields
   '(:rev :revBy :deletedAt :color :icon :textDirection
-    :order :orderNum :pushCount :showFutureRecurrence :completedOccurrences
+    :order :orderNum :boardOrder :focusOrder
+    :pushCount :showFutureRecurrence :completedOccurrences
     :purgedAt)
   "Fields stored only in the shadow, never written to org.")
 
@@ -220,19 +221,22 @@ not each re-spell the `(or :title :name)' idiom."
 
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate
-                :assignedTo :taskMode :startTime :dueDate :recurrence
+                :timeSpentMinutes :assignedTo :taskMode
+                :startTime :relativeStartOffset :dueDate :recurrence
                 :showFutureRecurrence :pushCount :tags :contexts :checklist
                 :description :textDirection :attachments :location
+                :suppressMindwtrReminders :repeatReminderMinutes
                 :projectId :sectionId :areaId :isFocusedToday :reviewAt
                 :completedAt :statusBeforeProjectArchive
                 :completedAtBeforeProjectArchive
                 :isFocusedTodayBeforeProjectArchive :projectArchivedAt
-                :order :orderNum :rev :revBy :createdAt :updatedAt
+                :order :orderNum :boardOrder :focusOrder
+                :rev :revBy :createdAt :updatedAt
                 :deletedAt :purgedAt))
     (project . (:id :title :status :color :order :tagIds :isSequential
                 :sequentialScope :isFocused :supportNotes :attachments
                 :dueDate :reviewAt :areaId :areaTitle :rev :revBy
-                :createdAt :updatedAt :deletedAt))
+                :createdAt :updatedAt :deletedAt :purgedAt))
     (section . (:id :projectId :title :description :order :isCollapsed
                 :rev :revBy :createdAt :updatedAt :deletedAt
                 :deletedAtBeforeProjectArchive :projectArchivedAt))
@@ -244,7 +248,19 @@ Section, Area).  The smoke suite flags wire keys absent here as UNKNOWN
 \(server drift); doubles as living documentation of the synced schema.
 Extend it deliberately when a new server field is intentionally adopted.
 Settings is excluded on purpose -- it is a large, deeply-nested blob
-passed through verbatim and never rendered to org.")
+passed through verbatim and never rendered to org.
+
+Recognizing a key here is NOT the same as surfacing it: a field appears in
+org only if it is also in `mindwtr-model-content-fields' (round-trips) or the
+render drawer.  The following are recognized-only -- preserved verbatim in the
+shadow and merged back on write, never rendered or edited:
+`:timeSpentMinutes', `:relativeStartOffset', `:suppressMindwtrReminders',
+`:repeatReminderMinutes' (each participates in the SERVER's content signature,
+per `sync-signatures.ts', but the client does not diff them -- they can only
+drift server-side, and a verbatim echo preserves them), and the order-only
+`:boardOrder'/`:focusOrder' (manual Board-column / Today's-Focus ordering the
+apps clear on status change; the server excludes them from its signature).
+`:purgedAt' is a Trash tombstone marker on both task and project.")
 
 (defun mindwtr-model-default-settings ()
   "Return a fresh, minimal non-null `settings' object for a new namespace.
