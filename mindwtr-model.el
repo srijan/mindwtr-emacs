@@ -43,7 +43,7 @@ defines."
 (defconst mindwtr-model-list-roles
   '("inbox" "single-actions" "projects"
     "someday" "someday-single-actions" "someday-projects"
-    "reference" "areas" "archive")
+    "reference" "areas" "people" "archive")
   "Every container role used as a `:MW_LIST:' discriminator.
 `* Someday' is a container whose children are the `someday-single-actions'
 and `someday-projects' containers; the rest are top-level.  `archive' is the
@@ -58,7 +58,7 @@ quarantines rather than being guessed.")
     ("someday-single-actions" . "Single Actions")
     ("someday-projects" . "Projects")
     ("reference" . "Reference") ("areas" . "Areas of Focus")
-    ("archive" . "Archive")))
+    ("people" . "People") ("archive" . "Archive")))
 
 (defun mindwtr-model-list-title (role)
   "Default heading text for a container ROLE."
@@ -158,7 +158,8 @@ each keyword is paired with its fast-access char from the shared sequence."
     :checklist :startTime :dueDate :completedAt
     :areaId :projectId :sectionId
     :energyLevel :timeEstimate :assignedTo :location :taskMode
-    :isFocusedToday :isSequential :isFocused :reviewAt)
+    :isFocusedToday :isSequential :isFocused :reviewAt
+    :note :referenceLink)
   "Editable fields that round-trip through org and define the content signature.
 This is an allow-list: any server field not named here (e.g.
 `:tagIds', `:areaTitle', `:sequentialScope', `:recurrence', `:attachments')
@@ -166,7 +167,8 @@ is excluded from change detection by construction, so it can neither drift a
 signature nor be lost -- it is preserved verbatim in the shadow and merged
 back on write.  `:supportNotes' (project notes) and `:description'
 \(task/section notes) both round-trip as inline body prose and so are
-allow-listed.  The reserved drawer fields `:isFocusedToday' (task),
+allow-listed; so is person `:note' (body prose) and `:referenceLink'
+\(the MW_REFERENCE_LINK drawer property).  The reserved drawer fields `:isFocusedToday' (task),
 `:isSequential'/`:isFocused' (project), and `:reviewAt' (task+project) are
 allow-listed too: they render to the MW_FOCUS_TODAY/MW_SEQUENTIAL/MW_FOCUSED/
 MW_REVIEW_AT drawer properties and round-trip (the booleans normalize so
@@ -186,16 +188,19 @@ the signature.")
   "Fields that must be stripped before sending to the server.")
 
 (defconst mindwtr-model--notes-fields
-  '((task . :description) (section . :description) (project . :supportNotes))
+  '((task . :description) (section . :description) (project . :supportNotes)
+    (person . :note))
   "Alist of entity-kind -> the body-prose (notes) field that renders inline.
-`area' has no notes field and is omitted.  Render, parse, and reconcile all
-read this through `mindwtr-model-notes-field' so the kind->field mapping
-lives in one place -- adding a new note-bearing kind is a single edit here
-rather than three divergent per-kind checks across render/parse/reconcile.")
+`area' has no notes field and is omitted; `person' carries `:note'.  Render,
+parse, and reconcile all read this through `mindwtr-model-notes-field' so the
+kind->field mapping lives in one place -- adding a new note-bearing kind is a
+single edit here rather than three divergent per-kind checks across
+render/parse/reconcile.")
 
 (defun mindwtr-model-notes-field (kind)
   "Return the inline body-prose (notes) field keyword for entity KIND, or nil.
-task/section -> `:description'; project -> `:supportNotes'; area -> nil."
+task/section -> `:description'; project -> `:supportNotes'; person -> `:note';
+area -> nil."
   (cdr (assq kind mindwtr-model--notes-fields)))
 
 (defconst mindwtr-model--protected-boolean-fields
@@ -214,9 +219,9 @@ Empty for kinds that carry none (section, area)."
 
 (defun mindwtr-model-entity-title (entity)
   "Return ENTITY's human-readable label, or nil when it carries neither key.
-task/project/section carry `:title'; area carries `:name'.  One place for the
-kind-agnostic title lookup so callers (the sync report, incoming-changes) do
-not each re-spell the `(or :title :name)' idiom."
+task/project/section carry `:title'; area and person carry `:name'.  One place
+for the kind-agnostic title lookup so callers (the sync report,
+incoming-changes) do not each re-spell the `(or :title :name)' idiom."
   (or (plist-get entity :title) (plist-get entity :name)))
 
 (defconst mindwtr-model-known-fields
@@ -241,10 +246,15 @@ not each re-spell the `(or :title :name)' idiom."
                 :rev :revBy :createdAt :updatedAt :deletedAt
                 :deletedAtBeforeProjectArchive :projectArchivedAt))
     (area    . (:id :name :color :icon :order :rev :revBy
+                :createdAt :updatedAt :deletedAt))
+    (person  . (:id :name :note :referenceLink :rev :revBy
                 :createdAt :updatedAt :deletedAt)))
   "Every server key we recognize, per synced entity type.
 Transcribed from the Mindwtr core `types.ts' interfaces (Task, Project,
-Section, Area).  The smoke suite flags wire keys absent here as UNKNOWN
+Section, Area, Person).  Person has no `:color'/`:icon'/`:order' -- the
+core `Person' carries only name/note/referenceLink plus sync metadata, so
+this list must match `types.ts' exactly (the smoke suite flags any wire key
+absent here as drift).  The smoke suite flags wire keys absent here as UNKNOWN
 \(server drift); doubles as living documentation of the synced schema.
 Extend it deliberately when a new server field is intentionally adopted.
 Settings is excluded on purpose -- it is a large, deeply-nested blob
@@ -288,7 +298,7 @@ substitution copies APPDATA rather than mutating the caller's structure."
 
 (defun mindwtr-model-validate-appdata (appdata)
   "Signal an error if APPDATA is structurally invalid; else return t."
-  (dolist (key '(:tasks :projects :sections :areas))
+  (dolist (key '(:tasks :projects :sections :areas :people))
     (unless (listp (plist-get appdata key))
       (error "appdata %s must be a list" key)))
   (dolist (task (plist-get appdata :tasks))
@@ -309,6 +319,8 @@ substitution copies APPDATA rather than mutating the caller's structure."
       (error "section %s missing projectId" (plist-get sec :id))))
   (dolist (area (plist-get appdata :areas))
     (unless (plist-get area :id) (error "area missing id: %S" area)))
+  (dolist (person (plist-get appdata :people))
+    (unless (plist-get person :id) (error "person missing id: %S" person)))
   t)
 
 (provide 'mindwtr-model)

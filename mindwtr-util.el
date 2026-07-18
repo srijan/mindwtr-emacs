@@ -64,7 +64,7 @@ cycle; coarsening here keeps content signatures stable across the trip."
                         t)))
 
 (defconst mindwtr-util-json-array-fields
-  '(:tasks :projects :sections :areas      ; appdata top-level
+  '(:tasks :projects :sections :areas :people ; appdata top-level
     :tags :contexts :checklist :attachments ; task (attachments also project)
     :tagIds                                  ; project
     :byDay :byMonthDay                       ; recurrence

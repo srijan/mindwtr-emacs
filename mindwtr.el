@@ -102,6 +102,11 @@ stops such a re-entrant trigger from launching a second concurrent cycle.")
 (define-key mindwtr-mode-map (kbd "C-c C-t") #'mindwtr-set-status)
 (define-key mindwtr-mode-map (kbd "C-c C-a") #'mindwtr-set-area)
 (define-key mindwtr-mode-map (kbd "C-c C-q") #'mindwtr-set-context)
+;; C-c C-y shadows the obscure `org-evaluate-time-range' only inside
+;; mindwtr-mode (never general org buffers); the KTD6 fallbacks were worse --
+;; C-c C-u shadows the useful `org-up-heading' and C-c C-h collides with the
+;; help character.
+(define-key mindwtr-mode-map (kbd "C-c C-y") #'mindwtr-set-assignee)
 (define-key mindwtr-mode-map (kbd "S-<right>") #'mindwtr-cycle-status-forward)
 (define-key mindwtr-mode-map (kbd "S-<left>") #'mindwtr-cycle-status-backward)
 

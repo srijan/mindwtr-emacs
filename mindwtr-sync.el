@@ -8,7 +8,7 @@
 (require 'mindwtr-signature)
 (require 'mindwtr-shadow)
 
-(defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas))
+(defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas :people))
 
 (defvar mindwtr-sync--archive-strict nil
   "When non-nil, archived entities follow strict absence semantics (KTD6).
@@ -208,7 +208,9 @@ its status maps to no list.  Under strict mode the archived-status and
 status-maps-to-no-list escapes stop applying -- an archived entity's render
 surface is the archive file, so its absence there IS a user deletion (KTD6) --
 while the parent-container test still holds (archived projects are live
-containers under strict, so it naturally flips too).  An entity that is
+containers under strict, so it naturally flips too).  A person is ALWAYS
+rendered-absent (KTD1): people deletion is pull-only, so an absent person is
+echoed, never tombstoned.  An entity that is
 rendered-absent must not be tombstoned for being missing; it is echoed
 verbatim instead.  LIVE is (PROJECTS . SECTIONS) from
 `mindwtr-sync--live-container-ids'."
@@ -224,6 +226,13 @@ verbatim instead.  LIVE is (PROJECTS . SECTIONS) from
         ('section
          (let ((pid (plist-get se :projectId)))
            (not (and pid (gethash pid (car live))))))
+        ;; People deletion is pull-only (KTD1): a person absent from the buffer
+        ;; is always "expected absent" -- echoed verbatim, never tombstoned.
+        ;; This (a) keeps the first post-upgrade sync from mass-tombstoning
+        ;; server people the old buffer never rendered (R5), and (b) matches the
+        ;; app-authoritative-for-people workflow (R4); app-side deletes still
+        ;; reach Emacs via server tombstones (filtered by `mindwtr-render--live').
+        ('person t)
         (_ nil))))
 
 (defun mindwtr-sync--archived-count (appdata)
@@ -381,8 +390,12 @@ union of their per-kind fields is passed to `merge-content'."
     cand))
 
 (defun mindwtr-sync--key->kind (key)
-  "Map an entity-list KEY like `:tasks' to its singular kind symbol `task'."
-  (intern (substring (symbol-name key) 1 (1- (length (symbol-name key))))))
+  "Map an entity-list KEY like `:tasks' to its singular kind symbol `task'.
+`:people' is irregular -- stripping a trailing `s' would yield `peopl' -- so it
+is special-cased to `person' (KTD2).  No reverse kind->key derivation exists in
+the engine, so this is the only site that needs the exception."
+  (if (eq key :people) 'person
+    (intern (substring (symbol-name key) 1 (1- (length (symbol-name key)))))))
 
 (defun mindwtr-sync--find-entry (appdata id)
   "Return (KIND . ENTITY) for ID in APPDATA across all entity lists, or nil.
@@ -657,7 +670,7 @@ parse into an entity (`mindwtr-sync--surface-has-unparsed-entity-p') -- the
 degraded-parse signal the strict-mode safety gate keys on, so a quarantined
 heading cannot read as a deletion.  Parse warnings are accumulated across
 buffers because `mindwtr-parse--warnings' is per-run state, reset by each parse."
-  (let ((merged (list :tasks nil :projects nil :sections nil :areas nil))
+  (let ((merged (list :tasks nil :projects nil :sections nil :areas nil :people nil))
         (seen (make-hash-table :test 'equal))
         out-surfaces warnings archive-warned duplicates)
     (dolist (surface surfaces)

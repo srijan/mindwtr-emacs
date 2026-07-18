@@ -45,8 +45,8 @@ when there is no PROPERTIES drawer (so the body scan still has a start)."
 (defun mindwtr-reconcile--preserved-body (kind body-start end)
   "Return org-only body text between BODY-START and END to carry across a rebuild.
 The renderer emits notes prose (+ checklist for tasks) for every kind that has
-a notes field (`mindwtr-model-notes-field': task, project, section), so for
-those the prose is regenerated from the merged entity and only genuinely
+a notes field (`mindwtr-model-notes-field': task, project, section, person), so
+for those the prose is regenerated from the merged entity and only genuinely
 org-only lines are preserved: drawer blocks (LOGBOOK and CLOCK-in-drawer) and
 bare CLOCK lines.  A kind with no notes field (`area') has its entire body
 treated as org-only and preserved verbatim.  Returns nil when there is nothing
@@ -88,8 +88,8 @@ renderer -- so a remote change to ANY mapped field (dates, description,
 checklist, drawer props, tags) reaches the buffer instead of silently
 reverting on the next sync.  Preserves the heading's outline level,
 unknown PROPERTIES, and org-only body content: LOGBOOK/CLOCK for any
-note-bearing kind (task/project/section, whose prose is regenerated from the
-merged entity), and the entire free-prose body only for `area' (which has no
+note-bearing kind (task/project/section/person, whose prose is regenerated from
+the merged entity), and the entire free-prose body only for `area' (which has no
 notes field).  Child headings are outside the entry region and are left
 untouched."
   (org-back-to-heading t)
@@ -562,7 +562,8 @@ silently erased."
   (let ((ad (mindwtr-parse-buffer)))
     (seq-find (lambda (e) (equal (plist-get e :id) id))
               (append (plist-get ad :tasks) (plist-get ad :projects)
-                      (plist-get ad :sections) (plist-get ad :areas)))))
+                      (plist-get ad :sections) (plist-get ad :areas)
+                      (plist-get ad :people)))))
 
 (defun mindwtr-reconcile-restore-entity (entity kind)
   "Re-apply ENTITY (kind KIND) onto its existing heading in the current buffer.

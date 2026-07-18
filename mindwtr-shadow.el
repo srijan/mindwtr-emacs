@@ -28,7 +28,7 @@ nil or any non-positive value disables cleanup (backups are kept forever)."
   "Load and return the shadow AppData plist (empty appdata if absent)."
   (let ((s (mindwtr-util-read-file (mindwtr-shadow--path "shadow.json"))))
     (if s (mindwtr-util-json-decode s)
-      '(:tasks nil :projects nil :sections nil :areas nil :settings nil))))
+      '(:tasks nil :projects nil :sections nil :areas nil :people nil :settings nil))))
 
 (defun mindwtr-shadow-save (appdata)
   "Persist APPDATA as the shadow, keeping one last-good backup."

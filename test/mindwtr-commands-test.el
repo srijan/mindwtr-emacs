@@ -388,6 +388,82 @@ keyword stamping on its children."
       (org-back-to-heading t)
       (should-not (org-get-todo-state)))))
 
+;;; mindwtr-set-assignee (U5) -------------------------------------------------
+
+(ert-deftest mindwtr-commands-set-assignee-on-task-writes-and-parses ()
+  "On a task, choosing a roster name writes MW_ASSIGNED_TO and parse yields it."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :people ((:id "pe1" :name "Alex Rivera"))
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Alex Rivera")))
+      (mindwtr-set-assignee))
+    (save-excursion
+      (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_ASSIGNED_TO") "Alex Rivera")))
+    (should (string= (plist-get (mindwtr-commands-test--task-by-id "t1") :assignedTo)
+                     "Alex Rivera"))))
+
+(ert-deftest mindwtr-commands-set-assignee-candidates-include-unassigned-roster ()
+  "Completion offers People-container names (even never-assigned) plus names
+already used on other tasks."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :people ((:id "pe1" :name "Alex Rivera")
+                 (:id "pe2" :name "Never Assigned"))
+        :tasks ((:id "t1" :title "Loose" :status "next")
+                (:id "t2" :title "Other" :status "next" :assignedTo "Casey Loose"))
+        :settings nil)
+    (re-search-forward "^\\*+ NEXT Loose")
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt coll &rest _) (setq offered coll) "Alex Rivera")))
+        (mindwtr-set-assignee))
+      ;; unassigned roster person AND an assignee used only on another task
+      (should (member "Never Assigned" offered))
+      (should (member "Alex Rivera" offered))
+      (should (member "Casey Loose" offered)))))
+
+(ert-deftest mindwtr-commands-set-assignee-accepts-new-name-verbatim ()
+  "A name not in the roster is accepted and written verbatim (require-match nil)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :people ((:id "pe1" :name "Alex Rivera"))
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Brand New Person")))
+      (mindwtr-set-assignee))
+    (should (string= (plist-get (mindwtr-commands-test--task-by-id "t1") :assignedTo)
+                     "Brand New Person"))))
+
+(ert-deftest mindwtr-commands-set-assignee-empty-clears ()
+  "Empty input clears MW_ASSIGNED_TO (the drawer key is removed)."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil :people nil
+        :tasks ((:id "t1" :title "Loose" :status "next" :assignedTo "Alex"))
+        :settings nil)
+    (re-search-forward "Loose")
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "")))
+      (mindwtr-set-assignee))
+    (save-excursion
+      (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
+      (should-not (org-entry-get nil "MW_ASSIGNED_TO")))
+    (should-not (plist-get (mindwtr-commands-test--task-by-id "t1") :assignedTo))))
+
+(ert-deftest mindwtr-commands-set-assignee-noop-off-task ()
+  "Off a task (a project heading), the command no-ops -- no prompt, no write."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Proj" :status "active"))
+        :sections nil :people nil :tasks nil :settings nil)
+    (re-search-forward "ACTIVE Proj")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (error "should not prompt off a task"))))
+      (mindwtr-set-assignee))
+    (org-back-to-heading t)
+    (should-not (org-entry-get nil "MW_ASSIGNED_TO"))))
+
 (ert-deftest mindwtr-commands-set-context-sets-tags-preserves-hashtags ()
   "Chosen contexts (with `@' added when missing) replace the @-tags; hashtag
 tags stay; parse yields the new :contexts and the untouched :tags."
