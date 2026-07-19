@@ -344,8 +344,7 @@ isn't taught to render fails loudly, and non-ASCII is exercised online.
 - smoke coverage (`make smoke-write` path; non-ASCII note)
 
 **Approach:** Add a reconcile regression that a project/section whose note grows in
-length keeps the read row stable (the `:anchor-line` screen-row path from PR
-#28/#29 absorbs body-length changes — assert it still holds for inline notes).
+length keeps the read row stable (the `:anchor-line` screen-row path from earlier PRs absorbs body-length changes — assert it still holds for inline notes).
 Add a no-double-graft regression that two successive reconciles emit the note
 exactly once. Mirror the `mindwtr-parse-infer-kind-covers-every-entity-role`
 drift-guard pattern (`test/mindwtr-parse-test.el:396-416`) with a guard asserting
@@ -392,7 +391,7 @@ report.
   round-trip).
 
 **Deferred to follow-up work:**
-- Task-side checkbox-vs-checklist earmark convention — tracked in issue #33.
+- Task-side checkbox-vs-checklist earmark convention — tracked in issue #25.
 
 ---
 
@@ -428,7 +427,7 @@ report.
   symmetric-corruption bugs; U2 asserts `multibyte-string-p` and U4 adds an online
   smoke note.
 - **View-state reflow (low, regression-covered).** Inline notes change body length;
-  PR #28/#29's screen-row anchor already absorbs this. U4 adds a regression.
+  earlier PRs's screen-row anchor already absorbs this. U4 adds a regression.
 
 ---
 

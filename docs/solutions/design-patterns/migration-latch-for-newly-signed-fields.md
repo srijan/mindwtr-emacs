@@ -29,7 +29,7 @@ tags:
 
 mindwtr-emacs syncs local org buffers with Mindwtr Cloud. Change detection works by hashing a "content signature" over an *allow-list* of fields (`mindwtr-model-content-fields` in `mindwtr-model.el`) and comparing the parsed buffer against the **shadow** (the last-known-server copy). A field that is not on the allow-list is invisible to change detection: it can neither drift a signature nor be clobbered, because it is preserved verbatim in the shadow and merged back on write.
 
-PR #36 promoted `:supportNotes` (project notes) onto that allow-list (commit `9dc380f`) so project notes finally participate in change detection, write-merge, and the override report. The allow-list is deliberately kind-agnostic and shared by every consumer — signature, `mindwtr-sync--merge-content`, and the report field-diff all read the same list — so the promotion was a one-line change to the `defconst`.
+an earlier PR promoted `:supportNotes` (project notes) onto that allow-list (commit `9dc380f`) so project notes finally participate in change detection, write-merge, and the override report. The allow-list is deliberately kind-agnostic and shared by every consumer — signature, `mindwtr-sync--merge-content`, and the report field-diff all read the same list — so the promotion was a one-line change to the `defconst`.
 
 That one line opened a data-loss trap on the *first sync after the upgrade*. This doc is about the pattern that closes it: a **one-way migration latch** in the shadow. The hole was not in the original plan — it was surfaced across two separate rounds of post-implementation code review, and the *second* review found that the first fix was itself still subtly wrong (see Why This Matters). *(session history)*
 
@@ -171,4 +171,4 @@ The bare latch round-trip itself is covered by `mindwtr-shadow-notes-migrated-la
 - [[content-signature-allow-list-not-deny-list]] — the allow-list discipline this field was promoted onto. Note the **allow-list-LAST** ordering: prove the field round-trips byte-stably *before* signing it. That promotion is what opens the deploy seam this latch guards.
 - [[save-as-sync-commit-point]] — why the confirmed save is the commit point that the migration latch must fire after. The latch attests to durable on-disk state, so it is gated on `(not save-failed)` exactly as other post-save shadow writes are.
 - [[silent-deletion-untyped-org-headings]] — adjacent data-loss-by-construction work in the same sync path; same class of "absent input read as an intentional removal."
-- GitHub PR #36 (commits `9dc380f` promote-to-allow-list, `2ae5340` introduce latch, `c195585` latch-after-confirmed-save).
+- GitHub an earlier PR (commits `9dc380f` promote-to-allow-list, `2ae5340` introduce latch, `c195585` latch-after-confirmed-save).

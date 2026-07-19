@@ -43,7 +43,7 @@ can't answer "what should I do now" or "which projects have stalled."
   configuration.
 
 - **Focus reuses the existing synced field.** "Today's Focus" is a property
-  match on `MW_FOCUS_TODAY="t"` (already round-tripped, ticket #4) — no new
+  match on `MW_FOCUS_TODAY="t"` (already round-tripped, ticket #2) — no new
   field, no new sync work.
 
 - **Plain text only, no emoji or icons.** Block headers and labels use plain
@@ -120,7 +120,7 @@ file) appears in neither view.
 
 - A context-grouped Next Actions view (mirroring the app's Focus screen, which
   groups next actions by `@agenda` / `@calls` / `@computer`).
-- Person-scoped `@agenda/<name>` agenda lists — depends on ticket #46
+- Person-scoped `@agenda/<name>` agenda lists — depends on ticket #30
   (Clarify producing those contexts) landing first.
 
 **Outside this build**
@@ -131,7 +131,7 @@ file) appears in neither view.
 
 ## Dependencies / Assumptions
 
-- `MW_FOCUS_TODAY` round-trips already (ticket #4, closed) — Focus block depends
+- `MW_FOCUS_TODAY` round-trips already (ticket #2, closed) — Focus block depends
   on it.
 - Projects carry `MW_TYPE="project"` and nest their task children, so a
   subtree scan can detect a missing `NEXT` child (assumption: project tasks are
@@ -162,5 +162,5 @@ file) appears in neither view.
 - `org-gtd.el: org-gtd-engage.el`,
   `org-gtd-view-language.el` — reference for engage-view composition and the
   DSL approach this brief deliberately does not copy.
-- GitHub #8 (ship agenda/engage views), #4 (focus sync, closed), #46
+- GitHub #6 (ship agenda/engage views), #2 (focus sync, closed), #30
   (`@agenda/<name>` contexts, related/deferred).

@@ -27,7 +27,7 @@ tags: [emacs, org-mode, auto-sync, buffer-modified-p, auto-save, echo-suppressio
 `mindwtr-reconcile-buffer`, which does an `erase-buffer` + `insert` full rebuild
 (see [[preserving-buffer-view-state-across-reconcile]]). If a background sync fires while the
 user has *stable, unsaved* edits, it yanks the buffer out from under them — discarding
-in-progress typing and reflowing the buffer mid-edit. The companion fix (PR #28) hardened
+in-progress typing and reflowing the buffer mid-edit. The companion fix (an earlier PR) hardened
 scroll/fold restoration so the rebuild was *less* jarring; this attacks the **trigger** side so
 the disruptive rebuild largely stops firing mid-edit at all.
 
@@ -215,14 +215,14 @@ Before/after of the trigger contract:
 ## Related
 - Commits: `404f648` (echo-suppression infra + debounce early-return), `cdac7ca` (auto-save
   after reconcile + gate), `2bffe75` (manual save-then-sync + bootstrap echo suppression).
-  PR #29. Plan: `docs/plans/2026-06-03-002-feat-gate-autosync-on-saved-state-plan.md`.
+  an earlier PR. Plan: `docs/plans/2026-06-03-002-feat-gate-autosync-on-saved-state-plan.md`.
 - Shares the `mindwtr--auto-sync` gate and the `defvar` + `let` flag idiom with
   [[sync-reentrancy-in-flight-guard]] — that doc's three-disjunct gate snippet predates this
   fourth `buffer-modified-p` disjunct.
 - The rebuild-side counterpart that makes the rebuild less jarring when it *does* fire is
   [[preserving-buffer-view-state-across-reconcile]] (trigger-side vs. rebuild-side defenses).
-- Full signature-diffed incremental reconciliation (issue #5) would eliminate the full
-  `erase`/rebuild this contract works around. Pre-sync buffer backup verification is issue #6.
+- Full signature-diffed incremental reconciliation (issue #3) would eliminate the full
+  `erase`/rebuild this contract works around. Pre-sync buffer backup verification is issue #4.
 - `test/mindwtr-sync-test.el`, `test/mindwtr-test.el` — quiet-save happy/skip/error paths,
   debounce suppression, the gate truth table and all guard interactions, `:noop`-never-writes,
   save-failure isolation + error-state signalling, manual save-then-sync, bootstrap echo

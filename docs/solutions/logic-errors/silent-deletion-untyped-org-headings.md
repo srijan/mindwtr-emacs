@@ -162,7 +162,7 @@ container means the safety net never accumulates cruft.
   what it cannot represent *before* erasing.
 
 ## Related Issues
-- GitHub issue **#2** (the originating bug). The two review-surfaced gaps (duplicate MW_ID,
+- GitHub issue #1 (the originating bug). The two review-surfaced gaps (duplicate MW_ID,
   blank MW_TYPE) were folded into this same PR as the same data-loss class.
 - Part of the broader reconcile/sync data-integrity track (STRATEGY.md "Emacs-native editing":
   the desk surface can only be "a joy to edit" if added content survives the next sync).
@@ -171,4 +171,4 @@ container means the safety net never accumulates cruft.
   [[org-markdown-link-conversion-roundtrip]].
 - Related gap noted but out of scope: `MW_FOCUS_TODAY` (`isFocusedToday`) is deliberately
   excluded from `mindwtr-model-content-fields`, so focus-status edits are silently dropped on
-  sync — filed separately as issue #4. *(session history)*
+  sync — filed separately as issue #2. *(session history)*

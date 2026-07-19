@@ -240,5 +240,5 @@ Verified: `make compile` clean, `make test` 483/483 passing.
   same "the load chain bit me silently" family.
 - `../design-patterns/save-as-sync-commit-point.md` — why an unprompted sync at
   startup is undesirable in the first place (the symptom this deferral removes).
-- Issue #63 ("Ability to make mindwtr-emacs load async on file open") and PR #65
+- Issue #63 ("Ability to make mindwtr-emacs load async on file open") and an earlier PR
   ("feat(autoload): defer loading until file open / first command") — the origin.

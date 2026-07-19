@@ -138,7 +138,7 @@ across the whole block. (session history)
 
 ## Related
 - [single-classifier-feeds-summary-and-detail](single-classifier-feeds-summary-and-detail.md) — the
-  feature this rendering layer lives under (PR #49 symmetric report change lists). That doc decides
+  feature this rendering layer lives under (an earlier PR symmetric report change lists). That doc decides
   *which* entities/fields changed; this one decides *how* a single list-valued field's items render.
 - [entity-identity-mw-id-mw-list](../conventions/entity-identity-mw-id-mw-list.md) — the same
   align-by-stable-key principle, different key: headings align by `MW_ID` across a buffer rebuild,

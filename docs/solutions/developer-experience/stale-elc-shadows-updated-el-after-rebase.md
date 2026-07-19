@@ -32,7 +32,7 @@ tags:
 
 Emacs `load` prefers a `.elc` over its `.el` sibling by default (`load-prefer-newer` is nil), *regardless of which file is newer on disk*. So once a stale `.elc` exists, it shadows the updated `.el`: code added or moved on the branch you just switched to is invisible, and you get a void-function / undefined-symbol error for a definition you can plainly see in the source.
 
-This surfaced concretely while rebasing PR #36 onto a `main` that had just added `mindwtr-model-ensure-settings` (`mindwtr-model.el:227`): the first compile failed reporting that function undefined, even though the defun was right there. The `.elc` had been compiled before `main` introduced it.
+This surfaced concretely while rebasing an earlier PR onto a `main` that had just added `mindwtr-model-ensure-settings` (`mindwtr-model.el:227`): the first compile failed reporting that function undefined, even though the defun was right there. The `.elc` had been compiled before `main` introduced it.
 
 ## Guidance
 

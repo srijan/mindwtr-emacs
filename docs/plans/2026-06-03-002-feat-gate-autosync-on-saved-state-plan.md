@@ -14,8 +14,8 @@ deepened: 2026-06-03
 
 `mindwtr-reconcile-buffer` rebuilds the synced org file with a full `erase-buffer` + re-insert
 after every content-changing sync. When a periodic (default 600s) or focus auto-sync fires while
-the user has *stable unsaved edits*, it rebuilds the buffer out from under them mid-edit. PR #28
-(issue #25) hardened scroll/fold restoration so the rebuild is less jarring; this change attacks
+the user has *stable unsaved edits*, it rebuilds the buffer out from under them mid-edit. an earlier PR
+(issue #22) hardened scroll/fold restoration so the rebuild is less jarring; this change attacks
 the **trigger side** so the disruptive rebuild largely stops firing mid-edit at all.
 
 Two coordinated changes implement the settled behavior model:
@@ -34,7 +34,7 @@ saves → after-save hook syncs → sync rebuilds and saves → buffer clean →
 
 This serves the **Emacs-native editing** and **Transport & reliability** tracks in
 `STRATEGY.md`: a background sync must not rebuild the buffer under an actively-editing user, and
-"save = commit point" becomes the coherent trigger contract. (see origin: issue #25)
+"save = commit point" becomes the coherent trigger contract. (see origin: issue #22)
 
 ---
 
@@ -74,7 +74,7 @@ path, and suppressing the after-save echo from the engine's own saves.
 
 **Not in scope:** changing the reconcile rebuild strategy itself (still a full erase+rebuild),
 the conflict-detection/merge logic, the backoff state machine, or incremental/signature-diffed
-reconciliation (deferred — issue #5).
+reconciliation (deferred — issue #3).
 
 ---
 
@@ -528,7 +528,7 @@ suppression) plus bootstrap echo consistency.
 ### Out of scope (not this change)
 
 - Reconcile rebuild strategy (still a full erase+rebuild) and incremental/signature-diffed
-  reconciliation (issue #5).
+  reconciliation (issue #3).
 - Conflict detection/merge logic and the server-authoritative resolution.
 - The backoff/retry state machine.
 
@@ -586,7 +586,7 @@ every commit, per AGENTS.md. Remove stale `*.elc` before batch ERT runs if resul
 
 ## Sources & Research
 
-- **Origin:** issue #25 / PR #28 (pixel-stable scroll restore) — this change is the trigger-side
+- **Origin:** issue #22 / an earlier PR (pixel-stable scroll restore) — this change is the trigger-side
   complement to that rebuild-side hardening.
 - `docs/solutions/design-patterns/sync-reentrancy-in-flight-guard.md` — the `defvar` + dynamic-`let`
   guard pattern (KTD-1); confirms the in-flight guard does not absorb the 5s idle echo, so an

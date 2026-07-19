@@ -82,7 +82,7 @@ field to `mindwtr-model-content-fields` means the round-trip suite
   `mindwtr-render.el` handle it.
 - **Allow-list-LAST.** Promote a field to the allow-list only *after* a byte-stability
   round-trip oracle proves it survives parse→render→parse unchanged — never before. When
-  `:supportNotes` was added (PR #36, commit `9dc380f`), the order was deliberate: the
+  `:supportNotes` was added (an earlier PR, commit `9dc380f`), the order was deliberate: the
   round-trip oracle (U2) had to be green first, because a field that does not yet round-trip
   byte-stably will phantom-churn its signature the moment it is signed. Promoting first and
   proving later is how the original deny-list incident drove 30/32 entities to false drift.

@@ -155,4 +155,4 @@ A stale `.elc` masked the new tests on the first `make test` run (6 failures); `
   shared content-field allow-list that makes one field-diff renderer correct in both directions.
 - [migration-latch-for-newly-signed-fields](migration-latch-for-newly-signed-fields.md) — a
   co-consumer of that same allow-list (signature / merge / report field-diff).
-- Design spec: `docs/superpowers/specs/2026-06-11-incoming-update-field-diff-design.md` (PR #49).
+- Design spec: `docs/superpowers/specs/2026-06-11-incoming-update-field-diff-design.md` (an earlier PR).

@@ -115,4 +115,4 @@ exactly the one subtree — across every Org version. The paste, which reads
 
 ## Related Issues
 - [Clarify queue markers collapse on write-back](clarify-queue-markers-collapse-on-write-back.md) — same clarify flow, different position-vs-identity hazard.
-- GitHub issue #51.
+- GitHub issue #32.

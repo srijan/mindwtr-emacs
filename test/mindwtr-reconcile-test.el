@@ -317,7 +317,7 @@ is re-rendered from the merged entity, not duplicated."
 (ert-deftest mindwtr-reconcile-growing-note-keeps-anchor-row ()
   "View-state regression: when a project note grows by several lines, the heading
 the cursor was on returns to its exact prior screen row.  The :anchor-line
-screen-row path (PR #28/#29) re-derives the heading after the rebuild and
+screen-row path (earlier PRs) re-derives the heading after the rebuild and
 recenters, so it absorbs the body-length change from the inline note above it."
   (let ((buf (generate-new-buffer " *mw-note-reflow*")))
     (unwind-protect

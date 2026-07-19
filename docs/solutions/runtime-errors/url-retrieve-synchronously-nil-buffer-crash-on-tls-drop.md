@@ -95,7 +95,7 @@ emacs -Q --batch --eval '(with-current-buffer nil (point))'
 ;; => Wrong type argument: stringp, nil
 ```
 
-The fix (`mindwtr-api.el:54-60`, commit `911321d`, PR #58) guards the nil buffer
+The fix (`mindwtr-api.el:54-60`, commit `911321d`, an earlier PR) guards the nil buffer
 and converts it into the transport's existing classified, retryable error:
 
 Before:

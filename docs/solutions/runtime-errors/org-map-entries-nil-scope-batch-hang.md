@@ -52,7 +52,7 @@ Under `emacs --batch` there is no stdin to answer that prompt, so it blocks fore
 
 ## Solution
 
-Bind `buffer-file-name` to nil around each scan. With no file name, `org-map-entries` passes no files to the agenda machinery and never prompts. The fix landed in two original commits (PR #34) — `42e419a` (reconcile's four scans) and `0aa0288` (parse's two scans) — each hand-copying the binding plus a long explanatory comment at all six call sites.
+Bind `buffer-file-name` to nil around each scan. With no file name, `org-map-entries` passes no files to the agenda machinery and never prompts. The fix landed in two original commits (an earlier PR) — `42e419a` (reconcile's four scans) and `0aa0288` (parse's two scans) — each hand-copying the binding plus a long explanatory comment at all six call sites.
 
 That hand-copying drifted (one comment had decayed to a bare cross-reference), so `dd32c26` consolidated all six into a single guard macro in `mindwtr-util.el`, which now owns the binding and the rationale (`mindwtr-util.el:158-170`):
 
@@ -109,6 +109,6 @@ Binding nil is safe because **these scans read only buffer text** — heading st
 
 ## Related Issues
 
-- **GitHub PR #34** — original fixes (`42e419a` reconcile, `0aa0288` parse) and the `timeout-minutes` CI safety net.
+- **GitHub an earlier PR** — original fixes (`42e419a` reconcile, `0aa0288` parse) and the `timeout-minutes` CI safety net.
 - **`dd32c26`** — `refactor(parse,reconcile): route org-map-entries through one buffer-file-name guard` — consolidated the six inline bindings into `mindwtr-util--map-entries` and added the pinning test (review findings #2, #3).
 - Sibling reconcile-correctness docs in `docs/solutions/logic-errors/` (`reconcile-partial-update-reverts-remote-edits.md`, `silent-deletion-untyped-org-headings.md`) cover content-correctness rather than this headless-prompt class. No existing doc covered the org-mode/batch interaction, so this is the first in `runtime-errors`.

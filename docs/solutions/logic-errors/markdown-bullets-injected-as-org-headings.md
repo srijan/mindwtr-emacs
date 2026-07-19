@@ -56,7 +56,7 @@ The tempting "complete" fix is to teach the converter the full markdown↔org in
 - Inline emphasis does **not** collide with org block structure. An org heading requires a star-run followed by a space *at column 0*; inline `*italic*` and `**bold**` never match that. So emphasis is not the bug.
 - A naive regex that "converts emphasis" mauls ordinary prose. `snake_case_name` becomes `/case/`-style garbage, and arithmetic like `2 * 3 * 4` gets mangled into emphasis spans. There is no safe column-agnostic regex for inline `*`/`_`.
 
-So the wrong move was to expand the transform. The right move was to narrow it to exactly the one construct that is structurally ambiguous — the leading bullet marker — and leave inline emphasis literal. This scope ("convert + normalize bullets only, leave emphasis literal") was an explicit decision made when the converter's scope was raised as an open design question during PR #36, after laying out the corruption risk of the regex-emphasis alternative. *(session history)*
+So the wrong move was to expand the transform. The right move was to narrow it to exactly the one construct that is structurally ambiguous — the leading bullet marker — and leave inline emphasis literal. This scope ("convert + normalize bullets only, leave emphasis literal") was an explicit decision made when the converter's scope was raised as an open design question during an earlier PR, after laying out the corruption risk of the regex-emphasis alternative. *(session history)*
 
 ## Solution
 
@@ -106,7 +106,7 @@ Guardrail to keep: any new inline transform added to the shared converter pair m
 
 ## Related Issues
 
-- GitHub PR #36 — introduced this fix as "Finding B".
+- GitHub an earlier PR — introduced this fix as "Finding B".
 - Issue #35 — a pre-existing `mindwtr-parse--body` bug (a bare `:word:` line in note prose is read as a drawer and drops following content). The bullet-normalization work here widened its blast radius; the recorded fix direction is to restrict structural stripping (drawers + planning lines) to real org structure rather than matching anywhere in prose. Accepted as out of scope for #36. *(session history)*
 - [[org-markdown-link-conversion-roundtrip]] — the link-truncation sibling; same round-trip byte-stability theme, a different transform (links rather than bullets) in the same converter pair.
 - [[silent-deletion-untyped-org-headings]] — adjacent phantom/untyped heading handling; the downstream consequence of unintended headings reaching the parser.

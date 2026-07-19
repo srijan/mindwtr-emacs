@@ -89,7 +89,7 @@ requirement is overridden by an explicit user decision during planning:
 
 - **Focus is a property match.** Today's Focus = `MW_FOCUS_TODAY="t"`; the Next
   Actions block excludes focused items via the same property in its match string,
-  so no task appears twice (origin: focus already round-trips, ticket #4).
+  so no task appears twice (origin: focus already round-trips, ticket #2).
 
 - **Stuck = inline flag in one list.** The Projects view is a single block listing
   active projects; a stuck project (active, no `NEXT` descendant) is marked inline
@@ -348,7 +348,7 @@ and README docs — full origin coverage.
 
 **Deferred for later (origin):**
 - A context-grouped Next Actions view (app's `@agenda`/`@calls`/`@computer` grouping).
-- Person-scoped `@agenda/<name>` lists — depends on ticket #46.
+- Person-scoped `@agenda/<name>` lists — depends on ticket #30.
 
 **Outside this build (origin):**
 - A view-language / DSL abstraction — direct definitions only.
@@ -370,7 +370,7 @@ and README docs — full origin coverage.
 
 ## Dependencies / Assumptions
 
-- `MW_FOCUS_TODAY` already round-trips (ticket #4, closed).
+- `MW_FOCUS_TODAY` already round-trips (ticket #2, closed).
 - Project task children are outline descendants of the project heading (consistent
   with the current render), so a subtree scan finds them.
 - Target floor Emacs 28.1 / Org 9.5: composite `org-agenda-custom-commands`,
@@ -396,5 +396,5 @@ and README docs — full origin coverage.
 - `Makefile` (`test/*-test.el` wildcard discovery; `compile` error-on-warn).
 - `org-gtd.el: org-gtd-engage.el` — reference for engage-view
   composition (the DSL approach is deliberately not copied).
-- GitHub #8 (ship agenda/engage views), #4 (focus sync, closed), #46
+- GitHub #6 (ship agenda/engage views), #2 (focus sync, closed), #30
   (`@agenda/<name>`, deferred).

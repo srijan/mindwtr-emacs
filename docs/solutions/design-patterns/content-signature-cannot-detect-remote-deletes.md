@@ -161,7 +161,7 @@ Note the own/remote distinction: `(and w (plist-get w :deletedAt))` asks *"did t
 push the tombstone?"* — provenance — never a signature comparison, since signatures are
 equal on both sides of any delete.
 
-Since PR #49 the `'updated` branch additionally carries `:before s :after m` on its plist
+Since an earlier PR the `'updated` branch additionally carries `:before s :after m` on its plist
 (only `updated`, not `created`/`deleted`), so the report can render a per-field diff; the
 delete path shown above is unchanged. See
 [[single-classifier-feeds-summary-and-detail]].
@@ -178,5 +178,5 @@ delete path shown above is unchanged. See
   that rebuild-through-renderer cannot fix.
 - [[save-as-sync-commit-point]] — the post-PUT must-not-throw region the incoming-changes
   computation and report render sit in.
-- Surfaced implementing the incoming-remote-changes feature (issue 11, PR #41). Constrains
-  any future signature-diffed reconciliation (issue #5).
+- Surfaced implementing the incoming-remote-changes feature (issue 11, an earlier PR). Constrains
+  any future signature-diffed reconciliation (issue #3).

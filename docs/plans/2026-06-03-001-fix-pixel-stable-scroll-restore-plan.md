@@ -24,8 +24,8 @@ the rebuild — the heading returns to its exact prior row, immune to drawer ref
 When the anchor heading was *off-screen* (a background sync can fire while the user has scrolled
 away without moving point), fall back to the existing `window-start` (`:top-id`) anchor, which
 is truthful to what was actually at the top of the viewport. The fold and point-to-entity
-restoration from PR #23 (issue #22) are unchanged; only the scroll step changes. (see origin:
-issue #25)
+restoration from an earlier PR (issue #20) are unchanged; only the scroll step changes. (see origin:
+issue #22)
 
 This is a low-severity polish fix serving the **Emacs-native editing** track in `STRATEGY.md`:
 a background sync should not visibly move the buffer under the user.
@@ -37,7 +37,7 @@ a background sync should not visibly move the buffer under the user.
 `mindwtr-reconcile--snapshot-view` records `:top-id` — the first `MW_ID`/`MW_LIST` property
 line at/after `(window-start win)` — and `mindwtr-reconcile--restore-view` re-anchors via
 `(set-window-start win (line-beginning-position))` on that heading after the rebuild. Three
-things make the restore imprecise (per issue #25):
+things make the restore imprecise (per issue #22):
 
 1. **Heading-granularity snap.** The anchor is always the *next heading* at/after
    `window-start`, so a window that started mid-body or mid-drawer snaps to that heading's top,
@@ -50,19 +50,19 @@ things make the restore imprecise (per issue #25):
 
 The reconcile path runs **after** the server PUT has committed (`mindwtr-sync.el`, past the
 `buffer-chars-modified-tick` guard), so the restore must never throw and must touch only visual
-state. The full-rebuild approach and the PR #23 fold/point machinery stay; this is a surgical
+state. The full-rebuild approach and the earlier PR fold/point machinery stay; this is a surgical
 change to the scroll dimension only.
 
 **In scope:** the scroll/vertical-position restore. **Not** in scope: cursor column / in-body
 position preservation (point still lands on the entity heading-start, as today — explicitly
-opted out of in the PR #23 brainstorm), and full signature-diffed incremental reconciliation
-(deferred — see issue #5).
+opted out of in the earlier PR brainstorm), and full signature-diffed incremental reconciliation
+(deferred — see issue #3).
 
 ---
 
 ## Requirements
 
-Traced from issue #25:
+Traced from issue #22:
 
 - **R1.** After a reconcile, the anchor entity's heading is returned to the vertical screen
   position it occupied before the rebuild: when it was on-screen, point (restored to that
@@ -74,14 +74,14 @@ Traced from issue #25:
   region *above* the anchor heading — between `window-start` and the heading — still perturbs the
   count; measuring from the heading rather than the user's raw point keeps that region small.)
 - **R2b.** When the anchor heading was *off-screen* before the rebuild, restore must fall back
-  to the `window-start`-derived `:top-id` anchor (PR #23 behavior) rather than recentering on an
+  to the `window-start`-derived `:top-id` anchor (an earlier PR behavior) rather than recentering on an
   off-screen point — recentering there would scroll the viewport away from what the user was
   looking at.
 - **R3.** With no live window (batch / `with-temp-buffer`), the scroll restore is a clean no-op:
   no anchor line and no `:top-id` resolve, `recenter`/`set-window-start` are skipped, no error.
 - **R4.** Restore must never throw (the post-PUT `condition-case` is preserved) and must not
   perturb `buffer-modified-p` — it touches only `point`/window scroll, never content.
-- **R5.** Fold restoration and point-to-entity restoration from PR #23 are unchanged: folds are
+- **R5.** Fold restoration and point-to-entity restoration from an earlier PR are unchanged: folds are
   still reapplied per `(or MW_ID MW_LIST)` key, and point still lands on the `at-id` entity
   heading.
 
@@ -91,7 +91,7 @@ Traced from issue #25:
 
 - **Anchor scroll to the anchor entity's heading screen line, not the user's raw point.** The
   reconcile path forces point onto the `at-id` entity's heading-start (`mindwtr-reconcile--goto-id`
-  → `org-back-to-heading`); the user's column / in-body position is *not* preserved (PR #23
+  → `org-back-to-heading`); the user's column / in-body position is *not* preserved (an earlier PR
   accepted limitation). So the only honest thing to reproduce is the **heading's** screen row,
   not the raw cursor's: measuring from the user's real point (which may sit deep in a body, or
   resolve via `--id-at-point` to an *ancestor* heading) and reapplying to the heading-start would
@@ -100,7 +100,7 @@ Traced from issue #25:
   bearing an `MW_ID`/`MW_LIST`, found the same way `--id-at-point` resolves `at-id` — and
   `recenter` that heading at restore. Capture and reapply are then apples-to-apples and the
   heading returns to its exact prior row. This is the issue's "Alternatively…" `recenter`
-  suggestion, made precise; it is reflow-immune at/below the heading. (see origin: issue #25,
+  suggestion, made precise; it is reflow-immune at/below the heading. (see origin: issue #22,
   "Proposed direction")
 - **Pass the reconcile window explicitly to `count-screen-lines`; recenter via
   `with-selected-window`.** `count-screen-lines` computes line wrapping against the *selected*
@@ -247,7 +247,7 @@ the new snapshot field and the restore no-window guard before wiring the windowe
   nil win`) matches the captured value within a small tolerance. **If a deterministic live-window
   assertion proves environment-dependent in batch**, fall back to asserting the no-window no-op
   path deterministically and document windowed recenter as manual verification — consistent with
-  the PR #23 plan's stance on batch window non-determinism. Note this explicitly in the test.
+  the earlier PR plan's stance on batch window non-determinism. Note this explicitly in the test.
 - Covers R2b (best-effort, windowed — fallback path). With a live window scrolled so the entity
   at point's heading is *off-screen* (above `window-start`), snapshot records `:anchor-line` nil
   but a non-nil `:top-id`; after reconcile the window is anchored via the `:top-id`
@@ -269,7 +269,7 @@ re-implemented as an anchor-heading `recenter` with the `:top-id` window-start f
 
 **Known limitations (accepted):**
 - Point lands on the entity heading-start; cursor column / in-body line is not preserved
-  (unchanged from PR #23). The restore reproduces the *anchor heading's* row exactly (that is why
+  (unchanged from an earlier PR). The restore reproduces the *anchor heading's* row exactly (that is why
   the screen line is measured from the heading, not the raw cursor), so a user editing several
   lines into a body sees the heading return to its prior row — the cursor's in-body row is not
   separately reproduced, but no unbounded jump occurs.
@@ -280,7 +280,7 @@ re-implemented as an anchor-heading `recenter` with the `:top-id` window-start f
 **Deferred to follow-up work:**
 - Cursor column / in-body position preservation as a `(MW_ID, char-offset)` point anchor.
 - Full signature-diffed incremental reconciliation, which would make scroll restoration moot for
-  untouched entities (issue #5).
+  untouched entities (issue #3).
 
 ---
 
@@ -290,13 +290,13 @@ re-implemented as an anchor-heading `recenter` with the `:top-id` window-start f
   minimal redisplay; `count-screen-lines`/`recenter` behavior in a synthesized batch window may
   not be deterministic. Mitigation: the no-window no-op path (R3) is the deterministic anchor of
   the test suite; the windowed screen-line assertion is best-effort with a documented fallback
-  to manual verification, mirroring the PR #23 plan's treatment of windowed scroll.
+  to manual verification, mirroring the earlier PR plan's treatment of windowed scroll.
 - **Fold-loop point displacement.** The fold `org-map-entries` loop moves point across headings;
   if the `save-excursion` wrapper is omitted, `recenter` would fire on the wrong line.
   Mitigation: the `save-excursion` wrapper is part of U1's required change and is covered by the
   R1/R2 windowed scenario (and, indirectly, by the unchanged fold-regression tests still
   passing).
-- **Restore throwing on the post-PUT path.** Unchanged risk from PR #23, unchanged mitigation:
+- **Restore throwing on the post-PUT path.** Unchanged risk from an earlier PR, unchanged mitigation:
   the entire restore stays wrapped in `condition-case ... (error nil)` (R4), and the snapshot's
   new `count-screen-lines` call is a cross-version-safe built-in present on the Emacs 28.1 floor,
   so it cannot raise `void-function` before the rebuild.

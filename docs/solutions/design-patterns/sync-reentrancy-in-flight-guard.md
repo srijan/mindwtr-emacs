@@ -66,11 +66,11 @@ the Elisp equivalent of `unwind-protect` for the flag; no explicit reset is need
   (unless (or mindwtr--sync-in-progress
               (timerp mindwtr--retry-timer)              ; a retry is already queued
               mindwtr--error-state
-              (mindwtr--buffer-has-unsaved-edits-p))     ; unsaved-edits gate (PR #29)
+              (mindwtr--buffer-has-unsaved-edits-p))     ; unsaved-edits gate (an earlier PR)
     (mindwtr--sync-attempt)))
 ```
 
-The fourth disjunct — the `buffer-modified-p` unsaved-edits gate — was added in PR #29 and is a
+The fourth disjunct — the `buffer-modified-p` unsaved-edits gate — was added in an earlier PR and is a
 distinct concern (protecting in-progress edits, not concurrency); it is documented in
 [[save-as-sync-commit-point]], including why it must be paired with an auto-save after reconcile.
 This guard list is the single chokepoint both patterns extend.
@@ -79,7 +79,7 @@ A re-entrant timer fires `mindwtr--auto-sync`, sees the flag set, and returns im
 **armed retry timer itself** is the "deferred retry" signal — no separate boolean — so overlapping
 periodic/debounce triggers don't disturb the backoff cadence. Manual sync (`mindwtr-sync`,
 `mindwtr.el:235`) bypasses the gate and calls `mindwtr--reset-backoff` first, so a user request
-always runs regardless of backoff/error state. It also save-then-syncs (PR #29), so an explicit
+always runs regardless of backoff/error state. It also save-then-syncs (an earlier PR), so an explicit
 sync never refuses on a dirty buffer — see [[save-as-sync-commit-point]].
 
 ## Why This Matters
@@ -108,7 +108,7 @@ Re-entrant timer during an in-flight PUT:
 ## Related
 - `mindwtr.el:64` flag, `:159` attempt, `:221` auto-sync gate (now four disjuncts), `:235`
   manual override. The gate's fourth disjunct (`mindwtr--buffer-has-unsaved-edits-p`, `:211`)
-  belongs to [[save-as-sync-commit-point]] (PR #29), which extends this same chokepoint.
+  belongs to [[save-as-sync-commit-point]] (an earlier PR), which extends this same chokepoint.
 - `mindwtr-api.el:28-70` — both transport paths are synchronous.
 - `test/mindwtr-test.el` — `mindwtr-auto-sync-defers-while-in-progress`. Commit `638c4a6`.
 - The same synchronous transport's buffer ownership is [[url-el-synchronous-buffer-leak]].

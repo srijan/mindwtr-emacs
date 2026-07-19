@@ -104,7 +104,7 @@ nothing special is needed.
 - KTD2. **Orchestration iterates a list of surfaces, not named buffers.** Each
   surface is a (buffer × render-function × backup-prefix) entry; parse-merge,
   tick guards, backups, reconcile, and saves all loop over the list, with
-  earlier surfaces winning duplicate ids. This is issue #20's bucket→file
+  earlier surfaces winning duplicate ids. This is issue #18's bucket→file
   routing *mechanism* with two fixed entries; #20 later adds the routing config
   and per-bucket renders with no orchestration rework.
 
@@ -530,7 +530,7 @@ smoke-docker` remains the automated gate):
 
 ## Sources & Research
 
-- Issue #37 (this plan) and issue #20 (configurable bucket→file routing — KTD2
+- Issue #37 (this plan) and issue #18 (configurable bucket→file routing — KTD2
   ships its mechanism; its policy is deferred follow-up).
 - Prior art: org-gtd v4's `org-gtd-archive.el` (external) — the
   year-file/datetree approach the user ran previously; KTD3 records why the

@@ -387,7 +387,7 @@ the WIP buffer open for a re-decision instead of advancing."
 
 (ert-deftest mindwtr-clarify-add-to-project-sets-next ()
   "[a] makes the item NEXT before handing off to the refile -- a task under a
-project rests at NEXT, not the INBOX state it carried in the inbox (issue #61).
+project rests at NEXT, not the INBOX state it carried in the inbox (issue #35).
 The refile is stubbed to a no-op so the keyword stays observable in place."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil

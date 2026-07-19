@@ -134,7 +134,7 @@ silencing the churn.
 - Test count went 204 → 208, all passing.
 
 ## Related Issues
-- Closes GitHub issue **#24** (link syntax synced verbatim between org and mindwtr).
+- Closes GitHub issue #21 (link syntax synced verbatim between org and mindwtr).
 - Anchored on the round-trip byte-stability / signature-idempotency invariant that underpins
   change detection across the sync layer — see
   [[preserving-buffer-view-state-across-reconcile]] and

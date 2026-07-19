@@ -23,7 +23,7 @@ tags: [clarify, gtd, project-task, next, inbox, keyword-stamping, refile, child-
 
 # Adding a task to an existing project in clarify left it stamped INBOX
 
-GitHub issue #61, PR #64 (merged). Commits `650cb52` (parent keyword) and `9e22ef6` (child keywords).
+GitHub issue #35, an earlier PR (merged). Commits `650cb52` (parent keyword) and `9e22ef6` (child keywords).
 
 ## Problem
 In the clarify workflow (`mindwtr-clarify.el`), the `[a]` "add to an existing project" outcome

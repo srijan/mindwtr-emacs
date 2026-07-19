@@ -1,4 +1,4 @@
-# Synced Archive Surface (issue #37) Implementation Plan
+# Synced Archive Surface (issue #27) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,7 +6,7 @@
 
 **Architecture:** The archive file is a **second render surface**, not a write-once log. "Archived" becomes a status whose render home is a different file: `mindwtr-sync-once` parses *both* files into one local AppData, builds one candidate, and reconciles *both* buffers from the merged result (main render drops archived entities exactly as today; a new archive render contains only them). This makes every requirement fall out of the existing sync semantics — cloud-only archives appear on reconcile, dedup is automatic (the file is rebuilt canonically each cycle), un-archiving in the archive file moves the entity home, and deleting from the archive file tombstones it. The immediate-refile commands are pure UX (move the subtree now instead of at next sync); correctness never depends on them. A one-way **migration latch** (the repo's existing pattern) guards the deploy seam: until the archive surface has been durably rendered once, an archived entity missing from local is echoed (old behavior), never tombstoned.
 
-The orchestration is deliberately written as a **list of surfaces** — each a (buffer × render function) pair the cycle iterates uniformly for parse-merge, tick guards, backups, reconcile, and saves — rather than hardcoded "main + archive". This ships the *mechanism* of issue #20 (configurable bucket→file routing) with two fixed surfaces; #20 later reduces to adding routing config and per-bucket renders, with no orchestration rework.
+The orchestration is deliberately written as a **list of surfaces** — each a (buffer × render function) pair the cycle iterates uniformly for parse-merge, tick guards, backups, reconcile, and saves — rather than hardcoded "main + archive". This ships the *mechanism* of issue #18 (configurable bucket→file routing) with two fixed surfaces; #20 later reduces to adding routing config and per-bucket renders, with no orchestration rework.
 
 **Tech Stack:** Emacs Lisp (floor: Emacs 28.1 / Org 9.5), ERT. Ship gate: `make test` + `rm -f *.elc && make compile`.
 
@@ -632,7 +632,7 @@ Run: `make test` → FAIL (archive file never written; latch functions unused).
 
 - [ ] **Step 3: Implement surface-list orchestration in `mindwtr-sync-once`**
 
-The cycle iterates a **list of surfaces** — this is issue #20's mechanism with two fixed entries; #20 later swaps in a configurable list. Add to `mindwtr-sync.el` (and `(require 'mindwtr-archive)` in the requires block):
+The cycle iterates a **list of surfaces** — this is issue #18's mechanism with two fixed entries; #20 later swaps in a configurable list. Add to `mindwtr-sync.el` (and `(require 'mindwtr-archive)` in the requires block):
 
 ```elisp
 (defun mindwtr-sync--surfaces (main-buf)
@@ -930,7 +930,7 @@ Add `(require 'mindwtr-archive)` to `mindwtr-clarify.el`. Check `test/mindwtr-cl
 
 **Files:** `mindwtr.el`, create `test/mindwtr-test.el`
 
-Editing the archive file is a first-class flow (un-archive by keyword edit, deletion), so it needs the same treatment as the main file (this is the "auto-sync save trigger must cover every routed file" item from issue #20, needed now): saving it arms the debounced sync, its unsaved edits stand down background rebuilds, and the manual `mindwtr-sync` saves it first. (`mindwtr-mode` in the archive buffer was already handled by `mindwtr-archive-buffer` in Task 1.)
+Editing the archive file is a first-class flow (un-archive by keyword edit, deletion), so it needs the same treatment as the main file (this is the "auto-sync save trigger must cover every routed file" item from issue #18, needed now): saving it arms the debounced sync, its unsaved edits stand down background rebuilds, and the manual `mindwtr-sync` saves it first. (`mindwtr-mode` in the archive buffer was already handled by `mindwtr-archive-buffer` in Task 1.)
 
 - [ ] **Step 1: Failing tests** — create `test/mindwtr-test.el`:
 

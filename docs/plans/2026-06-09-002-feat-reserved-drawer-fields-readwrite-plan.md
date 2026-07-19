@@ -73,13 +73,13 @@ Separately, there is no command to set an entity's area — the only way today i
 
 | ID | Requirement | Source |
 |----|-------------|--------|
-| R1 | `MW_FOCUS_TODAY`, `MW_SEQUENTIAL`, `MW_FOCUSED` render from their correct server keys and round-trip org→server | issue #16 |
-| R2 | `MW_REVIEW_AT` parses back from org and round-trips org→server | issue #16 |
+| R1 | `MW_FOCUS_TODAY`, `MW_SEQUENTIAL`, `MW_FOCUSED` render from their correct server keys and round-trip org→server | issue #14 |
+| R2 | `MW_REVIEW_AT` parses back from org and round-trips org→server | issue #14 |
 | R3 | Each promoted field is added to the signature allow-list **only after** a byte-stability round-trip test passes (allow-list-LAST) | `content-signature-allow-list-not-deny-list.md` |
 | R4 | Boolean fields normalize so `:false`, nil, and absent sign identically (no phantom drift) | `content-signature-allow-list-not-deny-list.md` |
 | R5 | `:reviewAt` is coarsened to minute precision for signing and dropped (not sent as `null`/`[]`) when nil | `json-encoding-gotchas-emacs-server-boundary.md` |
 | R6 | A first post-upgrade sync must not clobber server-authored values of the **three boolean fields** (which never rendered) with empty local values; protection lifts only after a confirmed durable save. `:reviewAt` is excluded — it always rendered, so an empty local value is a genuine clear | `migration-latch-for-newly-signed-fields.md` |
-| R7 | A new interactive command sets the area of a task or project at point, choosing from existing area names | issue #16 (added ask) |
+| R7 | A new interactive command sets the area of a task or project at point, choosing from existing area names | issue #14 (added ask) |
 | R8 | Recurrence and attachments are explicitly out of scope and remain in their current state (recurrence render-only, attach unchanged) | scoping decision |
 | R9 | `make test` and `make compile` pass; at least one round-trip test exercises a realistic value per field | `AGENTS.md` |
 
@@ -581,7 +581,7 @@ the latch guards it; no release may sit between them.
 - `docs/solutions/design-patterns/migration-latch-for-newly-signed-fields.md` — deploy-seam guard,
   confirmed-save-before-latch, `:supportNotes` prior art.
 - `docs/solutions/logic-errors/silent-deletion-untyped-org-headings.md` — blank-value-read-as-truthy
-  discipline; explicitly names `MW_FOCUS_TODAY` (issue #4) as a deliberately-excluded field this
+  discipline; explicitly names `MW_FOCUS_TODAY` (issue #2) as a deliberately-excluded field this
   plan now fixes.
 - `docs/solutions/integration-issues/json-encoding-gotchas-emacs-server-boundary.md` — nil scalar
   must be dropped, not `null`/`[]`; array-field registration.

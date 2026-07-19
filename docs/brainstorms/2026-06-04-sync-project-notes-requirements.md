@@ -58,7 +58,7 @@ scalar — raising the stakes on getting round-trip and conflict behavior right.
   checklist field, so a `- [ ]` line in their notes is preserved as literal text
   and round-trips unchanged — it never becomes a tracked checklist. (Tasks keep
   their existing checklist behavior; the task-side checkbox-vs-description
-  earmark is a separate concern tracked in issue #33.)
+  earmark is a separate concern tracked in issue #25.)
 
 - **Scope is projects and sections only.** Areas have no notes or description
   field in the synced schema, so they are out by construction.
@@ -149,7 +149,7 @@ The note-bearing fields by entity kind:
 **Out of scope**
 
 - Area notes — no synced notes/description field exists.
-- Task-side checkbox-vs-checklist earmark convention — tracked in issue #33.
+- Task-side checkbox-vs-checklist earmark convention — tracked in issue #25.
 - Prose-aware override reporting (showing the overwritten text for paste-back) —
   the existing override report is sufficient.
 
@@ -198,4 +198,4 @@ The note-bearing fields by entity kind:
 - Prior art (item-level LWW in org-caldav/Joplin/Obsidian; Zotero three-pointer
   merge; CalDAV `If-Match`) is relevant only if the deferred three-way merge is
   later picked up.
-- Related: issue #33 (task description vs checklist earmark).
+- Related: issue #25 (task description vs checklist earmark).

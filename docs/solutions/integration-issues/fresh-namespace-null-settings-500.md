@@ -28,7 +28,7 @@ tags:
 
 ## Problem
 
-A client's *first* `PUT /v1/data` against a freshly provisioned (settings-less) Mindwtr Cloud namespace crashed the server with HTTP 500. This was not hypothetical: it surfaced when the new dockerized integration test in PR #34 stood up a *real* cloud server (`ghcr.io/dongdongbh/mindwtr-cloud`) on an ephemeral, empty volume and ran the Emacs smoke write-lifecycle against it. The first write of the lifecycle 500'd.
+A client's *first* `PUT /v1/data` against a freshly provisioned (settings-less) Mindwtr Cloud namespace crashed the server with HTTP 500. This was not hypothetical: it surfaced when the new dockerized integration test in an earlier PR stood up a *real* cloud server (`ghcr.io/dongdongbh/mindwtr-cloud`) on an ephemeral, empty volume and ran the Emacs smoke write-lifecycle against it. The first write of the lifecycle 500'd.
 
 The root cause is server-side: the Cloud server's settings merge (`mergeSettingsForSync`) dereferences the incoming `settings.syncPreferences` with no null guard. A brand-new namespace has no settings yet, so the client's outbound AppData carried an absent/null `settings`, the server walked into `settings.syncPreferences` on a null, and the request 500'd before anything was persisted.
 
@@ -104,13 +104,13 @@ This is a robust client-side fix for a server-side gap, and it is the right laye
 
 ## Prevention
 
-- **The integration test that catches it.** PR #34's dockerized smoke (`test/integration/run.sh`, `make smoke-docker`) provisions a real cloud server on an **ephemeral named volume so every run starts from an empty namespace**, then runs the full write lifecycle against it. This is what surfaced the 500 in the first place — a unit test with a mocked server would never have, because the crash lives in the server's merge. *Cold-start against a real server is the only thing that exercises the fresh-namespace path.*
+- **The integration test that catches it.** an earlier PR's dockerized smoke (`test/integration/run.sh`, `make smoke-docker`) provisions a real cloud server on an **ephemeral named volume so every run starts from an empty namespace**, then runs the full write lifecycle against it. This is what surfaced the 500 in the first place — a unit test with a mocked server would never have, because the crash lives in the server's merge. *Cold-start against a real server is the only thing that exercises the fresh-namespace path.*
 - **Second independent client.** `run.sh`'s curl cross-check now also PUTs non-null settings (`settings: { syncPreferences: { initialized: true } }`) with an inline comment pointing back to this same server gap — so the curl client mirrors the Emacs client's defense rather than re-triggering the 500.
 - **Unit pins on the synthesis.** `test/mindwtr-sync-test.el` pins that a settings-less shadow yields `mindwtr-model-default-settings` in the candidate (`mindwtr-sync-candidate-creates-initial-settings-when-absent`), and `test/mindwtr-test.el` pins that `mindwtr-bootstrap` synthesizes a non-null `syncPreferences` blob when the server GET returns no `settings` key (`mindwtr-bootstrap-synthesizes-initial-settings-when-server-has-none`, confirmed non-vacuous: it fails when the synthesis is removed).
 - **General rule.** When a remote endpoint may crash on a degenerate input you control, defend at the client boundary by normalizing to a valid, minimal value — and verify the fix against a *real* server on a *fresh* namespace, not a mock. Mocks encode your assumptions about the server; the bug was in the server's assumptions about you.
 
 ## Related Issues
 
-- GitHub PR #34 — dockerized integration smoke + curl cross-check, which surfaced this 500.
+- GitHub an earlier PR — dockerized integration smoke + curl cross-check, which surfaced this 500.
 - Follow-up commits: `77ec2da` (initial client-side fix), `032b2fe` (test pins for the synthesis), `207bb5b` (consolidation into `mindwtr-model-ensure-settings`).
 - [[json-encoding-gotchas-emacs-server-boundary]] — same Emacs↔server sync boundary; directly relevant here, since the "empty object collapses to JSON null through the encoder" gotcha is *why* the default must carry a non-empty key.

@@ -22,7 +22,7 @@ tags: [emacs, org-mode, buffer-view, fold-state, reconcile, scroll-anchor, recen
 `mindwtr-reconcile-buffer` is the heart of the sync path. After the server PUT commits, it
 rebuilds the entire org buffer to the canonical GTD layout via `erase-buffer` + `insert` of
 freshly rendered text. The full-rebuild approach is deliberate (the stopgap explicitly defers
-signature-diffed in-place rewriting, tracked as issue #5) and has a real virtue:
+signature-diffed in-place rewriting, tracked as issue #3) and has a real virtue:
 render-before-erase means a render error leaves the buffer intact.
 
 But a from-scratch rebuild produces a buffer that is **fully expanded, scrolled to the top,
@@ -95,7 +95,7 @@ ancestor is collapsed is skipped — the ancestor's record covers it):
 visibility. Because the rebuilt buffer starts fully expanded, `open` is the default — nothing
 to do. A `folded` ancestor hides its descendants first, so their now-invisible headings are
 skipped; a `contents` ancestor hides only its own body, leaving children to apply their own
-records. (The exact restore loop, contrasted against the inferior PR #1 version, is in
+records. (The exact restore loop, contrasted against the inferior an earlier PR version, is in
 [Examples](#examples) below.)
 
 **Restore scroll by content, not offset** — find the heading at/after the pre-rebuild
@@ -104,12 +104,12 @@ heading if it still resolves. **Wrap the whole restore in `condition-case ... (e
 reconcile runs after the PUT commits, so a fold/redisplay hiccup that threw would surface as a
 *spurious sync failure* even though the server already succeeded. Restore touches only visual
 state (fold overlays, `window-start`/`recenter`), never content, so `buffer-modified-p` is
-untouched by the restore itself. (Note: with PR #29 the engine now *auto-saves* after a
+untouched by the restore itself. (Note: with an earlier PR the engine now *auto-saves* after a
 content-changing reconcile, so the buffer ends up **clean** on disk — see
 [[save-as-sync-commit-point]]. That clean state comes from the engine save, not from restore;
 restore remains content-neutral.)
 
-**Pin the anchor heading's *screen row*, not just its first line** (PR #28). The `:top-id`
+**Pin the anchor heading's *screen row*, not just its first line** (an earlier PR). The `:top-id`
 approach snapped `window-start` to a heading boundary, which still nudged the viewport: any
 reflow at or above the anchor (property-drawer changes, body-length changes) moved the row the
 user was reading. The refinement captures the anchor heading's **0-based screen line** before the
@@ -149,8 +149,8 @@ the wrong window's width and wrapping. *(session history)*
 Without this, every background sync visibly resets the buffer mid-edit, making the editing
 surface hostile.
 
-**The key compounding lesson is the evolution from the first fix (PR #1) to the second
-(PR #23).** PR #1 restored a **global S-TAB cycle backdrop**: it captured
+**The key compounding lesson is the evolution from the first fix (an earlier PR) to the second
+(an earlier PR).** an earlier PR restored a **global S-TAB cycle backdrop**: it captured
 `org-cycle-global-status` (`overview`/`contents`/`all`/nil) and on restore applied
 `org-overview`/`org-content` *first*, then ran a per-entity pass to re-open specific entities
 on top. Container headings had no `MW_ID`, so they were *only* approximated by this backdrop —
@@ -164,7 +164,7 @@ backdrop and **re-collapsed the whole buffer**, then the per-entity pass could o
 dwindling set of entities still recorded as visible. The view **degraded further each sync** —
 recorded-fold count was observed dropping 15 → 1 across successive syncs. *(session history)*
 
-PR #23 fixed this by **dropping the backdrop entirely** and restoring fold state precisely per
+an earlier PR fixed this by **dropping the backdrop entirely** and restoring fold state precisely per
 heading. Two changes made that possible: (1) key folds by `(or MW_ID MW_LIST)` so containers
 have a stable key too — removing the only reason the backdrop existed; (2) restore only ever
 *hides* over the freshly-expanded buffer, so a sync can never fold more than the user actually
@@ -176,15 +176,15 @@ degrade-each-sync loop is gone.
 > that drifts out of sync with reality.** A global "current level" variable is a tempting
 > shortcut but a lossy, often-stale summary; reconstructing from it over-applies.
 
-A secondary PR #23 refinement: point and scroll anchors were originally `MW_ID`-only, so a
+A secondary an earlier PR refinement: point and scroll anchors were originally `MW_ID`-only, so a
 cursor parked on a *container* heading (which has only `MW_LIST`) resolved to nil and the
 rebuild dumped point to `point-min`. Keying point/scroll by `(or MW_ID MW_LIST)` — the same way
 folds are keyed — means a cursor on `* Projects` lands back on Projects after sync.
 
-**The scroll dimension then went through a third iteration (PR #28): heading-granularity →
-pixel-stable.** PR #23's `:top-id` was *content*-keyed (good) but still *heading-granular* — it
+**The scroll dimension then went through a third iteration (an earlier PR): heading-granularity →
+pixel-stable.** an earlier PR's `:top-id` was *content*-keyed (good) but still *heading-granular* — it
 re-pinned the top of the window to a heading boundary, so the entry being read jumped a few rows
-on every background sync even when its own content was unchanged. PR #28 replaced the primary
+on every background sync even when its own content was unchanged. an earlier PR replaced the primary
 path with a screen-row `recenter` anchor (above): pin where the anchor heading sat *on screen*,
 not where its first line lands. Two candidate designs were weighed — a plain `recenter` at the
 saved point vs. measuring the anchor heading's screen line — and an adversarial review kept
@@ -226,10 +226,10 @@ rather than skipping in non-interactive mode. *(session history)*
   operations.
 
 ## Examples
-**Fold restore — global backdrop (PR #1, inferior) vs precise per-heading (PR #23, final):**
+**Fold restore — global backdrop (an earlier PR, inferior) vs precise per-heading (an earlier PR, final):**
 
 ```elisp
-;; BEFORE (PR #1): backdrop-then-override. Re-collapses the whole buffer to a STALE
+;; BEFORE (an earlier PR): backdrop-then-override. Re-collapses the whole buffer to a STALE
 ;; org-cycle-global-status, then reopens recorded entities. Degrades each sync because
 ;; `overview' lingers after local TAB expansions.
 (pcase global
@@ -242,7 +242,7 @@ rather than skipping in non-interactive mode. *(session history)*
      (cond ((eq st 'folded) (mindwtr-reconcile--hide-subtree))
            ((eq st 'open)   (mindwtr-reconcile--show-entry))))))
 
-;; AFTER (PR #23): no backdrop. Buffer starts fully expanded; we ONLY hide, top-down,
+;; AFTER (an earlier PR): no backdrop. Buffer starts fully expanded; we ONLY hide, top-down,
 ;; keyed by (or MW_ID MW_LIST), guarded by heading-line visibility. Can never fold more
 ;; than the user actually had folded.
 (org-map-entries
@@ -261,7 +261,7 @@ three-state (`open`/`contents`/`folded`) hash, and changed the key from `MW_ID` 
 — a fresh `erase`/`insert` is fully visible and the per-entity pass already re-folds what the
 user had folded, so an `'all` backdrop applies nothing. *(session history)*
 
-**Point/scroll container fix (PR #23)** — `--id-at-point` gained an `MW_LIST` fallback so a
+**Point/scroll container fix (an earlier PR)** — `--id-at-point` gained an `MW_LIST` fallback so a
 cursor on a container heading resolves to a stable key instead of nil:
 
 ```elisp
@@ -277,16 +277,16 @@ cursor on a container heading resolves to a stable key instead of nil:
 The scroll-anchor regex was widened the same way: `:MW_ID:` → `:MW_\(?:ID\|LIST\):`.
 
 ## Related
-- Merge commits: PR #1 = `fba8b6b` (the stopgap); PR #23 = `787e8eb` (fixes #22). The
+- Merge commits: an earlier PR = `fba8b6b` (the stopgap); an earlier PR = `787e8eb` (fixes #20). The
   degrade-each-sync fix is `49a9556`; the container point/scroll fix is `12c51cc`. The
-  pixel-stable scroll iteration is PR #28 = `ebeefe7` (Closes #25); regression tests in
+  pixel-stable scroll iteration is an earlier PR = `ebeefe7` (Closes #22); regression tests in
   `test/mindwtr-reconcile-test.el` (windowed recenter round-trip; stale-window-point;
   off-screen `:top-id` fallback; end-to-end deleted-anchor through `reconcile-buffer`).
 - The **trigger-side** counterpart that stops the rebuild from firing mid-edit at all is
-  [[save-as-sync-commit-point]] (PR #29) — this doc makes the rebuild *less jarring* when it
+  [[save-as-sync-commit-point]] (an earlier PR) — this doc makes the rebuild *less jarring* when it
   fires; that one mostly stops it firing while you have unsaved edits. The two are complementary
   defenses.
-- Full signature-diffed incremental reconciliation is deliberately deferred — issue #5.
+- Full signature-diffed incremental reconciliation is deliberately deferred — issue #3.
 - A separate multi-agent review flagged (3 reviewers, confidence 100, elevated to P1) that the
   snapshot ran outside the post-PUT `condition-case`; the snapshot was given its own guard
   before the PR shipped. *(session history)*

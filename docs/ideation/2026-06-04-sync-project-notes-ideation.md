@@ -1,7 +1,7 @@
 ---
 date: 2026-06-04
 topic: sync-project-notes
-focus: issue #31 ("Sync project notes")
+focus: issue #24 ("Sync project notes")
 mode: repo-grounded
 ---
 
@@ -39,7 +39,7 @@ which cuts against the product's "org file is the source of truth" approach.
 * Safe-by-default: the erase-buffer+rebuild reconcile must never silently drop content; anything
   unplaceable is quarantined under `* Sync Failures`.
 
-* View-state anchor (PR #28/#29) must survive a body whose length changes.
+* View-state anchor (earlier PRs) must survive a body whose length changes.
 
 **External prior art:** org-caldav / Joplin / Obsidian all do *item-level* last-write-wins with no
 field-level prose merge (Joplin dumps the loser into a "Conflicts" notebook). Closest good analogy:
@@ -87,7 +87,7 @@ planning/drawer is prose.
 **Complexity:** Low
 **Status:** Unexplored
 
-**Review note (resolved):** Split out as a task-only follow-up — see issue #33. Projects/sections have no `:checklist` field, so for them all `- [ ]` lines stay in notes prose (this issue, #31). The task-side earmark convention (let descriptions contain checkboxes while a real checklist stays distinct) and its round-trip design are tracked separately in #33.
+**Review note (resolved):** Split out as a task-only follow-up — see issue #25. Projects/sections have no `:checklist` field, so for them all `- [ ]` lines stay in notes prose (this issue, #31). The task-side earmark convention (let descriptions contain checkboxes while a real checklist stays distinct) and its round-trip design are tracked separately in #33.
 
 ### 3. De-opaque `preserved-body` first (the ordering landmine)
 
