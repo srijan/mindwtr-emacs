@@ -69,14 +69,14 @@ whose children are themselves containers:
    :PROPERTIES: :MW_TYPE: task :MW_ID: 4431… :MW_AREA: Personal :END:
 ** WAIT Reply from the vendor
    :PROPERTIES: :MW_TYPE: task :MW_ID: 88aa… :END:
-** DONE Decide and order the standing desk                  ← done lingers here until archived
+** DONE Decide and order the standing desk         ← done lingers here until archived
 * Projects
   :PROPERTIES: :MW_TYPE: container :MW_LIST: projects :END:
-** ACTIVE Warranty claim for the router                  ← active + waiting; grouped by area, then :order
+** ACTIVE Warranty claim for the router            ← active + waiting; grouped by area, then :order
    :PROPERTIES: :MW_TYPE: project :MW_ID: 174f… :MW_AREA: Personal :END:
-*** NEXT Research warranty options      ← project's tasks stay nested (any status)
+*** NEXT Research warranty options                  ← project's tasks stay nested (any status)
     :PROPERTIES: :MW_TYPE: task :MW_ID: bd6a… :END:
-** WAIT Expense the new laptop                       ← a waiting project sits here too
+** WAIT Expense the new laptop                     ← a waiting project sits here too
    :PROPERTIES: :MW_TYPE: project :MW_ID: ed8a… :MW_AREA: Work :END:
 * Someday
   :PROPERTIES: :MW_TYPE: container :MW_LIST: someday :END:

@@ -394,7 +394,7 @@ and README docs — full origin coverage.
 - `test/mindwtr-commands-test.el` (`mindwtr-commands-test--with-appdata` rendering
   harness to reuse).
 - `Makefile` (`test/*-test.el` wildcard discovery; `compile` error-on-warn).
-- `org-gtd.el:org-gtd-engage.el` — reference for engage-view
+- `org-gtd.el: org-gtd-engage.el` — reference for engage-view
   composition (the DSL approach is deliberately not copied).
 - GitHub #8 (ship agenda/engage views), #4 (focus sync, closed), #46
   (`@agenda/<name>`, deferred).

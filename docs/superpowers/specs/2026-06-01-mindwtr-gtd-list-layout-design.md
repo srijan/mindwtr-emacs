@@ -41,7 +41,7 @@ followed by the **Areas of Focus** reference section:
    <description / checklist as today>
 ** NEXT Pay internet bill every 28th
    :PROPERTIES: :MW_TYPE: task :MW_ID: 4431… :MW_RECURRENCE: FREQ=MONTHLY :END:
-** DONE Decide and order the standing desk                       ← done lingers here until archived
+** DONE Decide and order the standing desk             ← done lingers here until archived
 * Waiting
   :PROPERTIES: :MW_TYPE: container :MW_LIST: waiting :END:
 * Someday
@@ -50,13 +50,13 @@ followed by the **Areas of Focus** reference section:
   :PROPERTIES: :MW_TYPE: container :MW_LIST: reference :END:
 * Projects
   :PROPERTIES: :MW_TYPE: container :MW_LIST: projects :END:
-** ACTIVE Warranty claim for the router                      ← grouped by area, then :order
+** ACTIVE Warranty claim for the router                ← grouped by area, then :order
    :PROPERTIES: :MW_TYPE: project :MW_ID: 174f… :MW_AREA: Personal :END:
-*** NEXT Research warranty options          ← project's tasks stay nested
+*** NEXT Research warranty options                      ← project's tasks stay nested
     :PROPERTIES: :MW_TYPE: task :MW_ID: bd6a… :END:     ← no MW_AREA (area implied by project)
 ** ACTIVE Expense the new laptop
    :PROPERTIES: :MW_TYPE: project :MW_ID: ed8a… :MW_AREA: Work :END:
-*** NEXT [#C] Talk to Dana…
+*** NEXT [#C] Talk to Dana about the receipts…
 ** ACTIVE Test project 2                                ← area-less projects last
    :PROPERTIES: :MW_TYPE: project :MW_ID: a8a8… :END:
 * Areas of Focus

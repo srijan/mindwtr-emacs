@@ -1,1 +1,7 @@
 *.elc
+
+# Never commit a real synced GTD file. `mindwtr-file' points outside the repo by
+# default, but this stops a stray copy (or a backup/archive) landing in a commit.
+*.org
+*.org~
+*.org.bak

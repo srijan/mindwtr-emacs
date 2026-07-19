@@ -140,7 +140,7 @@ shadow, not here.
   :PROPERTIES:
   :MW_TYPE: area  :MW_ID: 6f3a…
   :END:
-** ACTIVE Storefront v2.4        ← Project (status = TODO keyword)
+** ACTIVE Storefront v2.4           ← Project (status = TODO keyword)
   :PROPERTIES:
   :MW_TYPE: project  :MW_ID: …  :MW_SEQUENTIAL: t
   :END:

@@ -159,7 +159,7 @@ file) appears in neither view.
 - `mindwtr-render.el:167` — `MW_FOCUS_TODAY` renders as `:MW_FOCUS_TODAY: t`
   (omitted when false), so the Focus block is a clean property match.
 - `mindwtr-parse.el` — `MW_TYPE` discriminates `project` / `task` / `container`.
-- `org-gtd.el:org-gtd-engage.el`,
+- `org-gtd.el: org-gtd-engage.el`,
   `org-gtd-view-language.el` — reference for engage-view composition and the
   DSL approach this brief deliberately does not copy.
 - GitHub #8 (ship agenda/engage views), #4 (focus sync, closed), #46
