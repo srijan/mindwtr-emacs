@@ -1,4 +1,13 @@
 ;;; mindwtr-parse.el --- org buffer -> appdata content -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Srijan Choudhary
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This file is not part of GNU Emacs.
+;; This program comes with ABSOLUTELY NO WARRANTY.  It is free software
+;; under the GNU General Public License v3 or later; see the LICENSE file
+;; in the project root, or <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 ;; Parse org headings into Mindwtr entity content plists.  Sync metadata
 ;; and shadow-only fields are NOT produced here; they are merged from the

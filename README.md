@@ -631,3 +631,10 @@ archived, its parent container does not render, or (for a standalone task) its
 status maps to no list — is never mistaken for a user deletion. This is decided
 by `mindwtr-sync--rendered-absent-p` with strict mode off
 (`mindwtr-sync--archive-strict`).
+
+## License
+
+Copyright (C) 2026 Srijan Choudhary
+
+Released under the GNU General Public License, version 3 or later. See
+[LICENSE](LICENSE) for the full text.

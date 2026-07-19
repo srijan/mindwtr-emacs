@@ -1,4 +1,13 @@
 ;;; mindwtr-agenda.el --- Opt-in org-agenda views for the Mindwtr file -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Srijan Choudhary
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This file is not part of GNU Emacs.
+;; This program comes with ABSOLUTELY NO WARRANTY.  It is free software
+;; under the GNU General Public License v3 or later; see the LICENSE file
+;; in the project root, or <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 ;; Two opt-in `org-agenda' views over the Mindwtr file:
 ;;   `mindwtr-engage'   -- today's calendar, Today's Focus, Next Actions,

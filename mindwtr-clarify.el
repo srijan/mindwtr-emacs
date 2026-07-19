@@ -1,4 +1,13 @@
 ;;; mindwtr-clarify.el --- Guided inbox triage (clarify workflow) -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Srijan Choudhary
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This file is not part of GNU Emacs.
+;; This program comes with ABSOLUTELY NO WARRANTY.  It is free software
+;; under the GNU General Public License v3 or later; see the LICENSE file
+;; in the project root, or <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 ;; The org-gtd clarify/organize workflow, rebuilt on mindwtr's data model.
 ;; `mindwtr-clarify' walks the `* Inbox' items one at a time.  Each item is

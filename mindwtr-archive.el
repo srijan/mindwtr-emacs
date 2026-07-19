@@ -1,4 +1,13 @@
 ;;; mindwtr-archive.el --- The synced archive-file surface -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Srijan Choudhary
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This file is not part of GNU Emacs.
+;; This program comes with ABSOLUTELY NO WARRANTY.  It is free software
+;; under the GNU General Public License v3 or later; see the LICENSE file
+;; in the project root, or <https://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 ;; Owns the archive file's location and buffer.  The archive file
 ;; (`mindwtr_archive.org' by default) is a SECOND synced render surface: the
