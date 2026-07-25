@@ -2418,3 +2418,15 @@ tombstoned, so the first post-upgrade sync cannot lose server people."
          (local '(:tasks nil :projects nil :sections nil :areas nil :people nil))
          (stats (mindwtr-sync--stats local shadow)))
     (should (= (plist-get stats :deleted) 0))))
+
+(ert-deftest mindwtr-sync-strip-internal-drops-clock-device-local-keys ()
+  "The wire strip removes :mw-logbook-minutes and :mw-clock-synced (R3/KTD13)."
+  (let* ((appdata '(:tasks ((:id "t1" :title "x" :status "next"
+                             :mw-kind task :mw-logbook-minutes 90 :mw-clock-synced 60))
+                    :projects nil :sections nil :areas nil :people nil :settings nil))
+         (wire (mindwtr-sync--strip-internal-keys appdata))
+         (task (car (plist-get wire :tasks))))
+    (should-not (plist-member task :mw-logbook-minutes))
+    (should-not (plist-member task :mw-clock-synced))
+    (should-not (plist-member task :mw-kind))
+    (should (string= (plist-get task :title) "x"))))

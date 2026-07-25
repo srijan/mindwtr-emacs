@@ -530,7 +530,8 @@ Classification per entity, in this order:
                               (let (clean (i 0))
                                 (while (< i (length e))
                                   (unless (memq (nth i e)
-                                                '(:mw-kind :mw-extra-props))
+                                                '(:mw-kind :mw-extra-props
+                                                  :mw-logbook-minutes :mw-clock-synced))
                                     (setq clean (plist-put clean (nth i e) (nth (1+ i) e))))
                                   (setq i (+ i 2)))
                                 clean))
