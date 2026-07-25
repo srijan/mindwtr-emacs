@@ -124,3 +124,9 @@ absent :reviewAt signs as absent, and sub-minute deltas collapse to one form."
     (should (string= (mindwtr-signature with-rev) (mindwtr-signature with-rev2)))
     (should (string= (mindwtr-signature without) (mindwtr-signature nil-rev)))
     (should-not (string= (mindwtr-signature with-rev) (mindwtr-signature without)))))
+
+(ert-deftest mindwtr-signature-ignores-clock-device-local-fields ()
+  "Neither :mw-clock-synced nor :mw-logbook-minutes affects the signature (R7)."
+  (let ((a '(:id "1" :title "x" :status "next"))
+        (b '(:id "1" :title "x" :status "next" :mw-clock-synced 60 :mw-logbook-minutes 90)))
+    (should (string= (mindwtr-signature a) (mindwtr-signature b)))))

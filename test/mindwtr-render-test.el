@@ -418,3 +418,18 @@ person: name as heading text, MW_ID in the drawer."
          (text (mindwtr-render-appdata ad)))
     (should (string-match-p "Live Person" text))
     (should-not (string-match-p "Dead Person" text))))
+
+(ert-deftest mindwtr-render-clock-synced-emits-when-positive ()
+  "A positive :mw-clock-synced renders MW_CLOCK_SYNCED (U2)."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :title "x" :status "next"
+                 :mw-clock-synced 60 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "^:MW_CLOCK_SYNCED: 60$" text))))
+
+(ert-deftest mindwtr-render-clock-synced-omitted-when-zero-or-nil ()
+  "0 or nil :mw-clock-synced omits the property (absent = 0 fixed point) (U2)."
+  (dolist (v '(0 nil))
+    (let ((text (mindwtr-render-heading
+                 (list :id "t1" :mw-kind 'task :title "x" :status "next"
+                       :mw-clock-synced v :mw-extra-props nil) 2 nil)))
+      (should-not (string-match-p "MW_CLOCK_SYNCED" text)))))

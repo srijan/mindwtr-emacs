@@ -20,13 +20,14 @@
 (require 'org-element)
 (require 'mindwtr-model)
 (require 'mindwtr-util)
+(require 'mindwtr-clock)
 
 (defconst mindwtr-parse--known-props
   '("MW_TYPE" "MW_ID" "MW_ENERGY" "MW_TIME_ESTIMATE" "MW_RECURRENCE"
     "MW_ASSIGNED_TO" "MW_FOCUS_TODAY" "MW_REVIEW_AT" "MW_LOCATION"
     "MW_TASK_MODE" "MW_SEQUENTIAL" "MW_FOCUSED" "CATEGORY" "MW_AREA_ID" "MW_AREA"
     "MW_ATTACH" "MW_CREATED" "MW_UPDATED" "MW_TAGS" "MW_CONTEXTS"
-    "MW_PROJECT_ID" "MW_SECTION_ID" "MW_REFERENCE_LINK")
+    "MW_PROJECT_ID" "MW_SECTION_ID" "MW_REFERENCE_LINK" "MW_CLOCK_SYNCED")
   "PROPERTIES keys the parser interprets; all others are preserved verbatim.
 CATEGORY holds the per-item area name (org's native vehicle); MW_AREA is the
 legacy vehicle kept here for the transitional read-fallback so a stale
@@ -279,7 +280,11 @@ type was inferred from context).  When omitted it is read from the
                      ("MW_ASSIGNED_TO" . :assignedTo) ("MW_LOCATION" . :location)
                      ("MW_TASK_MODE" . :taskMode)))
           (let ((v (mindwtr-parse--prop (car p))))
-            (when v (setq e (plist-put e (cdr p) v)))))))
+            (when v (setq e (plist-put e (cdr p) v)))))
+        ;; Device-local clock-time roll-up input: the task's closed LOGBOOK sum
+        ;; (minutes), carried to the sync reconcile pass; never rendered, signed,
+        ;; or sent on the wire (KTD11/KTD13).
+        (setq e (plist-put e :mw-logbook-minutes (mindwtr-clock--logbook-minutes)))))
     ;; Notes prose for the non-task note-bearing kinds, dispatched through the
     ;; registry (`mindwtr-model-notes-field': section -> :description, project
     ;; -> :supportNotes).  task is handled in its own block above; any future
@@ -315,6 +320,13 @@ type was inferred from context).  When omitted it is read from the
     (let ((rl (mindwtr-parse--prop "MW_REFERENCE_LINK")))
       (when (and rl (not (string-empty-p (string-trim rl))))
         (setq e (plist-put e :referenceLink rl))))
+    ;; MW_CLOCK_SYNCED is the device-local clock-time baseline (minutes we last
+    ;; synced), read kind-agnostically like MW_REVIEW_AT above.  A blank value
+    ;; omits the key (treated as 0 downstream).  It is stripped before the wire
+    ;; (KTD13) and never signed, so it is device-local state kept in the drawer.
+    (let ((cs (mindwtr-parse--prop "MW_CLOCK_SYNCED")))
+      (when (and cs (not (string-empty-p (string-trim cs))))
+        (setq e (plist-put e :mw-clock-synced (string-to-number cs)))))
     ;; Area: org-native `:CATEGORY:' is the vehicle; fall back to a legacy
     ;; `:MW_AREA:' when no `:CATEGORY:' is present so the first post-upgrade
     ;; parse of an old buffer reads the real area (never a false-empty that

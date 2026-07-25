@@ -896,3 +896,70 @@ props) gets :projectId from ancestry, exactly like the main file."
     (let ((ad (mindwtr-parse-buffer)))
       (should (plist-member ad :people))
       (should (null (plist-get ad :people))))))
+
+(ert-deftest mindwtr-parse-task-logbook-minutes ()
+  "A task's closed LOGBOOK sum is attached as :mw-logbook-minutes (U2)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+:LOGBOOK:
+CLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:30] =>  1:30
+:END:
+"
+    (should (= (plist-get (mindwtr-parse-heading) :mw-logbook-minutes) 90))))
+
+(ert-deftest mindwtr-parse-task-logbook-minutes-zero-when-absent ()
+  "No LOGBOOK -> :mw-logbook-minutes is 0 (never nil)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (should (= (plist-get (mindwtr-parse-heading) :mw-logbook-minutes) 0))))
+
+(ert-deftest mindwtr-parse-clock-synced-baseline ()
+  "MW_CLOCK_SYNCED parses to integer :mw-clock-synced, consumed not preserved (U2)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_CLOCK_SYNCED: 60
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (eq (plist-get e :mw-clock-synced) 60))
+      (should-not (member "MW_CLOCK_SYNCED" (plist-get e :mw-extra-props))))))
+
+(ert-deftest mindwtr-parse-clock-synced-absent ()
+  "No MW_CLOCK_SYNCED -> no :mw-clock-synced key (absent = 0 downstream)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (should-not (plist-member (mindwtr-parse-heading) :mw-clock-synced))))
+
+(ert-deftest mindwtr-parse-clock-synced-round-trips ()
+  "parse -> render -> parse preserves :mw-clock-synced (U2)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:MW_CLOCK_SYNCED: 45
+:END:
+"
+    (let ((rendered (mindwtr-render-heading (mindwtr-parse-heading) 1 nil)))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t))
+          (insert rendered) (org-mode) (goto-char (point-min))
+          (unless (org-at-heading-p) (org-next-visible-heading 1))
+          (should (eq (plist-get (mindwtr-parse-heading) :mw-clock-synced) 45)))))))

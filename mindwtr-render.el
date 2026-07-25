@@ -22,10 +22,14 @@ Dynamically bound by `mindwtr-render-appdata' / reconcile.")
 
 (defconst mindwtr-render--drawer-order
   '(:energyLevel :timeEstimate :recurrence :assignedTo :isFocusedToday
-    :reviewAt :location :taskMode :isSequential :isFocused :referenceLink :attach)
+    :reviewAt :location :taskMode :isSequential :isFocused :referenceLink :attach
+    :mw-clock-synced)
   "Canonical order of content properties in the drawer.
 `:referenceLink' is person-only; it is iterated for every kind but inert on
-entities that do not carry it.")
+entities that do not carry it.  `:mw-clock-synced' is the task-only,
+device-local clock-time baseline (MW_CLOCK_SYNCED); it is rendered from the
+entity value (overlaid onto the merged response in the sync reconcile pass)
+but stripped before the wire and excluded from the content signature.")
 
 (defconst mindwtr-render--prop-names
   '((:energyLevel . "MW_ENERGY") (:timeEstimate . "MW_TIME_ESTIMATE")
@@ -34,7 +38,8 @@ entities that do not carry it.")
     (:location . "MW_LOCATION") (:taskMode . "MW_TASK_MODE")
     (:isSequential . "MW_SEQUENTIAL") (:isFocused . "MW_FOCUSED")
     (:referenceLink . "MW_REFERENCE_LINK")
-    (:attach . "MW_ATTACH")))
+    (:attach . "MW_ATTACH")
+    (:mw-clock-synced . "MW_CLOCK_SYNCED")))
 
 (defconst mindwtr-render--boolean-fields '(:isFocusedToday :isSequential :isFocused)
   "Drawer fields whose value is a server boolean.
@@ -181,6 +186,13 @@ Returns a string ending with a newline."
          ((memq k mindwtr-render--boolean-fields)
           (when (eq v t)
             (push (format ":%s: t" (cdr (assq k mindwtr-render--prop-names)))
+                  lines)))
+         ;; Clock-time baseline (minutes): emit only when > 0, so absent and 0
+         ;; are a single fixed point (0 is non-nil in elisp, so the generic arm
+         ;; below would otherwise emit `:MW_CLOCK_SYNCED: 0').
+         ((eq k :mw-clock-synced)
+          (when (and (integerp v) (> v 0))
+            (push (format ":%s: %d" (cdr (assq k mindwtr-render--prop-names)) v)
                   lines)))
          (v
           (push (format ":%s: %s" (cdr (assq k mindwtr-render--prop-names))

@@ -577,7 +577,7 @@ single protected-field to the shared field-set guard."
           (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
                                  :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
           (mindwtr-shadow-set-etag "v1")
-          (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
             (should (plist-get res :noop))
             (should (equal calls '("HEAD")))))
       (delete-directory dir t))))
@@ -610,7 +610,7 @@ remote change into the buffer."
           (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
                                  :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
           (mindwtr-shadow-set-etag "v1")
-          (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+          (let ((res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
             (should-not (plist-get res :noop))
             (should saw-put)
             (should saw-get)
@@ -647,7 +647,7 @@ surfaces an incoming line in the report and the :incoming result."
             (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
                                    :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
             (mindwtr-shadow-set-etag "v1")
-            (let* ((res (mindwtr-sync-once (current-buffer) "NOW"))
+            (let* ((res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z"))
                    (inc (plist-get res :incoming)))
               (should (= (length inc) 1))
               (should (eq (plist-get (car inc) :change) 'created))
@@ -685,7 +685,7 @@ surfaces an incoming line in the report and the :incoming result."
             (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
                                    :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
             (mindwtr-shadow-set-etag "v2")
-            (let ((res (mindwtr-sync-once (current-buffer) "NOW")))
+            (let ((res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
               (should (plist-get res :noop))
               (should (null (plist-get res :incoming))))
             ;; Nothing reportable and no parse warnings: no report buffer at all.
@@ -1374,7 +1374,7 @@ when the buffer is modified -- it does not save edits it did not cause."
           (insert "# scratch note\n")
           (should (buffer-modified-p))
           (let* ((disk-before (with-temp-buffer (insert-file-contents f) (buffer-string)))
-                 (res (mindwtr-sync-once (current-buffer) "NOW"))
+                 (res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z"))
                  (disk-after (with-temp-buffer (insert-file-contents f) (buffer-string))))
             (should (plist-get res :noop))
             (should (string= disk-before disk-after))   ; file NOT rewritten
@@ -2418,3 +2418,246 @@ tombstoned, so the first post-upgrade sync cannot lose server people."
          (local '(:tasks nil :projects nil :sections nil :areas nil :people nil))
          (stats (mindwtr-sync--stats local shadow)))
     (should (= (plist-get stats :deleted) 0))))
+
+(ert-deftest mindwtr-sync-strip-internal-drops-clock-device-local-keys ()
+  "The wire strip removes :mw-logbook-minutes and :mw-clock-synced (R3/KTD13)."
+  (let* ((appdata '(:tasks ((:id "t1" :title "x" :status "next"
+                             :mw-kind task :mw-logbook-minutes 90 :mw-clock-synced 60))
+                    :projects nil :sections nil :areas nil :people nil :settings nil))
+         (wire (mindwtr-sync--strip-internal-keys appdata))
+         (task (car (plist-get wire :tasks))))
+    (should-not (plist-member task :mw-logbook-minutes))
+    (should-not (plist-member task :mw-clock-synced))
+    (should-not (plist-member task :mw-kind))
+    (should (string= (plist-get task :title) "x"))))
+
+;;; U3: clock-time roll-up reconcile pass ------------------------------------
+
+(ert-deftest mindwtr-sync-clock-new-first-run ()
+  "clock-new with no shadow value and no baseline adds the full LOGBOOK sum."
+  (let ((sidx (mindwtr-shadow-index
+               '(:tasks ((:id "t1" :rev 1)) :projects nil :sections nil
+                 :areas nil :people nil :settings nil) :tasks)))
+    (should (= (mindwtr-sync--clock-new
+                '(:id "t1" :mw-logbook-minutes 120) sidx) 120))))
+
+(ert-deftest mindwtr-sync-clock-dirty-p ()
+  "Dirty when the reconciled total differs from the shadow; clean at fixed point."
+  (let ((s30 '(:tasks ((:id "t1" :rev 1 :timeSpentMinutes 30)) :projects nil
+               :sections nil :areas nil :people nil :settings nil))
+        (s90 '(:tasks ((:id "t1" :rev 1 :timeSpentMinutes 90)) :projects nil
+               :sections nil :areas nil :people nil :settings nil)))
+    (should (mindwtr-sync--clock-dirty-p
+             '(:tasks ((:id "t1" :mw-clock-synced 0 :mw-logbook-minutes 60))) s30))
+    (should-not (mindwtr-sync--clock-dirty-p
+                 '(:tasks ((:id "t1" :mw-clock-synced 60 :mw-logbook-minutes 60))) s90))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-promotes-echo-to-update ()
+  "new != S sets timeSpentMinutes and promotes an echoed task to an update (KTD2)."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 3 :timeSpentMinutes 30))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks ((:id "t1" :mw-clock-synced 0 :mw-logbook-minutes 60))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         (candidate (list :tasks (list (copy-sequence (car (plist-get shadow :tasks))))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 90))
+    (should (= (plist-get task :rev) 4))
+    (should (string= (plist-get task :updatedAt) "NOW"))
+    (should (string= (plist-get task :revBy) "dev"))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-fixed-point-no-change ()
+  "new == S leaves the echoed task untouched (no timeSpentMinutes churn, no rev bump)."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 3 :timeSpentMinutes 90))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks ((:id "t1" :mw-clock-synced 60 :mw-logbook-minutes 60))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         (candidate (list :tasks (list (copy-sequence (car (plist-get shadow :tasks))))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 90))
+    (should (= (plist-get task :rev) 3))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-logbook-deleted-lowers-total ()
+  "Deleting LOGBOOK entries (L<B) lowers timeSpentMinutes by exactly the removed amount."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 3 :timeSpentMinutes 90))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks ((:id "t1" :mw-clock-synced 60 :mw-logbook-minutes 10))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         (candidate (list :tasks (list (copy-sequence (car (plist-get shadow :tasks))))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 40))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-ignores-unscanned-task ()
+  "A task absent from LOCAL (server-live, not parsed this cycle) is untouched (R9)."
+  (let* ((shadow '(:tasks ((:id "t2" :title "x" :status "next" :rev 3 :timeSpentMinutes 30))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks nil :projects nil :sections nil :areas nil :people nil :settings nil))
+         (candidate (list :tasks (list (copy-sequence (car (plist-get shadow :tasks))))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 30))
+    (should (= (plist-get task :rev) 3))))
+
+(ert-deftest mindwtr-sync-clock-overlay-stamps-baseline ()
+  "Overlay stamps :mw-clock-synced=L on merged tasks in local; others untouched (KTD12)."
+  (let* ((local '(:tasks ((:id "t1" :mw-logbook-minutes 60)
+                          (:id "t2" :mw-logbook-minutes 0))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         (merged (list :tasks (list '(:id "t1" :title "x") '(:id "t2" :title "y")
+                                    '(:id "t3" :title "z"))
+                       :projects nil :sections nil :areas nil :people nil :settings nil))
+         (tasks (plist-get (mindwtr-sync--overlay-clock-baseline merged local) :tasks)))
+    (should (= (plist-get (nth 0 tasks) :mw-clock-synced) 60))
+    (should (= (plist-get (nth 1 tasks) :mw-clock-synced) 0))
+    (should-not (plist-member (nth 2 tasks) :mw-clock-synced))))
+
+;; --- Full-cycle integration ------------------------------------------------
+
+(defmacro mindwtr-clock-sync-test--with (shadow-task buffer-text &rest body)
+  "Run one `mindwtr-sync-once' over BUFFER-TEXT with SHADOW-TASK seeded.
+Binds `put-body' (captured PUT wire JSON) and `res' (the sync result) for BODY.
+GET echoes the PUT body; HEAD matches the shadow etag (v1)."
+  (declare (indent 2))
+  `(let* ((dir (make-temp-file "mw-clk" t))
+          (mindwtr-shadow-directory dir)
+          (mindwtr-api-base-url "https://mw.example/")
+          (mindwtr-api-token "x")
+          (put-body nil)
+          (mindwtr-api-http-function
+           (lambda (req)
+             (pcase (plist-get req :method)
+               ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+               ("PUT" (setq put-body (plist-get req :body))
+                      '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+               ("GET" (list :status 200 :headers '(("ETag" . "v1"))
+                            :body (or put-body "{}")))))))
+     (unwind-protect
+         (with-temp-buffer
+           (let ((org-inhibit-startup t)) (insert ,buffer-text) (org-mode))
+           (mindwtr-shadow-save (list :tasks (list ,shadow-task) :projects nil
+                                      :sections nil :areas nil :people nil :settings nil))
+           (mindwtr-shadow-set-etag "v1")
+           (let ((res (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z"))) (ignore res) ,@body))
+       (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-clock-integration-outside-work-preserved ()
+  "S=30, L=60, B=0 -> PUT timeSpentMinutes=90 despite a matching HEAD ETag
+(clock-only change bypasses the noop gate, R8), and MW_CLOCK_SYNCED: 60 persists."
+  (mindwtr-clock-sync-test--with
+      '(:id "t1" :title "Task" :status "next" :rev 1 :timeSpentMinutes 30
+        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U")
+      "* NEXT Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n:LOGBOOK:\nCLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:00] =>  1:00\n:END:\n"
+    (should-not (plist-get res :noop))
+    (should (string-match-p "\"timeSpentMinutes\":90" put-body))
+    (goto-char (point-min))
+    (should (search-forward ":MW_CLOCK_SYNCED: 60" nil t))))
+
+(ert-deftest mindwtr-sync-clock-integration-fixed-point-noop ()
+  "At the fixed point (S=90, B=60, L=60) the cycle is a noop: no PUT, no churn."
+  (mindwtr-clock-sync-test--with
+      '(:id "t1" :title "Task" :status "next" :rev 1 :timeSpentMinutes 90
+        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U")
+      "* NEXT Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:MW_CLOCK_SYNCED: 60\n:END:\n:LOGBOOK:\nCLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:00] =>  1:00\n:END:\n"
+    (should (plist-get res :noop))
+    (should-not put-body)))
+
+(ert-deftest mindwtr-sync-clock-integration-two-cycle-persistence ()
+  "The regression the design hinges on: cycle 1 persists MW_CLOCK_SYNCED to disk;
+cycle 2 reads it back from disk and produces a noop (R5/KTD12)."
+  (let* ((dir (make-temp-file "mw-clk2" t))
+         (f (make-temp-file "mw-clk2-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil) (put-count 0)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body) put-count (1+ put-count))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v1")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* NEXT Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+                    ":LOGBOOK:\nCLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:00] =>  1:00\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks ((:id "t1" :title "Task" :status "next" :rev 1
+                                          :timeSpentMinutes 0 :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                                 :projects nil :sections nil :areas nil :people nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (let ((r1 (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
+            (should-not (plist-get r1 :noop))
+            (should (string-match-p "\"timeSpentMinutes\":60" put-body)))
+          (should (= put-count 1))
+          (should (string-match-p ":MW_CLOCK_SYNCED: 60"
+                                  (with-temp-buffer (insert-file-contents f) (buffer-string))))
+          (let ((r2 (mindwtr-sync-once (current-buffer) "2026-07-24T13:00:00Z")))
+            (should (plist-get r2 :noop)))
+          (should (= put-count 1)))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-clock-integration-baseline-not-advanced-on-failed-save ()
+  "KTD4 residual: a buffer-save failure after a successful PUT leaves the on-disk
+baseline un-advanced -- the server got timeSpentMinutes but the drawer did not."
+  (let* ((dir (make-temp-file "mw-clkf" t))
+         (f (make-temp-file "mw-clkf-org" nil ".org"))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (put-body nil)
+         (mindwtr-api-http-function
+          (lambda (req)
+            (pcase (plist-get req :method)
+              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
+              ("PUT" (setq put-body (plist-get req :body))
+                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
+              ("GET" (list :status 200 :headers '(("ETag" . "v1")) :body put-body))))))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect f)
+          (let ((org-inhibit-startup t))
+            (insert "* NEXT Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
+                    ":LOGBOOK:\nCLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:00] =>  1:00\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks ((:id "t1" :title "Task" :status "next" :rev 1
+                                          :timeSpentMinutes 0 :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                                 :projects nil :sections nil :areas nil :people nil :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (cl-letf (((symbol-function 'mindwtr-sync--save-buffer-quietly)
+                     (lambda (&optional _) nil)))
+            (let ((r (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
+              (should (plist-get r :save-failed))
+              (should (string-match-p "\"timeSpentMinutes\":60" put-body))))
+          (should-not (string-match-p ":MW_CLOCK_SYNCED:"
+                                      (with-temp-buffer (insert-file-contents f) (buffer-string)))))
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-no-double-bump-on-already-updated ()
+  "A task already promoted to an update by build-candidate (a content edit) gets
+its timeSpentMinutes set WITHOUT a second rev bump or clobbered updatedAt/revBy."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 3 :timeSpentMinutes 30))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks ((:id "t1" :mw-clock-synced 0 :mw-logbook-minutes 60))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         ;; candidate is a genuine update: rev already bumped to 4, updatedAt/revBy stamped.
+         (candidate (list :tasks (list '(:id "t1" :title "edited" :status "next"
+                                         :rev 4 :updatedAt "EDIT" :revBy "editdev"
+                                         :timeSpentMinutes 30))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 90))
+    (should (= (plist-get task :rev) 4))
+    (should (string= (plist-get task :updatedAt) "EDIT"))
+    (should (string= (plist-get task :revBy) "editdev"))))

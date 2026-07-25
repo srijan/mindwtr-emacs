@@ -16,6 +16,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-signature)
 (require 'mindwtr-shadow)
+(require 'mindwtr-clock)
 
 (defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas :people))
 
@@ -398,6 +399,91 @@ union of their per-kind fields is passed to `merge-content'."
         (setq cand (plist-put cand key (nreverse out)))))
     cand))
 
+;; --- Clock-time roll-up (see docs/plans/2026-07-24-001-...-plan.md) --------
+;; The reconciliation writes each task's LOGBOOK time into the synced
+;; `:timeSpentMinutes' while preserving time worked outside Emacs.  Per task:
+;;   L = LOGBOOK sum (local `:mw-logbook-minutes'), B = last-synced baseline
+;;   (drawer `:mw-clock-synced', KTD11), S = server total (shadow, KTD10).
+;;   new = (max 0 (- S B)) + L.
+;; `timeSpentMinutes' is unsigned (not in `mindwtr-model-content-fields'), so a
+;; clock-only change marks nothing dirty; `mindwtr-sync--clock-dirty-p' gates
+;; the HEAD-ETag noop skip (R8/KTD9) and the reconcile pass writes the push.
+
+(defun mindwtr-sync--clock-new (le sidx)
+  "Return the reconciled `timeSpentMinutes' for local task LE.
+S is read from the shadow index SIDX (KTD10); B and L come from LE's
+device-local `:mw-clock-synced' / `:mw-logbook-minutes' (KTD11)."
+  (let ((se (gethash (plist-get le :id) sidx)))
+    (mindwtr-clock--reconcile (plist-get se :timeSpentMinutes)
+                              (plist-get le :mw-clock-synced)
+                              (plist-get le :mw-logbook-minutes))))
+
+(defun mindwtr-sync--clock-dirty-p (local shadow)
+  "Non-nil when any live task's reconciled clock total differs from the shadow.
+A clock-only change signs nothing and marks nothing dirty, so this gates the
+HEAD-ETag noop skip (R8): without it the reconcile pass would never run in its
+headline case.  Only tasks parsed this cycle are considered (R9)."
+  (let ((sidx (mindwtr-shadow-index shadow :tasks)))
+    (seq-some
+     (lambda (le)
+       (and (plist-get le :id)
+            (let ((s (or (plist-get (gethash (plist-get le :id) sidx)
+                                    :timeSpentMinutes)
+                         0)))
+              (/= (mindwtr-sync--clock-new le sidx) s))))
+     (plist-get local :tasks))))
+
+(defun mindwtr-sync--apply-clock-reconcile (candidate local shadow device-id now)
+  "Write reconciled `timeSpentMinutes' into CANDIDATE tasks parsed this cycle.
+For each task in LOCAL, compute the new total (`mindwtr-sync--clock-new'); when
+it differs from the shadow value, set it on the matching CANDIDATE task and, if
+that task was echoed unchanged, promote it to an update -- bump `:rev', stamp
+`:updatedAt'/`:revBy' -- so the server accepts the change (KTD2).  Only tasks
+present in LOCAL are touched, never a server-live task absent from the buffer
+this cycle (R9).  Mutates and returns CANDIDATE."
+  (let ((sidx (mindwtr-shadow-index shadow :tasks))
+        (cidx (make-hash-table :test 'equal)))
+    (dolist (te (plist-get candidate :tasks))
+      (let ((id (plist-get te :id))) (when id (puthash id te cidx))))
+    (dolist (le (plist-get local :tasks))
+      (let* ((id (plist-get le :id))
+             (te (and id (gethash id cidx))))
+        (when (and te (not (plist-get te :deletedAt)))
+          (let* ((se (gethash id sidx))
+                 (s (or (plist-get se :timeSpentMinutes) 0))
+                 (new (mindwtr-sync--clock-new le sidx)))
+            (unless (= new s)
+              (plist-put te :timeSpentMinutes new)
+              ;; An echoed (unchanged) task carries the shadow's rev verbatim;
+              ;; promote it to a real update so the server accepts the bump.
+              (when (equal (plist-get te :rev) (plist-get se :rev))
+                (plist-put te :rev (1+ (or (plist-get se :rev) 0)))
+                (plist-put te :updatedAt now)
+                (plist-put te :revBy device-id)))))))
+    candidate))
+
+(defun mindwtr-sync--overlay-clock-baseline (merged local)
+  "Overlay each live task's LOGBOOK sum onto MERGED as `:mw-clock-synced' (KTD12).
+MERGED is the server response the buffers render from; it never carries the
+device-local baseline, so the new baseline (L, from LOCAL `:mw-logbook-minutes')
+is overlaid here -- for every live task -- so the render persists it to the
+`:MW_CLOCK_SYNCED:' drawer.  Overlaying L uniformly preserves unchanged
+baselines and advances changed ones (at the fixed point L=B).  A task absent
+from LOCAL keeps whatever the server sent.  Mutates and returns MERGED."
+  (let ((lidx (make-hash-table :test 'equal)))
+    (dolist (le (plist-get local :tasks))
+      (let ((id (plist-get le :id)))
+        (when id (puthash id (or (plist-get le :mw-logbook-minutes) 0) lidx))))
+    (plist-put merged :tasks
+               (mapcar
+                (lambda (te)
+                  (let ((l (gethash (plist-get te :id) lidx)))
+                    (if l
+                        (plist-put (copy-sequence te) :mw-clock-synced l)
+                      te)))
+                (plist-get merged :tasks))))
+  merged)
+
 (defun mindwtr-sync--key->kind (key)
   "Map an entity-list KEY like `:tasks' to its singular kind symbol `task'.
 `:people' is irregular -- stripping a trailing `s' would yield `peopl' -- so it
@@ -539,7 +625,8 @@ Classification per entity, in this order:
                               (let (clean (i 0))
                                 (while (< i (length e))
                                   (unless (memq (nth i e)
-                                                '(:mw-kind :mw-extra-props))
+                                                '(:mw-kind :mw-extra-props
+                                                  :mw-logbook-minutes :mw-clock-synced))
                                     (setq clean (plist-put clean (nth i e) (nth (1+ i) e))))
                                   (setq i (+ i 2)))
                                 clean))
@@ -783,7 +870,11 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                               (plist-get stats :updated)
                               (plist-get stats :deleted))
                            0))
-           (shadow-etag (mindwtr-shadow-get-etag)))
+           (shadow-etag (mindwtr-shadow-get-etag))
+           ;; A clock-only change (LOGBOOK edited) signs nothing and marks
+           ;; nothing dirty, so it must force a full cycle rather than be
+           ;; skipped by the HEAD-ETag noop gate below (R8/KTD9).
+           (clock-dirty (mindwtr-sync--clock-dirty-p local shadow)))
       ;; Loudly refuse to mass-delete: eligibility passed (active, migrated,
       ;; file present) but the safety gate withheld strict mode because the
       ;; archive parsed with warnings or came back empty.  Archived absences are
@@ -797,6 +888,7 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
       ;; archive still needs its first render, we go straight to the full cycle.)
       (if (and (not local-dirty)
                (not force-backfill)
+               (not clock-dirty)
                shadow-etag (not (string-empty-p shadow-etag))
                (equal (mindwtr-api-head-etag) shadow-etag))
           (progn
@@ -816,6 +908,10 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                (candidate (mindwtr-sync-build-candidate local shadow device now
                                                         protect-empty-notes
                                                         protect-empty-fields))
+               ;; Write reconciled `timeSpentMinutes' onto tasks parsed this
+               ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
+               (candidate (mindwtr-sync--apply-clock-reconcile
+                           candidate local shadow device now))
                (wire (mindwtr-sync--strip-internal-keys candidate)))
           (mindwtr-model-validate-appdata wire)
           ;; The PUT response carries {ok, stats, clockSkewWarning}; surface
@@ -864,6 +960,10 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
             ;; already committed) -- it is folded into :save-failed so the caller
             ;; can raise a visible, recoverable error state (KTD-5).  A non-file
             ;; (temp-buffer) save returns :skipped, which is not a failure.
+            ;; Persist the clock baseline: buffers render from `merged' (server
+            ;; data), which never carries the device-local baseline, so overlay
+            ;; each live task's LOGBOOK sum as :mw-clock-synced first (KTD12).
+            (mindwtr-sync--overlay-clock-baseline merged local)
             (dolist (s surfaces)
               (with-current-buffer (plist-get s :buffer)
                 (mindwtr-reconcile-buffer merged (plist-get s :render))))
