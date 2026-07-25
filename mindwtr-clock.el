@@ -14,15 +14,20 @@
 ;;; Code:
 
 (require 'org)
+(require 'org-duration)
 
 (defun mindwtr-clock--logbook-minutes ()
   "Return the sum, in minutes, of closed CLOCK durations in the entry at point.
-Point must be on the task heading.  Sums the `=> H:MM' totals of closed
-CLOCK lines in the heading's own body region \(up to the next heading, so
-descendant clocks are not counted -- tasks do not nest).  A running \(open)
-clock line has no `=>' total and is excluded by construction, so a task
-being clocked does not perturb the sum \(KTD5).  Returns 0 when there is no
-LOGBOOK.  Regex-based and independent of live org-clock dynamic state."
+Point must be on the task heading.  Sums the `=> TOTAL' of each closed CLOCK
+line in the heading's own body region \(up to the next heading, so descendant
+clocks are not counted -- tasks do not nest).  A running \(open) clock line has
+no `=>' total and is excluded by construction, so a task being clocked does not
+perturb the sum \(KTD5).  Returns 0 when there is no LOGBOOK.
+
+The total after `=>' is parsed with `org-duration-to-minutes' rather than a
+hand-rolled H:MM scan, so it honors `org-duration-format' -- notably a clock of
+24h or more, which org renders under the default format as `Nd H:MM' (e.g.
+`4d 4:00' for 100h) and a raw H:MM regex would silently drop to 0."
   (save-excursion
     (org-back-to-heading t)
     (let ((end (save-excursion (outline-next-heading) (point)))
@@ -30,11 +35,10 @@ LOGBOOK.  Regex-based and independent of live org-clock dynamic state."
           (total 0))
       (forward-line 1)
       (while (re-search-forward
-              "^[ \t]*CLOCK:.*=>[ \t]*\\([0-9]+\\):\\([0-9]\\{2\\}\\)"
-              end t)
-        (setq total (+ total
-                       (* 60 (string-to-number (match-string 1)))
-                       (string-to-number (match-string 2)))))
+              "^[ \t]*CLOCK:.*?=>[ \t]*\\(.+?\\)[ \t]*$" end t)
+        (setq total (+ total (condition-case nil
+                                 (round (org-duration-to-minutes (match-string 1)))
+                               (error 0)))))
       total)))
 
 (defun mindwtr-clock--reconcile (s b l)

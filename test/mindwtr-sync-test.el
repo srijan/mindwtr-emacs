@@ -2642,3 +2642,22 @@ baseline un-advanced -- the server got timeSpentMinutes but the drawer did not."
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-clock-reconcile-no-double-bump-on-already-updated ()
+  "A task already promoted to an update by build-candidate (a content edit) gets
+its timeSpentMinutes set WITHOUT a second rev bump or clobbered updatedAt/revBy."
+  (let* ((shadow '(:tasks ((:id "t1" :title "x" :status "next" :rev 3 :timeSpentMinutes 30))
+                   :projects nil :sections nil :areas nil :people nil :settings nil))
+         (local '(:tasks ((:id "t1" :mw-clock-synced 0 :mw-logbook-minutes 60))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+         ;; candidate is a genuine update: rev already bumped to 4, updatedAt/revBy stamped.
+         (candidate (list :tasks (list '(:id "t1" :title "edited" :status "next"
+                                         :rev 4 :updatedAt "EDIT" :revBy "editdev"
+                                         :timeSpentMinutes 30))
+                          :projects nil :sections nil :areas nil :people nil :settings nil))
+         (task (car (plist-get (mindwtr-sync--apply-clock-reconcile
+                                candidate local shadow "dev" "NOW") :tasks))))
+    (should (= (plist-get task :timeSpentMinutes) 90))
+    (should (= (plist-get task :rev) 4))
+    (should (string= (plist-get task :updatedAt) "EDIT"))
+    (should (string= (plist-get task :revBy) "editdev"))))

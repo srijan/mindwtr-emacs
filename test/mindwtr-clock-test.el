@@ -121,5 +121,34 @@ CLOCK: [2026-07-24 Thu 11:00]--[2026-07-24 Thu 16:00] =>  5:00
 "
     (should (= (mindwtr-clock--logbook-minutes) 30))))
 
+(ert-deftest mindwtr-clock-logbook-minutes-day-formatted-total ()
+  "A >=24h clock renders as `Nd H:MM' under the default org-duration-format and
+must be summed via org-duration-to-minutes, not dropped (100h => `4d 4:00')."
+  (mindwtr-clock-test--at
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+:LOGBOOK:
+CLOCK: [2026-07-20 Mon 08:00]--[2026-07-24 Thu 12:00] =>  4d 4:00
+:END:
+"
+    (should (= (mindwtr-clock--logbook-minutes) 6000))))
+
+(ert-deftest mindwtr-clock-logbook-minutes-multi-hour-total ()
+  "A multi-hour H:MM total (>= 10h) sums correctly (12:30 => 750)."
+  (mindwtr-clock-test--at
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+:LOGBOOK:
+CLOCK: [2026-07-24 Thu 00:00]--[2026-07-24 Thu 12:30] =>  12:30
+:END:
+"
+    (should (= (mindwtr-clock--logbook-minutes) 750))))
+
 (provide 'mindwtr-clock-test)
 ;;; mindwtr-clock-test.el ends here
