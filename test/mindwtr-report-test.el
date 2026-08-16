@@ -410,3 +410,52 @@ title header) on the next sync rather than resurrecting prior history."
           (should (save-excursion (goto-char (point-min)) (search-forward "NEXT" nil t)))
           (should (save-excursion (goto-char (point-min)) (search-forward "p1" nil t))))
       (kill-buffer buf))))
+
+;; --- #28: conflict attribution via the server entity's revBy --------------
+
+(ert-deftest mindwtr-report-conflict-attributes-sync-repair ()
+  "A conflict whose server version was written by the server's integrity
+repair (`revBy' \"sync-repair\") says so, with a plain-language hint (#28)."
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              '((:id "t1" :kind task
+                 :mine (:id "t1" :title "x" :areaId "a1")
+                 :theirs (:id "t1" :title "x" :rev 5 :revBy "sync-repair")))
+              nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "server edit by: sync-repair" nil t))
+          (should (search-forward "integrity repair" nil t)))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-conflict-attributes-device ()
+  "A conflict from another device shows that device's revBy without the
+repair explainer."
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              '((:id "t1" :kind task
+                 :mine (:id "t1" :title "x")
+                 :theirs (:id "t1" :title "y" :rev 5 :revBy "phone-abc")))
+              nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "server edit by: phone-abc" nil t))
+          (should-not (save-excursion (search-forward "integrity repair" nil t))))
+      (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-conflict-no-revby-no-attribution-line ()
+  "No `revBy' on the server entity (older servers, tests) renders no
+attribution line at all."
+  (let ((buf (mindwtr-report-show
+              '(:created 0 :updated 1 :deleted 0)
+              '((:id "t1" :kind task
+                 :mine (:id "t1" :title "x")
+                 :theirs (:id "t1" :title "y")))
+              nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should-not (search-forward "server edit by:" nil t)))
+      (kill-buffer buf))))
