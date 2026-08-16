@@ -100,7 +100,9 @@ with fast-access keys and the done-state separator."
                  :repeatReminderMinutes :boardOrder :focusOrder))
       (should (memq k task)))
     (dolist (k '(:sequentialScope :supportNotes :attachments :dueDate :reviewAt
-                 :isSequential :isFocused :areaTitle :purgedAt))
+                 :isSequential :isFocused :areaTitle :purgedAt
+                 ;; recognized-only, added server-side in 1.2.0
+                 :taskSortBy))
       (should (memq k proj)))
     (dolist (k '(:description :isCollapsed :deletedAtBeforeProjectArchive
                  :projectArchivedAt))
