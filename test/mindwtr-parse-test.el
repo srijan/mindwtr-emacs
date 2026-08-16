@@ -985,3 +985,102 @@ CLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:30] =>  1:30
     (insert "* Other\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: o1\n:END:\n")
     (goto-char (point-max))
     (should (equal (mindwtr-parse--prop "MW_ID") "t2"))))
+
+;; --- #26: body parser must not mistake prose for org structure ------------
+
+(ert-deftest mindwtr-parse-body-unterminated-colon-word-stays-prose ()
+  "A bare `:word:' line with no matching `:END:' is prose, not a drawer
+opener.  Previously it flipped the in-drawer state and silently swallowed
+the rest of the note (#26)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+Status update:
+:warning:
+be careful
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :description)
+                       "Status update:\n:warning:\nbe careful")))))
+
+(ert-deftest mindwtr-parse-body-terminated-drawer-still-skipped ()
+  "A real drawer (opener with a matching `:END:') is still dropped from
+the prose, including its contents."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+:LOGBOOK:
+CLOCK: [2026-01-01 Thu 10:00]--[2026-01-01 Thu 11:00] =>  1:00
+:END:
+real note
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :description) "real note")))))
+
+(ert-deftest mindwtr-parse-body-planning-keyword-line-in-prose-kept ()
+  "A note line that merely begins with a planning keyword is prose; only
+the leading planning run directly under the heading is stripped (#26)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+SCHEDULED: <2026-02-09 Mon>
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+DEADLINE: ship Friday
+CLOSED: see the retro
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string-match-p "2026-02-09" (plist-get e :startTime)))
+      (should (string= (plist-get e :description)
+                       "DEADLINE: ship Friday\nCLOSED: see the retro")))))
+
+(ert-deftest mindwtr-parse-body-leading-planning-run-stripped ()
+  "Hand-written SCHEDULED and DEADLINE on separate leading lines are both
+stripped (the drawer-alist scan already tolerates this layout)."
+  (mindwtr-parse-test--with
+      "* NEXT Task
+SCHEDULED: <2026-02-09 Mon>
+DEADLINE: <2026-02-15 Sun>
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+just the note
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :description) "just the note")))))
+
+;; --- #29: heading titles convert org links to markdown --------------------
+
+(ert-deftest mindwtr-parse-title-converts-org-links ()
+  "Org links in a heading title convert to markdown, same as body prose (#29)."
+  (mindwtr-parse-test--with
+      "* NEXT Review [[https://example.com][spec]] and [[https://x.org]]
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :title)
+                       "Review [spec](https://example.com) and [https://x.org](https://x.org)")))))
+
+(ert-deftest mindwtr-parse-title-keeps-leading-bullet-marker ()
+  "Title conversion is links-only: a title legitimately starting with `+ '
+is not bullet-normalized the way body prose is (#29)."
+  (mindwtr-parse-test--with
+      "* NEXT + 1 more thing
+:PROPERTIES:
+:MW_TYPE: task
+:MW_ID: t1
+:END:
+"
+    (let ((e (mindwtr-parse-heading)))
+      (should (string= (plist-get e :title) "+ 1 more thing")))))

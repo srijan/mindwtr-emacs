@@ -433,3 +433,31 @@ person: name as heading text, MW_ID in the drawer."
                  (list :id "t1" :mw-kind 'task :title "x" :status "next"
                        :mw-clock-synced v :mw-extra-props nil) 2 nil)))
       (should-not (string-match-p "MW_CLOCK_SYNCED" text)))))
+
+;; --- #29: heading titles convert markdown links to org --------------------
+
+(ert-deftest mindwtr-render-title-converts-md-links ()
+  "Markdown links in a title render as org links, same as body prose (#29)."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :status "next"
+                 :title "Review [spec](https://example.com)"
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p
+             (concat "^\\*\\* NEXT Review "
+                     (regexp-quote "[[https://example.com][spec]]"))
+             text))))
+
+(ert-deftest mindwtr-render-title-collapses-self-labeled-link ()
+  "A `[url](url)' title link collapses to `[[url]]' for byte-stability."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :status "next"
+                 :title "See [https://x.org](https://x.org)"
+                 :mw-extra-props nil) 2 nil)))
+    (should (string-match-p (regexp-quote "See [[https://x.org]]") text))))
+
+(ert-deftest mindwtr-render-title-keeps-leading-bullet-marker ()
+  "Title conversion is links-only: `+ ' at the start of a title survives."
+  (let ((text (mindwtr-render-heading
+               '(:id "t1" :mw-kind task :status "next"
+                 :title "+ 1 more thing" :mw-extra-props nil) 2 nil)))
+    (should (string-match-p "^\\*\\* NEXT \\+ 1 more thing" text))))
