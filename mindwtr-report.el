@@ -337,6 +337,15 @@ restore live only on this newest entry (R8)."
                         (plist-get c :id)
                         (if (plist-get c :kind)
                             (format " (%s)" (plist-get c :kind)) "")))
+        ;; Attribute the winning server version (#28).  `sync-repair' is the
+        ;; server's integrity pass (e.g. it empties a task's areaId when the
+        ;; referenced area was deleted on another device) -- worth telling
+        ;; apart from a genuine concurrent edit by another device.
+        (let ((by (plist-get theirs :revBy)))
+          (when by
+            (insert (if (equal by "sync-repair")
+                        "      server edit by: sync-repair (server integrity repair, e.g. a referenced area or project was deleted)\n"
+                      (format "      server edit by: %s\n" by)))))
         (let ((diff (mindwtr-report--field-diff mine theirs)))
           (if (null diff)
               (insert "      (no field-level difference)\n")

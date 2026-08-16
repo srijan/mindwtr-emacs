@@ -140,6 +140,23 @@ neither a real kind nor an orphan."
       (when (re-search-forward regexp end t)
         (mindwtr-util-org->iso (match-string 1))))))
 
+(defun mindwtr-parse--org->mw-links (text)
+  "Convert org links in TEXT to markdown, leaving everything else verbatim.
+The links-only half of `mindwtr-parse--org->mw-text', used directly for
+heading titles (#29): a single-line title must not get the bullet
+normalization meant for body prose (a title legitimately starting with
+`+ '/`* ' is just text)."
+  (when text
+    (replace-regexp-in-string
+     "\\[\\[\\([^]]*\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
+     (lambda (m)
+       (let ((url (match-string 1 m))
+             (label (match-string 2 m)))
+         (format "[%s](%s)"
+                 (if (and label (not (string-empty-p label))) label url)
+                 url)))
+     text t t)))
+
 (defun mindwtr-parse--org->mw-text (text)
   "Convert org body syntax in TEXT to mindwtr (markdown) syntax.
 
@@ -159,44 +176,60 @@ only up to the first `]' (an inherent org limitation).
 
 Text with no convertible syntax is returned unchanged."
   (when text
-    (let ((s (replace-regexp-in-string
-              "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
-      (replace-regexp-in-string
-       "\\[\\[\\([^]]*\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
-       (lambda (m)
-         (let ((url (match-string 1 m))
-               (label (match-string 2 m)))
-           (format "[%s](%s)"
-                   (if (and label (not (string-empty-p label))) label url)
-                   url)))
-       s t t))))
+    (mindwtr-parse--org->mw-links
+     (replace-regexp-in-string
+      "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text))))
 
 (defun mindwtr-parse--body (&optional parse-checklist)
   "Return (PROSE . CHECKLIST) for the entry at point.
 PROSE is the body minus planning lines, drawers, and -- when PARSE-CHECKLIST
 is non-nil -- checklist items.  When PARSE-CHECKLIST is nil, `- [ ]' lines
 stay in PROSE: kinds without a `:checklist' field (project, section) must not
-have a checkbox line amputated into a dropped checklist on the next sync (R9)."
+have a checkbox line amputated into a dropped checklist on the next sync (R9).
+
+Two hardening rules keep prose that merely LOOKS structural (#26):
+- A `:word:' line opens a drawer only when a matching `:END:' follows in
+  this entry; an unterminated one is prose (org itself requires the `:END:'),
+  so a bare `:warning:' no longer swallows the rest of the note.
+- Planning keywords (SCHEDULED/DEADLINE/CLOSED) are stripped only from the
+  leading planning run directly under the heading -- the only place org puts
+  them -- so a note line like `DEADLINE: ship Friday' stays prose."
   (save-excursion
     (org-back-to-heading t)
     (let* ((el (org-element-at-point))
            (cbeg (org-element-property :contents-begin el))
            (end (save-excursion (outline-next-heading) (point)))
            (lines (when cbeg
-                    (split-string (buffer-substring-no-properties cbeg end) "\n")))
-           prose checklist (in-drawer nil))
-      (dolist (ln lines)
-        (cond
-         ((string-match-p "^[ \t]*:END:[ \t]*$" ln) (setq in-drawer nil))
-         ((string-match-p "^[ \t]*:[A-Za-z0-9_]+:[ \t]*$" ln) (setq in-drawer t))
-         (in-drawer nil)
-         ((string-match-p "^[ \t]*\\(SCHEDULED\\|DEADLINE\\|CLOSED\\):" ln) nil)
-         ((and parse-checklist
-               (string-match "^[ \t]*- \\[\\([ X]\\)\\] \\(.*\\)$" ln))
-          (push (list :title (match-string 2 ln)
-                      :isCompleted (if (string= (match-string 1 ln) "X") t :false))
-                checklist))
-         (t (push ln prose))))
+                    (vconcat
+                     (split-string (buffer-substring-no-properties cbeg end)
+                                   "\n"))))
+           (n (if lines (length lines) 0))
+           (i 0)
+           prose checklist (in-planning t))
+      (while (< i n)
+        (let ((ln (aref lines i)))
+          (cond
+           ((and in-planning
+                 (string-match-p "^[ \t]*\\(SCHEDULED\\|DEADLINE\\|CLOSED\\):" ln)))
+           ((and (string-match-p "^[ \t]*:[A-Za-z0-9_]+:[ \t]*$" ln)
+                 (not (string-match-p "^[ \t]*:END:[ \t]*$" ln))
+                 ;; Drawer only when terminated: scan ahead for its :END:.
+                 (let ((j (1+ i)) close)
+                   (while (and (< j n) (not close))
+                     (when (string-match-p "^[ \t]*:END:[ \t]*$" (aref lines j))
+                       (setq close j))
+                     (setq j (1+ j)))
+                   (when close (setq i close) t)))
+            (setq in-planning nil))
+           ((and parse-checklist
+                 (string-match "^[ \t]*- \\[\\([ X]\\)\\] \\(.*\\)$" ln))
+            (setq in-planning nil)
+            (push (list :title (match-string 2 ln)
+                        :isCompleted (if (string= (match-string 1 ln) "X") t :false))
+                  checklist))
+           (t (setq in-planning nil)
+              (push ln prose))))
+        (setq i (1+ i)))
       (cons (mindwtr-parse--org->mw-text
              (string-trim (mapconcat #'identity (nreverse prose) "\n")))
             (nreverse checklist)))))
@@ -233,7 +266,11 @@ Warns on a duplicate name (keeps the first id)."
     (mindwtr-util--map-entries
      (lambda ()
        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "area")
-         (let ((name (org-get-heading t t t t)) (id (mindwtr-parse--prop "MW_ID")))
+         ;; Same link conversion as `mindwtr-parse-heading' titles, so the
+         ;; name->id map keys match the server-side (markdown) names that
+         ;; `:CATEGORY:' values carry.
+         (let ((name (mindwtr-parse--org->mw-links (org-get-heading t t t t)))
+               (id (mindwtr-parse--prop "MW_ID")))
            (when (and name id)
              (if (gethash name h)
                  (message "mindwtr: duplicate area name %S; keeping first" name)
@@ -259,7 +296,9 @@ type was inferred from context).  When omitted it is read from the
                    (error "Heading has no MW_TYPE and type could not be inferred: %s"
                           (org-get-heading t t t t))))
          (id (mindwtr-parse--prop "MW_ID"))
-         (title (org-get-heading t t t t))
+         ;; Titles convert org links to markdown like body prose does (#29);
+         ;; links-only, so a title starting with `+ ' is not bullet-mangled.
+         (title (mindwtr-parse--org->mw-links (org-get-heading t t t t)))
          (todo (org-get-todo-state))
          (tags (org-get-tags nil t))
          (split (mindwtr-parse--split-tags tags))

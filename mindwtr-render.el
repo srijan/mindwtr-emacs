@@ -75,6 +75,22 @@ to the MW_CONTEXTS/MW_TAGS drawer (see `mindwtr-render-heading')."
         (concat " :" (mapconcat #'identity all ":") ":")
       "")))
 
+(defun mindwtr-render--mw->org-links (text)
+  "Convert markdown links in TEXT to org, leaving everything else verbatim.
+The links-only half of `mindwtr-render--mw->org-text', used directly for
+heading titles (#29): a title needs no heading-injection guard (it IS the
+heading) and must not have a leading `+ '/`* ' rewritten to `- '."
+  (when text
+    (replace-regexp-in-string
+     "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
+     (lambda (m)
+       (let ((label (match-string 1 m))
+             (url (match-string 2 m)))
+         (if (or (string= label url) (string-empty-p label))
+             (format "[[%s]]" url)
+           (format "[[%s][%s]]" url label))))
+     text t t)))
+
 (defun mindwtr-render--mw->org-text (text)
   "Convert mindwtr (markdown) body syntax in TEXT to org syntax.
 
@@ -97,17 +113,9 @@ parens so URLs like `https://x/Foo_(bar)' survive intact.
 
 Text with no convertible syntax is returned unchanged."
   (when text
-    (let ((s (replace-regexp-in-string
-              "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
-      (replace-regexp-in-string
-       "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
-       (lambda (m)
-         (let ((label (match-string 1 m))
-               (url (match-string 2 m)))
-           (if (or (string= label url) (string-empty-p label))
-               (format "[[%s]]" url)
-             (format "[[%s][%s]]" url label))))
-       s t t))))
+    (mindwtr-render--mw->org-links
+     (replace-regexp-in-string
+      "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text))))
 
 (defun mindwtr-render--checklist (task)
   "Render TASK checklist items as org checkboxes."
@@ -145,7 +153,10 @@ Returns a string ending with a newline."
                    (let ((c (mindwtr-model-priority->cookie
                              (plist-get entity :priority))))
                      (when c (format "[#%c] " c)))))
-         (title (or (plist-get entity :title) (plist-get entity :name)))
+         ;; Markdown links in the server title render as org links (#29);
+         ;; links-only conversion, mirroring the parse side.
+         (title (mindwtr-render--mw->org-links
+                 (or (plist-get entity :title) (plist-get entity :name))))
          (tags (if (eq kind 'task) (mindwtr-render--tags entity) ""))
          ;; Org heading syntax is `STARS KEYWORD [#PRIORITY] TITLE TAGS'.
          ;; The TODO keyword MUST precede the priority cookie or org will
