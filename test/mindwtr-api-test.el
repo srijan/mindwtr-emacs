@@ -75,3 +75,38 @@ with `wrong-type-argument stringp nil'."
       ;; Must signal a retryable mindwtr-api-error instead.
       (condition-case err (mindwtr-api--default-http req)
         (mindwtr-api-error (should (plist-get (cdr err) :retryable)))))))
+
+;;; Async request layer --------------------------------------------------------
+
+(ert-deftest mindwtr-api-request-async-inline-stub-and-classification ()
+  "A single-argument transport runs inline on the async path, and non-2xx /
+status-0 responses arrive as classified ERR values, never as raw signals."
+  (let ((mindwtr-api-base-url "https://mw.example/")
+        (mindwtr-api-token "x"))
+    ;; 2xx: result delivered, no error.
+    (let ((mindwtr-api-http-function
+           (lambda (_req) '(:status 200 :headers (("ETag" . "e1")) :body "")))
+          got)
+      (mindwtr-api-head-etag-async (lambda (r e) (setq got (list r e))))
+      (should (equal got '("e1" nil))))
+    ;; 503: retryable mindwtr-api-error through ERR.
+    (let ((mindwtr-api-http-function
+           (lambda (_req) '(:status 503 :headers nil :body "")))
+          got)
+      (mindwtr-api-head-etag-async (lambda (r e) (setq got (list r e))))
+      (should (null (nth 0 got)))
+      (should (eq (car (nth 1 got)) 'mindwtr-api-error))
+      (should (plist-get (cdr (nth 1 got)) :retryable)))
+    ;; Status 0 (curl-level failure / timeout): retryable too.
+    (let ((mindwtr-api-http-function
+           (lambda (_req) '(:status 0 :headers nil :body nil)))
+          got)
+      (mindwtr-api-head-etag-async (lambda (r e) (setq got (list r e))))
+      (should (plist-get (cdr (nth 1 got)) :retryable)))
+    ;; 401: auth error through ERR.
+    (let ((mindwtr-api-http-function
+           (lambda (_req) '(:status 401 :headers nil :body "")))
+          got)
+      (mindwtr-api-head-etag-async (lambda (r e) (setq got (list r e))))
+      (should (memq 'mindwtr-api-auth-error
+                    (get (car (nth 1 got)) 'error-conditions))))))

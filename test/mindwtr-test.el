@@ -527,3 +527,52 @@ both clean reports none."
 
 (provide 'mindwtr-test)
 ;;; mindwtr-test.el ends here
+
+;;; Async attempt orchestration ------------------------------------------------
+
+(ert-deftest mindwtr-async-attempt-holds-guard-and-arms-backoff-on-completion ()
+  "With a deferred transport the in-flight guard stays up across the async
+window (re-entrant triggers ignored), and the completion callback runs the
+backoff handling: a 503 arms a retry and releases the guard."
+  (let* ((f (make-temp-file "mw-async-att" nil ".org"))
+         (dir (make-temp-file "mw-async-att-bk" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-server-url "https://mw.example/")
+         (mindwtr-auth-token "x")
+         (mindwtr-file f)
+         (mindwtr--retry-attempts 0)
+         (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--sync-started-at nil)
+         (pending nil)
+         (mindwtr-api-http-function (lambda (_req cb) (push cb pending))))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert ""))
+          (mindwtr--sync-attempt)
+          (should mindwtr--sync-in-progress)   ; guard held while deferred
+          (should (= (length pending) 1))
+          (mindwtr--sync-attempt)              ; re-entrant trigger: ignored
+          (should (= (length pending) 1))
+          (funcall (pop pending) '(:status 503 :headers nil :body "boom"))
+          (should-not mindwtr--sync-in-progress)
+          (should (= mindwtr--retry-attempts 1))
+          (should (timerp mindwtr--retry-timer)))
+      (when (timerp mindwtr--retry-timer) (cancel-timer mindwtr--retry-timer))
+      (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
+      (delete-file f)
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-busy-p-reclaims-stale-guard ()
+  "A guard older than the stale threshold is reclaimed (a lost completion
+callback must not stand auto-sync down forever); a fresh guard holds."
+  (let ((mindwtr--sync-in-progress t)
+        (mindwtr--sync-started-at (- (float-time)
+                                     (1+ mindwtr--sync-stale-seconds))))
+    (should-not (mindwtr--sync-busy-p))
+    (should-not mindwtr--sync-in-progress))
+  (let ((mindwtr--sync-in-progress t)
+        (mindwtr--sync-started-at (float-time)))
+    (should (mindwtr--sync-busy-p))
+    (should mindwtr--sync-in-progress)))

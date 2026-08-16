@@ -2661,3 +2661,114 @@ its timeSpentMinutes set WITHOUT a second rev bump or clobbered updatedAt/revBy.
     (should (= (plist-get task :rev) 4))
     (should (string= (plist-get task :updatedAt) "EDIT"))
     (should (string= (plist-get task :revBy) "editdev"))))
+
+;;; Async pipeline -------------------------------------------------------------
+;; A callback-capable (2-argument) transport makes the engine suspend at each
+;; network leg and resume from the leg's completion callback.  These tests
+;; drive that transport by hand: each request is queued as (METHOD . CALLBACK)
+;; and the test fires the callbacks itself, asserting what the engine did (and
+;; did not do) between the legs.
+
+(ert-deftest mindwtr-sync-once-async-defers-across-callbacks ()
+  "The full cycle suspends at PUT and GET; the result is delivered only after
+the last leg's callback fires, and by then the buffer is reconciled and the
+shadow/etag persisted."
+  (let* ((dir (make-temp-file "mw-async" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (remote (concat "{\"tasks\":[{\"id\":\"t9\",\"title\":\"from server\","
+                         "\"status\":\"next\",\"rev\":1,"
+                         "\"createdAt\":\"2026-06-01T00:00:00Z\",\"updatedAt\":\"2026-06-01T00:00:00Z\"}],"
+                         "\"projects\":[],\"sections\":[],"
+                         "\"areas\":[{\"id\":\"a1\",\"name\":\"Work\",\"rev\":1}],\"settings\":{}}"))
+         (pending nil)                  ; queue of (METHOD . CALLBACK)
+         (mindwtr-api-http-function
+          (lambda (req cb) (push (cons (plist-get req :method) cb) pending)))
+         result err done)
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          ;; Empty shadow => the local area is a create => local-dirty, so the
+          ;; cycle goes straight to the PUT (no HEAD leg).
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas nil :settings nil))
+          (mindwtr-sync-once-async (current-buffer) "2026-07-24T12:00:00Z"
+                                   (lambda (r e) (setq done t result r err e)))
+          ;; Suspended at the PUT: nothing delivered, buffer untouched.
+          (should-not done)
+          (should (equal (mapcar #'car pending) '("PUT")))
+          (funcall (cdr (pop pending))
+                   '(:status 200 :headers nil :body "{\"ok\":true}"))
+          ;; Suspended at the GET.
+          (should-not done)
+          (should (equal (mapcar #'car pending) '("GET")))
+          (funcall (cdr (pop pending))
+                   (list :status 200 :headers '(("ETag" . "v2")) :body remote))
+          ;; Now complete: result delivered, buffer reconciled, state persisted.
+          (should done)
+          (should-not err)
+          (should (plist-get result :ok))
+          (goto-char (point-min))
+          (should (search-forward "from server" nil t))
+          (should (equal (mindwtr-shadow-get-etag) "v2")))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-async-aborts-before-put-on-edit-during-head ()
+  "A buffer edit that lands during the async HEAD gap aborts the cycle BEFORE
+the PUT: the error is delivered through the callback, no PUT is ever issued,
+and the shadow etag is untouched -- nothing was committed anywhere."
+  (let* ((dir (make-temp-file "mw-async-abort" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (pending nil)
+         (mindwtr-api-http-function
+          (lambda (req cb) (push (cons (plist-get req :method) cb) pending)))
+         result err done)
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          ;; Clean buffer vs shadow + a stored etag => the cycle leads with HEAD.
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (mindwtr-shadow-set-etag "v1")
+          (mindwtr-sync-once-async (current-buffer) "2026-07-24T12:00:00Z"
+                                   (lambda (r e) (setq done t result r err e)))
+          (should (equal (mapcar #'car pending) '("HEAD")))
+          ;; The user types while the HEAD is in flight.
+          (goto-char (point-max))
+          (insert "edited\n")
+          ;; Remote moved (etag mismatch) => the engine wants a full cycle, but
+          ;; the pre-PUT tick guard must trip first.
+          (funcall (cdr (pop pending))
+                   '(:status 200 :headers (("ETag" . "v2")) :body ""))
+          (should done)
+          (should-not result)
+          (should err)
+          (should (string-match-p "changed during sync" (error-message-string err)))
+          (should (null pending))       ; no PUT was issued
+          (should (equal (mindwtr-shadow-get-etag) "v1")))
+      (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-once-signals-on-pending-async-transport ()
+  "The synchronous wrapper never blocks: a transport that defers makes it
+signal immediately instead of spinning."
+  (let* ((dir (make-temp-file "mw-async-sync" t))
+         (mindwtr-shadow-directory dir)
+         (mindwtr-api-base-url "https://mw.example/")
+         (mindwtr-api-token "x")
+         (mindwtr-api-http-function (lambda (_req _cb) nil)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save '(:tasks nil :projects nil :sections nil
+                                 :areas nil :settings nil))
+          (should-error (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
+      (delete-directory dir t))))
