@@ -820,12 +820,13 @@ backups from colliding in the shared backups directory."
     (write-region (point-min) (point-max) bf)
     bf))
 
-(defun mindwtr-sync-once (buffer now)
-  "Run one full sync cycle for org BUFFER, stamping changes with NOW.
-Iterates the surface list (main always first; the archive file appended when
-active): parse-merge by id, and on a full cycle guard each surface's tick, back
-each one up, reconcile each with its own render function, and save them all.
-Return (:ok t :conflicts LIST ...) or signals on hard error."
+(defun mindwtr-sync--prepare (buffer)
+  "Parse BUFFER's surfaces and compute this cycle's decision state (stage A).
+Pure CPU plus local file reads -- no network.  Returns the state plist the
+later async stages consume.  `:strict' carries the resolved strict-absence
+flag as a VALUE: the old whole-cycle dynamic `let' of
+`mindwtr-sync--archive-strict' cannot span the async callback gaps, so each
+stage re-binds the dynamic var from this field around its own body instead."
   (with-current-buffer buffer
     (let* ((shadow (mindwtr-shadow-load))
            (device (mindwtr-shadow-device-id))
@@ -855,91 +856,145 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
            ;; degraded parse (quarantined/malformed heading) or an empty file
            ;; would otherwise read present-but-unparsed archived entities as
            ;; mass deletions on the migrated steady state -- the seam the latch
-           ;; does NOT cover.  The safety gate (computed post-parse, which is
-           ;; why this binding sits below the parse) withholds strict and falls
-           ;; back to echo for the cycle.  Bound around the whole cycle so
-           ;; stats, change detection, and candidate construction all agree on
-           ;; what an absent archived entity means.
-           (mindwtr-sync--archive-strict
-            (and archive-strict-eligible
-                 (mindwtr-sync--archive-strict-safe-p
-                  local shadow (plist-get parsed :archive-warned))))
-           (changed (mindwtr-sync--changed-ids local shadow))
-           (stats (mindwtr-sync--stats local shadow))
-           (local-dirty (> (+ (plist-get stats :created)
-                              (plist-get stats :updated)
-                              (plist-get stats :deleted))
-                           0))
-           (shadow-etag (mindwtr-shadow-get-etag))
-           ;; A clock-only change (LOGBOOK edited) signs nothing and marks
-           ;; nothing dirty, so it must force a full cycle rather than be
-           ;; skipped by the HEAD-ETag noop gate below (R8/KTD9).
-           (clock-dirty (mindwtr-sync--clock-dirty-p local shadow)))
+           ;; does NOT cover.  The safety gate (computed post-parse) withholds
+           ;; strict and falls back to echo for the cycle.  Carried in `:strict'
+           ;; and re-bound by every stage, so stats, change detection, and
+           ;; candidate construction all agree on what an absent archived
+           ;; entity means.
+           (strict (and archive-strict-eligible
+                        (mindwtr-sync--archive-strict-safe-p
+                         local shadow (plist-get parsed :archive-warned)))))
       ;; Loudly refuse to mass-delete: eligibility passed (active, migrated,
       ;; file present) but the safety gate withheld strict mode because the
       ;; archive parsed with warnings or came back empty.  Archived absences are
       ;; echoed this cycle, not tombstoned.
-      (when (and archive-strict-eligible (not mindwtr-sync--archive-strict))
+      (when (and archive-strict-eligible (not strict))
         (message "mindwtr: archive file degraded or empty this cycle; archived deletions NOT applied (echoing instead)"))
-      ;; Step 1 of the cycle: with nothing local to push, HEAD the server; if
-      ;; its ETag still matches the shadow, neither side changed -- skip the
-      ;; PUT/GET round-trip.  (When local IS dirty -- a dirty archive file
-      ;; counts, since its changes fold into the combined stats -- or the
-      ;; archive still needs its first render, we go straight to the full cycle.)
-      (if (and (not local-dirty)
-               (not force-backfill)
-               (not clock-dirty)
-               shadow-etag (not (string-empty-p shadow-etag))
-               (equal (mindwtr-api-head-etag) shadow-etag))
-          (progn
-            ;; Even when nothing needs pushing, a stray keyword should not be
-            ;; silently swallowed -- surface it in the report.
-            (when parse-warnings
-              (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
-            ;; The migration latches are intentionally NOT set here: a noop skips
-            ;; reconcile, so the buffers still hold their old render.  Migration
-            ;; protection must stay on until a full cycle actually rewrites them
-            ;; (the latches are set in that branch below, after a confirmed save).
-            ;; A HEAD-match means the server is unchanged, so nothing is incoming.
-            (list :ok t :noop t :conflicts nil :stats stats :skew nil
-                  :warnings parse-warnings :incoming nil))
-        (let* ((protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
-               (protect-empty-fields (not (mindwtr-shadow-fields-migrated-p)))
-               (candidate (mindwtr-sync-build-candidate local shadow device now
-                                                        protect-empty-notes
-                                                        protect-empty-fields))
-               ;; Write reconciled `timeSpentMinutes' onto tasks parsed this
-               ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
-               (candidate (mindwtr-sync--apply-clock-reconcile
-                           candidate local shadow device now))
-               (wire (mindwtr-sync--strip-internal-keys candidate)))
-          (mindwtr-model-validate-appdata wire)
-          ;; The PUT response carries {ok, stats, clockSkewWarning}; surface
-          ;; the skew warning so a misconfigured device clock is not silent.
-          (let* ((put-resp (mindwtr-api-put-data wire))
-                 (skew (plist-get put-resp :clockSkewWarning))
-                 (got (mindwtr-api-get-data))
-                 ;; Normalize settings on the way in too: should the server ever
-                 ;; return a null/absent blob, keep the shadow consistent now
-                 ;; rather than relying on build-candidate to re-synthesize next
-                 ;; cycle.
-                 (merged (mindwtr-model-ensure-settings (plist-get got :appdata)))
-                 (conflicts (mindwtr-sync-detect-conflicts wire merged changed))
-                 ;; Remote changes the merge pulled in for entities the user
-                 ;; did not edit locally -- benign merges that complete silently
-                 ;; today.  Computed from the same shadow/wire/merged bindings
-                 ;; the conflict path consumes; excludes own edits and conflicts.
-                 (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
-                 ;; Local changes this device proposed (local vs shadow), mirroring
-                 ;; stats so the count line and the detail list are consistent.
-                 (local-changes (mindwtr-sync--local-changes local shadow))
-                 (backup-file nil))
+      (let ((mindwtr-sync--archive-strict strict))
+        (let* ((changed (mindwtr-sync--changed-ids local shadow))
+               (stats (mindwtr-sync--stats local shadow))
+               (local-dirty (> (+ (plist-get stats :created)
+                                  (plist-get stats :updated)
+                                  (plist-get stats :deleted))
+                               0))
+               ;; A clock-only change (LOGBOOK edited) signs nothing and marks
+               ;; nothing dirty, so it must force a full cycle rather than be
+               ;; skipped by the HEAD-ETag noop gate (R8/KTD9).
+               (clock-dirty (mindwtr-sync--clock-dirty-p local shadow)))
+          (list :buffer buffer :shadow shadow :device device
+                :surfaces surfaces :local local :parse-warnings parse-warnings
+                :archive-active (and archive-active t) :strict strict
+                :changed changed :stats stats :local-dirty local-dirty
+                :clock-dirty clock-dirty :force-backfill force-backfill
+                :shadow-etag (mindwtr-shadow-get-etag)))))))
+
+(defun mindwtr-sync--check-ticks (surfaces what)
+  "Signal unless every surface in SURFACES is unchanged since its post-parse tick.
+WHAT names the guarded window in the error message."
+  (dolist (s surfaces)
+    (with-current-buffer (plist-get s :buffer)
+      (unless (= (plist-get s :tick) (buffer-chars-modified-tick))
+        (error "mindwtr: buffer changed during sync (%s); aborting" what)))))
+
+(defun mindwtr-sync--finish-noop (st)
+  "Complete a HEAD-match noop cycle from state ST; return the result plist."
+  (with-current-buffer (plist-get st :buffer)
+    (let ((stats (plist-get st :stats))
+          (parse-warnings (plist-get st :parse-warnings)))
+      ;; Even when nothing needs pushing, a stray keyword should not be
+      ;; silently swallowed -- surface it in the report.
+      (when parse-warnings
+        (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
+      ;; The migration latches are intentionally NOT set here: a noop skips
+      ;; reconcile, so the buffers still hold their old render.  Migration
+      ;; protection must stay on until a full cycle actually rewrites them
+      ;; (the latches are set post-save in `mindwtr-sync--finish').
+      ;; A HEAD-match means the server is unchanged, so nothing is incoming.
+      (list :ok t :noop t :conflicts nil :stats stats :skew nil
+            :warnings parse-warnings :incoming nil))))
+
+(defun mindwtr-sync--put-get (st callback)
+  "Run the full-cycle push (stage C) for state ST: build candidate, PUT, GET.
+Chains into `mindwtr-sync--finish' and delivers (RESULT ERR) to CALLBACK.
+Before the PUT, every surface's tick is re-checked: the async HEAD gap means
+the user may have typed since the parse, and aborting HERE is completely
+clean -- nothing has been committed anywhere -- whereas the post-GET guard
+aborts with the server already updated."
+  (mindwtr-api--guard
+   callback
+   (lambda ()
+     (let ((buffer (plist-get st :buffer)))
+       (unless (buffer-live-p buffer)
+         (error "mindwtr: buffer killed during sync; aborting"))
+       (with-current-buffer buffer
+         (let ((mindwtr-sync--archive-strict (plist-get st :strict)))
+           (mindwtr-sync--check-ticks (plist-get st :surfaces) "before push")
+           (let* ((local (plist-get st :local))
+                  (shadow (plist-get st :shadow))
+                  (device (plist-get st :device))
+                  (now (plist-get st :now))
+                  (protect-empty-notes (not (mindwtr-shadow-notes-migrated-p)))
+                  (protect-empty-fields (not (mindwtr-shadow-fields-migrated-p)))
+                  (candidate (mindwtr-sync-build-candidate local shadow device now
+                                                           protect-empty-notes
+                                                           protect-empty-fields))
+                  ;; Write reconciled `timeSpentMinutes' onto tasks parsed this
+                  ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
+                  (candidate (mindwtr-sync--apply-clock-reconcile
+                              candidate local shadow device now))
+                  (wire (mindwtr-sync--strip-internal-keys candidate)))
+             (mindwtr-model-validate-appdata wire)
+             (setq st (plist-put st :wire wire))
+             ;; The PUT response carries {ok, stats, clockSkewWarning}; the skew
+             ;; warning is surfaced in `--finish' so a misconfigured device
+             ;; clock is not silent.
+             (mindwtr-api-put-data-async
+              wire
+              (lambda (put-resp err)
+                (if err (funcall callback nil err)
+                  (mindwtr-api-get-data-async
+                   (lambda (got err2)
+                     (if err2 (funcall callback nil err2)
+                       (mindwtr-api--deliver
+                        callback
+                        (lambda () (mindwtr-sync--finish st put-resp got))))))))))))))))
+
+(defun mindwtr-sync--finish (st put-resp got)
+  "Complete a full cycle (stage E) for ST from PUT-RESP and GET result GOT.
+Reconciles and saves every surface, persists the shadow/etag, flips the
+migration latches, shows the report, and returns the result plist.  Runs
+synchronously (possibly from a process sentinel on the async path)."
+  (let ((buffer (plist-get st :buffer)))
+    (unless (buffer-live-p buffer)
+      (error "mindwtr: buffer killed during sync; aborting"))
+    (with-current-buffer buffer
+      (let* ((mindwtr-sync--archive-strict (plist-get st :strict))
+             (shadow (plist-get st :shadow))
+             (local (plist-get st :local))
+             (wire (plist-get st :wire))
+             (surfaces (plist-get st :surfaces))
+             (stats (plist-get st :stats))
+             (parse-warnings (plist-get st :parse-warnings))
+             (skew (plist-get put-resp :clockSkewWarning))
+             ;; Normalize settings on the way in too: should the server ever
+             ;; return a null/absent blob, keep the shadow consistent now
+             ;; rather than relying on build-candidate to re-synthesize next
+             ;; cycle.
+             (merged (mindwtr-model-ensure-settings (plist-get got :appdata)))
+             (conflicts (mindwtr-sync-detect-conflicts
+                         wire merged (plist-get st :changed)))
+             ;; Remote changes the merge pulled in for entities the user
+             ;; did not edit locally -- benign merges that complete silently
+             ;; today.  Computed from the same shadow/wire/merged bindings
+             ;; the conflict path consumes; excludes own edits and conflicts.
+             (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
+             ;; Local changes this device proposed (local vs shadow), mirroring
+             ;; stats so the count line and the detail list are consistent.
+             (local-changes (mindwtr-sync--local-changes local shadow))
+             (backup-file nil))
             ;; Per-surface concurrency guard: each buffer must be unchanged since
             ;; its post-parse tick (the PUT/GET window).
-            (dolist (s surfaces)
-              (with-current-buffer (plist-get s :buffer)
-                (unless (= (plist-get s :tick) (buffer-chars-modified-tick))
-                  (error "mindwtr: buffer changed during sync; aborting"))))
+            (mindwtr-sync--check-ticks surfaces "after push")
             ;; Per-surface pre-reconcile backup (file-visiting surfaces only),
             ;; each under its own prefix so the two never collide.
             (dolist (s surfaces)
@@ -994,7 +1049,7 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                 ;; participated in this cycle and every save succeeded (KTD5):
                 ;; strict absence semantics must not activate until the archive
                 ;; file is provably on disk.
-                (when archive-active
+                (when (plist-get st :archive-active)
                   (condition-case err
                       (mindwtr-shadow-set-archive-migrated)
                     (error (message "mindwtr: archive-migrated latch write failed: %s"
@@ -1003,7 +1058,58 @@ Return (:ok t :conflicts LIST ...) or signals on hard error."
                                    parse-warnings incoming nil local-changes)
               (list :ok t :conflicts conflicts :stats stats :skew skew
                     :warnings parse-warnings :incoming incoming
-                    :save-failed save-failed))))))))
+                    :save-failed save-failed))))))
+
+(defun mindwtr-sync-once-async (buffer now callback)
+  "Run one full sync cycle for org BUFFER, stamping changes with NOW.
+Iterates the surface list (main always first; the archive file appended when
+active): parse-merge by id, and on a full cycle guard each surface's tick, back
+each one up, reconcile each with its own render function, and save them all.
+
+The network legs never block: with a callback-capable transport the HEAD /
+PUT / GET requests run asynchronously and the CPU stages resume from their
+completion callbacks (process sentinels); with a synchronous transport the
+whole chain completes inline.  CALLBACK is called exactly once as
+\(CALLBACK RESULT ERR): RESULT is the same (:ok t :conflicts LIST ...) plist
+`mindwtr-sync-once' returns, ERR the (SYMBOL . DATA) of the signal that ended
+the cycle (re-signalable via (signal (car ERR) (cdr ERR))).  Errors always
+travel through ERR -- nothing signals out of a sentinel."
+  (mindwtr-api--guard
+   callback
+   (lambda ()
+     (let* ((st (plist-put (mindwtr-sync--prepare buffer) :now now))
+            (shadow-etag (plist-get st :shadow-etag)))
+       ;; Step 1 of the cycle: with nothing local to push, HEAD the server; if
+       ;; its ETag still matches the shadow, neither side changed -- skip the
+       ;; PUT/GET round-trip.  (When local IS dirty -- a dirty archive file
+       ;; counts, since its changes fold into the combined stats -- or the
+       ;; archive still needs its first render, we go straight to the full
+       ;; cycle.)
+       (if (and (not (plist-get st :local-dirty))
+                (not (plist-get st :force-backfill))
+                (not (plist-get st :clock-dirty))
+                shadow-etag (not (string-empty-p shadow-etag)))
+           (mindwtr-api-head-etag-async
+            (lambda (etag err)
+              (cond
+               (err (funcall callback nil err))
+               ((equal etag shadow-etag)
+                (mindwtr-api--deliver
+                 callback (lambda () (mindwtr-sync--finish-noop st))))
+               (t (mindwtr-sync--put-get st callback)))))
+         (mindwtr-sync--put-get st callback))))))
+
+(defun mindwtr-sync-once (buffer now)
+  "Synchronous `mindwtr-sync-once-async': return the result plist or signal.
+Only valid with a transport that completes inline (the url.el fallback, or a
+test stub); with a genuinely asynchronous transport this signals immediately
+rather than blocking, so interactive callers must go through the async entry."
+  (let (done res err)
+    (mindwtr-sync-once-async buffer now
+                             (lambda (r e) (setq done t res r err e)))
+    (cond (err (signal (car err) (cdr err)))
+          (done res)
+          (t (error "mindwtr: async transport still pending; use `mindwtr-sync-once-async'")))))
 
 (provide 'mindwtr-sync)
 ;;; mindwtr-sync.el ends here

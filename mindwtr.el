@@ -86,10 +86,24 @@
 (defvar mindwtr--error-state nil
   "Non-nil (a message string) when sync has entered a persistent error state.")
 (defvar mindwtr--sync-in-progress nil
-  "Non-nil while a sync cycle is running.
-Emacs' synchronous HTTP spins a nested event loop that runs pending
-timers, so a periodic/debounce/retry timer can fire mid-sync; this guard
-stops such a re-entrant trigger from launching a second concurrent cycle.")
+  "Non-nil while a sync cycle is in flight.
+Set when a cycle is launched and cleared in its completion callback -- the
+cycle's network legs run asynchronously, so \"in flight\" spans real editor
+time now, not just a nested event loop.  Any trigger (timer, focus, debounce,
+manual) that fires while set is ignored so two cycles never run concurrently.
+`mindwtr--sync-busy-p' owns the read: it also reclaims the guard when the
+in-flight cycle is stale (see `mindwtr--sync-stale-seconds').")
+
+(defvar mindwtr--sync-started-at nil
+  "`float-time' when the in-flight sync cycle was launched, or nil.
+Watchdog input for `mindwtr--sync-busy-p''s staleness check.")
+
+(defconst mindwtr--sync-stale-seconds 300
+  "Age after which an in-flight sync cycle is presumed wedged and reclaimed.
+Every request is bounded by `mindwtr-api-timeout', so the completion callback
+always fires in normal operation; this backstop only matters if a bug loses
+the callback, and it turns that worst case into a delayed recovery instead of
+auto-sync silently standing down forever.")
 
 ;;;###autoload
 (define-derived-mode mindwtr-mode org-mode "Mindwtr"
@@ -188,57 +202,102 @@ failure being handled."
   (setq mindwtr--retry-timer nil)
   (mindwtr--sync-attempt))
 
+(defun mindwtr--sync-busy-p ()
+  "Non-nil while a launched sync cycle is still legitimately in flight.
+A cycle older than `mindwtr--sync-stale-seconds' is presumed wedged (its
+completion callback was lost); the guard is reclaimed -- loudly -- and nil
+returned so the caller may launch a fresh cycle."
+  (cond
+   ((not mindwtr--sync-in-progress) nil)
+   ((and mindwtr--sync-started-at
+         (> (- (float-time) mindwtr--sync-started-at)
+            mindwtr--sync-stale-seconds))
+    (message "mindwtr: previous sync never completed; reclaiming")
+    (setq mindwtr--sync-in-progress nil
+          mindwtr--sync-started-at nil)
+    nil)
+   (t t)))
+
+(defun mindwtr--sync-handle-result (res)
+  "Handle a completed sync cycle's result plist RES: reset backoff, report."
+  (mindwtr--reset-backoff)
+  (cond
+   ;; The sync succeeded but writing the rebuilt buffer to disk
+   ;; failed: the shadow/etag have advanced, so the on-disk file is
+   ;; now stale and the unsaved-edits gate would stand down every
+   ;; future tick silently.  Reuse the persistent error-state
+   ;; machinery to make that divergence visible and recoverable --
+   ;; it surfaces a standing message, itself stands down auto-sync,
+   ;; and is cleared only by a manual `mindwtr-sync' (which
+   ;; save-then-syncs and recovers).  (KTD-5)
+   ((plist-get res :save-failed)
+    (setq mindwtr--error-state
+          "mindwtr: synced, but saving the file failed — disk is stale vs server (M-x mindwtr-sync to retry)")
+    (message "%s" mindwtr--error-state))
+   ((plist-get res :noop) (message "mindwtr: up to date"))
+   (t (message "mindwtr: sync ok%s"
+               (if (plist-get res :conflicts)
+                   (format " (%d conflict(s) — see report)"
+                           (length (plist-get res :conflicts)))
+                 "")))))
+
+(defun mindwtr--sync-handle-error (err)
+  "Dispatch a failed sync cycle's ERR, a (SYMBOL . DATA) signal capture.
+The async twin of the old synchronous attempt's `condition-case' arms:
+retryable server errors (transport failure/429/5xx) arm the exponential
+backoff; every other outcome resets it.  On any failure org and the shadow
+are left untouched (the engine only writes them on success)."
+  (let ((conds (get (car err) 'error-conditions))
+        (data (cdr err)))
+    (cond
+     ((memq 'mindwtr-api-auth-error conds)
+      (mindwtr--reset-backoff)
+      (message "mindwtr: authentication failed (check token)"))
+     ((and (memq 'mindwtr-api-error conds) (plist-get data :retryable))
+      ;; Cap the counter at the ceiling so persistent failures don't
+      ;; grow it unbounded across repeated triggers.
+      (setq mindwtr--retry-attempts
+            (min mindwtr-backoff-max-attempts
+                 (1+ mindwtr--retry-attempts)))
+      (mindwtr--schedule-retry))
+     ((memq 'mindwtr-api-error conds)
+      (mindwtr--reset-backoff)
+      (message "mindwtr: server error %s" (plist-get data :status)))
+     (t
+      (mindwtr--reset-backoff)
+      (message "mindwtr: %s" (error-message-string err))))))
+
 (defun mindwtr--sync-attempt ()
-  "Run one sync cycle and manage backoff state.
-Retryable server errors (429/5xx) arm an exponential backoff retry; all
-other outcomes reset the backoff.  On any failure org and the shadow are
-left untouched (the engine only writes them on success).  Re-entrant calls
-\(a timer firing inside the synchronous HTTP wait) are ignored so two
-cycles never run concurrently."
-  (if mindwtr--sync-in-progress
-      nil
-    (let ((mindwtr--sync-in-progress t)
-          (buf (mindwtr--prepare)))
+  "Launch one sync cycle; backoff and reporting run in its completion callback.
+With plz available the cycle's network legs are asynchronous: this returns as
+soon as the cycle is launched and Emacs stays responsive for the round trips.
+With a synchronous transport (tests, the url.el fallback) the whole cycle --
+completion callback included -- finishes before this returns, preserving the
+old blocking semantics.  Triggers while a cycle is in flight are ignored so
+two cycles never run concurrently (`mindwtr--sync-busy-p', which also
+reclaims a wedged guard).  A config error from `mindwtr--prepare' still
+signals synchronously, before the in-flight guard is taken."
+  (unless (mindwtr--sync-busy-p)
+    (let ((buf (mindwtr--prepare)))
+      (setq mindwtr--sync-in-progress t
+            mindwtr--sync-started-at (float-time))
       (condition-case err
-          (let ((res (mindwtr-sync-once
-                      buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))))
-            (mindwtr--reset-backoff)
-            (cond
-             ;; The sync succeeded but writing the rebuilt buffer to disk
-             ;; failed: the shadow/etag have advanced, so the on-disk file is
-             ;; now stale and the unsaved-edits gate would stand down every
-             ;; future tick silently.  Reuse the persistent error-state
-             ;; machinery to make that divergence visible and recoverable --
-             ;; it surfaces a standing message, itself stands down auto-sync,
-             ;; and is cleared only by a manual `mindwtr-sync' (which
-             ;; save-then-syncs and recovers).  (KTD-5)
-             ((plist-get res :save-failed)
-              (setq mindwtr--error-state
-                    "mindwtr: synced, but saving the file failed — disk is stale vs server (M-x mindwtr-sync to retry)")
-              (message "%s" mindwtr--error-state))
-             ((plist-get res :noop) (message "mindwtr: up to date"))
-             (t (message "mindwtr: sync ok%s"
-                         (if (plist-get res :conflicts)
-                             (format " (%d conflict(s) — see report)"
-                                     (length (plist-get res :conflicts)))
-                           "")))))
-        (mindwtr-api-auth-error
-         (mindwtr--reset-backoff)
-         (message "mindwtr: authentication failed (check token)"))
-        (mindwtr-api-error
-         (if (plist-get (cdr err) :retryable)
-             (progn
-               ;; Cap the counter at the ceiling so persistent failures don't
-               ;; grow it unbounded across repeated triggers.
-               (setq mindwtr--retry-attempts
-                     (min mindwtr-backoff-max-attempts
-                          (1+ mindwtr--retry-attempts)))
-               (mindwtr--schedule-retry))
-           (mindwtr--reset-backoff)
-           (message "mindwtr: server error %s" (plist-get (cdr err) :status))))
-        (error
-         (mindwtr--reset-backoff)
-         (message "mindwtr: %s" (error-message-string err)))))))
+          (mindwtr-sync-once-async
+           buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+           (lambda (res cb-err)
+             (setq mindwtr--sync-in-progress nil
+                   mindwtr--sync-started-at nil)
+             (if cb-err
+                 (mindwtr--sync-handle-error cb-err)
+               (mindwtr--sync-handle-result res))))
+        ;; The async entry routes cycle errors through the callback and cannot
+        ;; itself signal -- except a `quit' (C-g mid-launch) or a signal from
+        ;; the handlers above.  Release the guard rather than wedging it, then
+        ;; re-raise.  (Releasing after the callback already ran is a no-op.)
+        ((error quit)
+         (setq mindwtr--sync-in-progress nil
+               mindwtr--sync-started-at nil)
+         (signal (car err) (cdr err)))))))
 
 (defun mindwtr--file-buffer-dirty-p (path)
   "Non-nil when PATH is open in a buffer with unsaved edits.
@@ -263,7 +322,7 @@ sync has given up, or while the synced buffer has unsaved edits -- so a
 background rebuild never erases the user's in-progress work, backoff fully
 owns the retry cadence, and overlapping triggers never pile on.  A manual
 `mindwtr-sync' is the escape hatch that resets this state and saves first."
-  (unless (or mindwtr--sync-in-progress
+  (unless (or (mindwtr--sync-busy-p)
               (timerp mindwtr--retry-timer)
               mindwtr--error-state
               (mindwtr--buffer-has-unsaved-edits-p))
@@ -288,6 +347,9 @@ refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
         (when (and buf (buffer-modified-p buf))
           (with-current-buffer buf
             (mindwtr-sync--save-buffer-quietly))))))
+  ;; The cycle completes asynchronously (its own message follows); say the
+  ;; launch happened so an explicit M-x sync is not silent in the meantime.
+  (message "mindwtr: syncing...")
   (mindwtr--sync-attempt))
 
 ;;;###autoload
