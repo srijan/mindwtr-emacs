@@ -72,12 +72,7 @@ content out from under the just-passed concurrency guard."
 
 (defun mindwtr-sync--strip-device-local (entity)
   "Return ENTITY without device-local fields."
-  (let (out (i 0))
-    (while (< i (length entity))
-      (unless (memq (nth i entity) mindwtr-model-device-local-fields)
-        (setq out (plist-put out (nth i entity) (nth (1+ i) entity))))
-      (setq i (+ i 2)))
-    out))
+  (mindwtr-util-plist-omit entity mindwtr-model-device-local-fields))
 
 (defun mindwtr-sync--empty-p (v)
   "Non-nil if content value V counts as absent (nil, empty list/string)."
@@ -92,12 +87,7 @@ change detection agree on what \"the same content\" means."
 
 (defun mindwtr-sync--plist-remove (pl k)
   "Return PL without key K."
-  (let (out (i 0))
-    (while (< i (length pl))
-      (unless (eq (nth i pl) k)
-        (setq out (plist-put out (nth i pl) (nth (1+ i) pl))))
-      (setq i (+ i 2)))
-    out))
+  (mindwtr-util-plist-omit pl (list k)))
 
 (defun mindwtr-sync--reattach-checklist-ids (local shadow)
   "Return LOCAL checklist items with server-assigned ids re-attached from SHADOW.
@@ -492,24 +482,30 @@ the engine, so this is the only site that needs the exception."
   (if (eq key :people) 'person
     (intern (substring (symbol-name key) 1 (1- (length (symbol-name key)))))))
 
-(defun mindwtr-sync--find-entry (appdata id)
-  "Return (KIND . ENTITY) for ID in APPDATA across all entity lists, or nil.
-KIND is the singular symbol (task/project/section/area)."
-  (catch 'hit
+(defun mindwtr-sync--entry-index (appdata)
+  "Return a hash id -> (KIND . ENTITY) across all of APPDATA's entity lists.
+KIND is the singular symbol (task/project/section/area/person).  The first
+occurrence of an id wins, matching the old per-id linear scan's iteration
+order over `mindwtr-sync--entity-keys'."
+  (let ((h (make-hash-table :test 'equal)))
     (dolist (key mindwtr-sync--entity-keys)
-      (dolist (e (plist-get appdata key))
-        (when (string= (plist-get e :id) id)
-          (throw 'hit (cons (mindwtr-sync--key->kind key) e)))))
-    nil))
+      (let ((kind (mindwtr-sync--key->kind key)))
+        (dolist (e (plist-get appdata key))
+          (let ((id (plist-get e :id)))
+            (when (and id (not (gethash id h)))
+              (puthash id (cons kind e) h))))))
+    h))
 
 (defun mindwtr-sync-detect-conflicts (candidate merged changed-ids)
   "Return lost-edit conflicts for CHANGED-IDS comparing CANDIDATE vs MERGED.
 Each conflict is (:id ID :kind KIND :mine OURS :theirs SERVERS); KIND lets
 the report's restore action rebuild the entity in the buffer."
-  (let (conflicts)
+  (let ((mine-idx (mindwtr-sync--entry-index candidate))
+        (theirs-idx (mindwtr-sync--entry-index merged))
+        conflicts)
     (dolist (id changed-ids)
-      (let* ((mine-e (mindwtr-sync--find-entry candidate id))
-             (theirs-e (mindwtr-sync--find-entry merged id))
+      (let* ((mine-e (gethash id mine-idx))
+             (theirs-e (gethash id theirs-idx))
              (mine (cdr mine-e))
              (theirs (cdr theirs-e)))
         (when (and mine theirs
@@ -622,70 +618,30 @@ Classification per entity, in this order:
       (setq out (plist-put out key
                            (mapcar
                             (lambda (e)
-                              (let (clean (i 0))
-                                (while (< i (length e))
-                                  (unless (memq (nth i e)
-                                                '(:mw-kind :mw-extra-props
-                                                  :mw-logbook-minutes :mw-clock-synced))
-                                    (setq clean (plist-put clean (nth i e) (nth (1+ i) e))))
-                                  (setq i (+ i 2)))
-                                clean))
+                              (mindwtr-util-plist-omit
+                               e '(:mw-kind :mw-extra-props
+                                   :mw-logbook-minutes :mw-clock-synced)))
                             (plist-get appdata key)))))
     out))
 
-(defun mindwtr-sync--changed-ids (local shadow)
-  "Return ids of entities that are create/update vs SHADOW."
-  (let (ids)
-    (dolist (key mindwtr-sync--entity-keys)
-      (let ((idx (mindwtr-shadow-index shadow key)))
-        (dolist (le (plist-get local key))
-          (let* ((id (plist-get le :id))
-                 (se (and id (gethash id idx))))
-            (when (and id (not (eq (mindwtr-sync--classify le se) 'unchanged)))
-              (push id ids))))))
-    ids))
-
-(defun mindwtr-sync--stats (local shadow)
-  "Return (:created C :updated U :deleted D) for LOCAL parse vs SHADOW.
-A create is a local entity not in the shadow (including a new heading that
-has no id yet); an update is a local entity whose signature differs from
-its shadow twin; a delete is a live shadow entity absent from LOCAL whose
-absence is not explained by archival or a hidden parent."
+(defun mindwtr-sync--local-diff (local shadow)
+  "Classify LOCAL vs SHADOW in one pass: (:ids IDS :stats STATS :changes CHANGES).
+IDS are the created/updated entity ids (`mindwtr-sync--changed-ids'), STATS
+the (:created C :updated U :deleted D) counts (`mindwtr-sync--stats'), and
+CHANGES the per-entity change list (`mindwtr-sync--local-changes').  One pass
+computes all three so each entity pair is signed once per cycle instead of
+once per consumer -- the three legacy accessors are thin extractors over this.
+A create is a local entity not in the shadow (including a new heading that has
+no id yet); an update is a local entity whose signature differs from its
+shadow twin; a delete is a live shadow entity absent from LOCAL whose absence
+is not explained by archival or a hidden parent.  Updated CHANGES entries
+carry :before SE :after LE so the caller can show a field diff."
   (let ((created 0) (updated 0) (deleted 0)
-        (live (mindwtr-sync--live-container-ids shadow)))
+        (live (mindwtr-sync--live-container-ids shadow))
+        ids changes)
     (dolist (key mindwtr-sync--entity-keys)
       (let ((idx (mindwtr-shadow-index shadow key))
             (kind (mindwtr-sync--key->kind key))
-            (seen (make-hash-table :test 'equal)))
-        (dolist (le (plist-get local key))
-          (let* ((id (plist-get le :id))
-                 (se (and id (gethash id idx))))
-            (when id (puthash id t seen))
-            (pcase (mindwtr-sync--classify le se)
-              ('create (setq created (1+ created)))
-              ('update (setq updated (1+ updated))))))
-        (dolist (se (plist-get shadow key))
-          (let ((id (plist-get se :id)))
-            (unless (or (gethash id seen)
-                        (plist-get se :deletedAt)
-                        (mindwtr-sync--rendered-absent-p se kind live))
-              (setq deleted (1+ deleted)))))))
-    (list :created created :updated updated :deleted deleted)))
-
-(defun mindwtr-sync--local-changes (local shadow)
-  "Return the local proposed changes for this sync.
-Each element is (:id ID :kind KIND :title TITLE :change CHANGE), where CHANGE
-is one of `created'/`updated'/`deleted'.  Updated entries also carry
-:before SE :after LE so the caller can show a field diff.
-
-Classification reuses `mindwtr-sync--classify' so the listed entities match
-what `mindwtr-sync--stats' counts exactly -- no drift between the count line
-and the detail list.  Returns nil when there are no local changes."
-  (let ((live (mindwtr-sync--live-container-ids shadow))
-        out)
-    (dolist (key mindwtr-sync--entity-keys)
-      (let ((kind (mindwtr-sync--key->kind key))
-            (idx (mindwtr-shadow-index shadow key))
             (seen (make-hash-table :test 'equal)))
         ;; Pass 1 -- every local entity: created or updated vs shadow.
         (dolist (le (plist-get local key))
@@ -694,27 +650,55 @@ and the detail list.  Returns nil when there are no local changes."
             (when id (puthash id t seen))
             (pcase (mindwtr-sync--classify le se)
               ('create
+               (setq created (1+ created))
+               (when id (push id ids))
                (push (list :id id :kind kind
                            :title (mindwtr-model-entity-title le)
                            :change 'created)
-                     out))
+                     changes))
               ('update
+               (setq updated (1+ updated))
+               (when id (push id ids))
                (push (list :id id :kind kind
                            :title (mindwtr-model-entity-title le)
                            :change 'updated
                            :before se :after le)
-                     out)))))
+                     changes)))))
         ;; Pass 2 -- live shadow entities absent from local: deleted.
         (dolist (se (plist-get shadow key))
           (let ((id (plist-get se :id)))
             (unless (or (gethash id seen)
                         (plist-get se :deletedAt)
                         (mindwtr-sync--rendered-absent-p se kind live))
+              (setq deleted (1+ deleted))
               (push (list :id id :kind kind
                           :title (mindwtr-model-entity-title se)
                           :change 'deleted)
-                    out))))))
-    (nreverse out)))
+                    changes))))))
+    (list :ids ids
+          :stats (list :created created :updated updated :deleted deleted)
+          :changes (nreverse changes))))
+
+(defun mindwtr-sync--changed-ids (local shadow)
+  "Return ids of entities that are create/update vs SHADOW.
+Extractor over `mindwtr-sync--local-diff'; the sync cycle itself calls the
+diff once and reads all three facets from it."
+  (plist-get (mindwtr-sync--local-diff local shadow) :ids))
+
+(defun mindwtr-sync--stats (local shadow)
+  "Return (:created C :updated U :deleted D) for LOCAL parse vs SHADOW.
+Extractor over `mindwtr-sync--local-diff' (see it for the classification
+rules); the sync cycle itself calls the diff once."
+  (plist-get (mindwtr-sync--local-diff local shadow) :stats))
+
+(defun mindwtr-sync--local-changes (local shadow)
+  "Return the local proposed changes for this sync.
+Each element is (:id ID :kind KIND :title TITLE :change CHANGE), updated
+entries also carrying :before/:after.  Extractor over
+`mindwtr-sync--local-diff', which guarantees the listed entities match what
+`mindwtr-sync--stats' counts exactly -- no drift between the count line and
+the detail list.  Returns nil when there are no local changes."
+  (plist-get (mindwtr-sync--local-diff local shadow) :changes))
 
 (defun mindwtr-sync--surfaces (main-buffer)
   "Return the ordered surface list for this cycle (KTD2).
@@ -871,8 +855,10 @@ stage re-binds the dynamic var from this field around its own body instead."
       (when (and archive-strict-eligible (not strict))
         (message "mindwtr: archive file degraded or empty this cycle; archived deletions NOT applied (echoing instead)"))
       (let ((mindwtr-sync--archive-strict strict))
-        (let* ((changed (mindwtr-sync--changed-ids local shadow))
-               (stats (mindwtr-sync--stats local shadow))
+        ;; One diff pass yields changed ids, stats, AND the change list; each
+        ;; entity pair is classified (signed) once per cycle.
+        (let* ((diff (mindwtr-sync--local-diff local shadow))
+               (stats (plist-get diff :stats))
                (local-dirty (> (+ (plist-get stats :created)
                                   (plist-get stats :updated)
                                   (plist-get stats :deleted))
@@ -884,7 +870,9 @@ stage re-binds the dynamic var from this field around its own body instead."
           (list :buffer buffer :shadow shadow :device device
                 :surfaces surfaces :local local :parse-warnings parse-warnings
                 :archive-active (and archive-active t) :strict strict
-                :changed changed :stats stats :local-dirty local-dirty
+                :changed (plist-get diff :ids) :stats stats
+                :local-changes (plist-get diff :changes)
+                :local-dirty local-dirty
                 :clock-dirty clock-dirty :force-backfill force-backfill
                 :shadow-etag (mindwtr-shadow-get-etag)))))))
 
@@ -988,9 +976,10 @@ synchronously (possibly from a process sentinel on the async path)."
              ;; today.  Computed from the same shadow/wire/merged bindings
              ;; the conflict path consumes; excludes own edits and conflicts.
              (incoming (mindwtr-sync--incoming-changes wire merged shadow conflicts))
-             ;; Local changes this device proposed (local vs shadow), mirroring
-             ;; stats so the count line and the detail list are consistent.
-             (local-changes (mindwtr-sync--local-changes local shadow))
+             ;; Local changes this device proposed (local vs shadow), computed
+             ;; by prepare's single diff pass so the count line and the detail
+             ;; list come from the same classification.
+             (local-changes (plist-get st :local-changes))
              (backup-file nil))
             ;; Per-surface concurrency guard: each buffer must be unchanged since
             ;; its post-parse tick (the PUT/GET window).

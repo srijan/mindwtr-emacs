@@ -57,14 +57,23 @@ to a nil status, leaking the keyword into the title and aborting the sync."
           (org-inhibit-startup t))
       (org-mode))))
 
-(defun mindwtr-parse--drawer-alist ()
-  "Return an alist (KEY . VALUE) of the PROPERTIES drawer for this entry.
-This scans the heading body directly rather than relying on
-`org-entry-get', because the latter fails to associate a property
-drawer with its heading when more than one planning line (e.g. both
+(defvar-local mindwtr-parse--drawer-cache nil
+  "Per-buffer memo for `mindwtr-parse--drawer-alist': (TICK . HASH pos->alist).
+The parser reads a heading's drawer once per property (`mindwtr-parse--prop'),
+which without a memo re-scans the same entry ~15-20 times per heading -- the
+dominant CPU cost of a parse.  The hash maps a heading's start position to its
+scanned alist; the whole hash is discarded whenever the buffer's
+`buffer-chars-modified-tick' moves, so any edit invalidates every entry (a
+position-keyed memo would otherwise go stale as text shifts).  An entry with
+no drawer caches the sentinel `none' (nil would read as a miss).")
+
+(defun mindwtr-parse--drawer-alist-1 ()
+  "Scan and return this entry's PROPERTIES drawer alist (uncached).
+Point must be at the heading.  This scans the heading body directly rather
+than relying on `org-entry-get', because the latter fails to associate a
+property drawer with its heading when more than one planning line (e.g. both
 SCHEDULED and DEADLINE on separate lines) precedes the drawer."
   (save-excursion
-    (org-back-to-heading t)
     (let ((end (save-excursion (outline-next-heading) (point)))
           (case-fold-search nil)
           props)
@@ -79,6 +88,27 @@ SCHEDULED and DEADLINE on separate lines) precedes the drawer."
                   props))
           (forward-line 1)))
       (nreverse props))))
+
+(defun mindwtr-parse--drawer-alist ()
+  "Return an alist (KEY . VALUE) of the PROPERTIES drawer for this entry.
+Memoized per (buffer tick, heading position) -- see
+`mindwtr-parse--drawer-cache'; the scan itself is
+`mindwtr-parse--drawer-alist-1'."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((tick (buffer-chars-modified-tick)))
+      (unless (and mindwtr-parse--drawer-cache
+                   (= (car mindwtr-parse--drawer-cache) tick))
+        (setq mindwtr-parse--drawer-cache
+              (cons tick (make-hash-table :test 'eql))))
+      (let* ((h (cdr mindwtr-parse--drawer-cache))
+             (cached (gethash (point) h)))
+        (cond
+         ((eq cached 'none) nil)
+         (cached cached)
+         (t (let ((props (mindwtr-parse--drawer-alist-1)))
+              (puthash (point) (or props 'none) h)
+              props)))))))
 
 (defun mindwtr-parse--prop (key)
   "Return raw value of property KEY for this entry, or nil."
@@ -343,12 +373,7 @@ type was inferred from context).  When omitted it is read from the
 
 (defun mindwtr-parse--strip-internal (e)
   "Return E without internal :mw-* keys (but keep :mw-extra-props in metadata)."
-  (let (out (i 0))
-    (while (< i (length e))
-      (unless (memq (nth i e) '(:mw-kind :mw-ancestors))
-        (setq out (plist-put out (nth i e) (nth (1+ i) e))))
-      (setq i (+ i 2)))
-    out))
+  (mindwtr-util-plist-omit e '(:mw-kind :mw-ancestors)))
 
 (defun mindwtr-parse--ancestor-id (kind)
   "Return MW_ID of the nearest ancestor heading whose MW_TYPE is KIND, or nil."

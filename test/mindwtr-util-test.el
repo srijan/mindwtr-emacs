@@ -151,3 +151,15 @@ while scalar nils are still omitted."
   ;; a scalar nil is still omitted
   (should-not (string-match-p "reviewAt"
                               (mindwtr-util-json-encode '(:reviewAt nil :id "x")))))
+
+(ert-deftest mindwtr-util-plist-omit-drops-keys-preserves-order ()
+  (should (equal (mindwtr-util-plist-omit '(:a 1 :b 2 :c 3) '(:b))
+                 '(:a 1 :c 3)))
+  (should (equal (mindwtr-util-plist-omit '(:a 1 :b 2) '(:a :b)) nil))
+  (should (equal (mindwtr-util-plist-omit '(:a nil :b 2) '(:c))
+                 '(:a nil :b 2)))
+  (should (equal (mindwtr-util-plist-omit nil '(:a)) nil))
+  ;; The input plist is not mutated.
+  (let ((pl (list :a 1 :b 2)))
+    (mindwtr-util-plist-omit pl '(:a))
+    (should (equal pl '(:a 1 :b 2)))))

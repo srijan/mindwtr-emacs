@@ -163,6 +163,18 @@ prevents a coding-system prompt when CONTENT carries non-ASCII text."
       (insert content))
     (rename-file tmp path t)))
 
+(defun mindwtr-util-plist-omit (plist keys)
+  "Return a copy of PLIST without the entries whose key is in KEYS.
+KEYS are compared with `memq' (keyword keys).  Single tail walk -- the
+shared replacement for the O(n^2) `nth'-indexed strip loops that were
+hand-rolled at several sites.  PLIST is not mutated; key order is preserved."
+  (let (out)
+    (while plist
+      (unless (memq (car plist) keys)
+        (setq out (cons (cadr plist) (cons (car plist) out))))
+      (setq plist (cddr plist)))
+    (nreverse out)))
+
 (defmacro mindwtr-util--map-entries (func &rest args)
   "Run `org-map-entries' (FUNC plus optional ARGS) with `buffer-file-name' nil.
 `org-map-entries' (nil scope) otherwise hands this buffer's file to Org's

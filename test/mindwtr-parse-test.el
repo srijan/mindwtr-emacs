@@ -963,3 +963,25 @@ CLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:30] =>  1:30
           (insert rendered) (org-mode) (goto-char (point-min))
           (unless (org-at-heading-p) (org-next-visible-heading 1))
           (should (eq (plist-get (mindwtr-parse-heading) :mw-clock-synced) 45)))))))
+
+(ert-deftest mindwtr-parse-drawer-cache-invalidates-on-edit ()
+  "The per-heading drawer memo must serve fresh values after any buffer edit
+(the cache is keyed on `buffer-chars-modified-tick')."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (should (equal (mindwtr-parse--prop "MW_ID") "t1"))
+    ;; Edit the drawer value in place; a stale cache would still say t1.
+    (goto-char (point-min))
+    (search-forward ":MW_ID: t1")
+    (replace-match ":MW_ID: t2")
+    (goto-char (point-min))
+    (should (equal (mindwtr-parse--prop "MW_ID") "t2"))
+    ;; A structural edit (new heading above) shifts positions; the tick bump
+    ;; must invalidate position-keyed entries rather than misattribute them.
+    (goto-char (point-min))
+    (insert "* Other\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: o1\n:END:\n")
+    (goto-char (point-max))
+    (should (equal (mindwtr-parse--prop "MW_ID") "t2"))))

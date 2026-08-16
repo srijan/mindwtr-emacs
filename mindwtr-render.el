@@ -221,10 +221,10 @@ Returns a string ending with a newline."
         (push (format ":MW_UPDATED: %s"
                       (mindwtr-util-iso->org (plist-get shadow :updatedAt))) lines)))
     ;; preserved unknown properties
-    (let ((extra (plist-get entity :mw-extra-props)) (i 0))
-      (while (< i (length extra))
-        (push (format ":%s: %s" (nth i extra) (nth (1+ i) extra)) lines)
-        (setq i (+ i 2))))
+    (let ((extra (plist-get entity :mw-extra-props)))
+      (while extra
+        (push (format ":%s: %s" (car extra) (cadr extra)) lines)
+        (setq extra (cddr extra))))
     (push ":END:" lines)
     ;; body: notes prose then checklist.  The notes field is per-kind
     ;; (`mindwtr-model-notes-field': task/section -> :description, project ->
@@ -341,47 +341,65 @@ the org-only body for E's id are injected into the rendered heading."
           (equal (mindwtr-model-status->list (plist-get e :status)) role)))
    tasks))
 
+(defun mindwtr-render--group-children (sections tasks)
+  "Group SECTIONS and TASKS by their parent id for O(1) subtree lookup.
+Returns (SECS-BY-PROJ TASKS-BY-SEC PTASKS-BY-PROJ): sections keyed by
+`:projectId', sectioned tasks keyed by `:sectionId', and section-less project
+tasks keyed by `:projectId'.  Each bucket preserves the incoming relative
+order, so `mindwtr-render--sorted''s stable tie-break is unchanged from the
+per-parent `cl-remove-if-not' filters this replaces (which were O(parents x
+children) per render)."
+  (let ((secs-by-proj (make-hash-table :test 'equal))
+        (tasks-by-sec (make-hash-table :test 'equal))
+        (ptasks-by-proj (make-hash-table :test 'equal)))
+    (dolist (s sections)
+      (let ((pid (plist-get s :projectId)))
+        (when pid (push s (gethash pid secs-by-proj)))))
+    (dolist (tk tasks)
+      (let ((sid (plist-get tk :sectionId))
+            (pid (plist-get tk :projectId)))
+        (cond (sid (push tk (gethash sid tasks-by-sec)))
+              (pid (push tk (gethash pid ptasks-by-proj))))))
+    (dolist (h (list secs-by-proj tasks-by-sec ptasks-by-proj))
+      (maphash (lambda (k v) (puthash k (nreverse v) h)) h))
+    (list secs-by-proj tasks-by-sec ptasks-by-proj)))
+
 (defun mindwtr-render--task-bucket (role level tasks org-only)
   "Render container ROLE at LEVEL, then standalone TASKS (pre-filtered) at LEVEL+1."
-  (let ((out (mindwtr-render--container role level)))
+  (let ((parts (list (mindwtr-render--container role level))))
     (dolist (e (mindwtr-render--sorted tasks))
-      (setq out (concat out (mindwtr-render--entity e 'task (1+ level) org-only))))
-    out))
+      (push (mindwtr-render--entity e 'task (1+ level) org-only) parts))
+    (mapconcat #'identity (nreverse parts) "")))
 
-(defun mindwtr-render--project-subtree (proj level sections tasks org-only)
+(defun mindwtr-render--project-subtree (proj level children org-only)
   "Render PROJ at LEVEL, its sections at LEVEL+1 (their tasks LEVEL+2), and its
-section-less tasks at LEVEL+1."
-  (let ((out (mindwtr-render--entity proj 'project level org-only)))
-    (dolist (sec (mindwtr-render--sorted
-                  (cl-remove-if-not
-                   (lambda (s) (equal (plist-get s :projectId) (plist-get proj :id)))
-                   sections)))
-      (setq out (concat out (mindwtr-render--entity sec 'section (1+ level) org-only)))
-      (dolist (tk (mindwtr-render--sorted
-                   (cl-remove-if-not
-                    (lambda (tk) (equal (plist-get tk :sectionId) (plist-get sec :id)))
-                    tasks)))
-        (setq out (concat out (mindwtr-render--entity tk 'task (+ level 2) org-only)))))
-    (dolist (tk (mindwtr-render--sorted
-                 (cl-remove-if-not
-                  (lambda (tk) (and (equal (plist-get tk :projectId) (plist-get proj :id))
-                                    (not (plist-get tk :sectionId))))
-                  tasks)))
-      (setq out (concat out (mindwtr-render--entity tk 'task (1+ level) org-only))))
-    out))
+section-less tasks at LEVEL+1.  CHILDREN is the grouped lookup from
+`mindwtr-render--group-children'."
+  (pcase-let ((`(,secs-by-proj ,tasks-by-sec ,ptasks-by-proj) children)
+              (pid (plist-get proj :id)))
+    (let ((parts (list (mindwtr-render--entity proj 'project level org-only))))
+      (dolist (sec (mindwtr-render--sorted (gethash pid secs-by-proj)))
+        (push (mindwtr-render--entity sec 'section (1+ level) org-only) parts)
+        (dolist (tk (mindwtr-render--sorted
+                     (gethash (plist-get sec :id) tasks-by-sec)))
+          (push (mindwtr-render--entity tk 'task (+ level 2) org-only) parts)))
+      (dolist (tk (mindwtr-render--sorted (gethash pid ptasks-by-proj)))
+        (push (mindwtr-render--entity tk 'task (1+ level) org-only) parts))
+      (mapconcat #'identity (nreverse parts) ""))))
 
-(defun mindwtr-render--projects-bucket (role level projects sections tasks area-order org-only)
+(defun mindwtr-render--projects-bucket (role level projects children area-order org-only)
   "Render container ROLE at LEVEL, then PROJECTS whose project-status maps to ROLE,
-grouped by area, each as a subtree at LEVEL+1."
-  (let ((out (mindwtr-render--container role level))
+grouped by area, each as a subtree at LEVEL+1.  CHILDREN is the grouped lookup
+from `mindwtr-render--group-children'."
+  (let ((parts (list (mindwtr-render--container role level)))
         (matched (cl-remove-if-not
                   (lambda (p)
                     (equal (mindwtr-model-project-status->list (plist-get p :status)) role))
                   projects)))
     (dolist (proj (mindwtr-render--sorted-projects matched area-order))
-      (setq out (concat out (mindwtr-render--project-subtree
-                             proj (1+ level) sections tasks org-only))))
-    out))
+      (push (mindwtr-render--project-subtree proj (1+ level) children org-only)
+            parts))
+    (mapconcat #'identity (nreverse parts) "")))
 
 (defun mindwtr-render-appdata (appdata &optional org-only)
   "Render APPDATA to the canonical v3 GTD-list org layout, returning a string.
@@ -394,42 +412,49 @@ are not rendered."
          (projects (mindwtr-render--live (plist-get appdata :projects) t))
          (sections (mindwtr-render--live (plist-get appdata :sections)))
          (tasks (mindwtr-render--live (plist-get appdata :tasks) t))
+         (children (mindwtr-render--group-children sections tasks))
          ;; Lead with the in-buffer keyword line so org registers the Mindwtr
          ;; TODO sequence for this file regardless of the user's global config.
-         (out (concat (mindwtr-model-todo-keyword-line) "\n")))
+         (parts (list (concat (mindwtr-model-todo-keyword-line) "\n"))))
     ;; Inbox
-    (setq out (concat out (mindwtr-render--task-bucket
-                           "inbox" 1
-                           (mindwtr-render--standalone-for "inbox" tasks) org-only)))
+    (push (mindwtr-render--task-bucket
+           "inbox" 1
+           (mindwtr-render--standalone-for "inbox" tasks) org-only)
+          parts)
     ;; Single Actions (next | waiting | done)
-    (setq out (concat out (mindwtr-render--task-bucket
-                           "single-actions" 1
-                           (mindwtr-render--standalone-for "single-actions" tasks) org-only)))
+    (push (mindwtr-render--task-bucket
+           "single-actions" 1
+           (mindwtr-render--standalone-for "single-actions" tasks) org-only)
+          parts)
     ;; Projects (active | waiting), grouped by area
-    (setq out (concat out (mindwtr-render--projects-bucket
-                           "projects" 1 projects sections tasks area-order org-only)))
+    (push (mindwtr-render--projects-bucket
+           "projects" 1 projects children area-order org-only)
+          parts)
     ;; Someday parent with two nested children
-    (setq out (concat out (mindwtr-render--container "someday" 1)))
-    (setq out (concat out (mindwtr-render--task-bucket
-                           "someday-single-actions" 2
-                           (mindwtr-render--standalone-for "someday-single-actions" tasks)
-                           org-only)))
-    (setq out (concat out (mindwtr-render--projects-bucket
-                           "someday-projects" 2 projects sections tasks area-order org-only)))
+    (push (mindwtr-render--container "someday" 1) parts)
+    (push (mindwtr-render--task-bucket
+           "someday-single-actions" 2
+           (mindwtr-render--standalone-for "someday-single-actions" tasks)
+           org-only)
+          parts)
+    (push (mindwtr-render--projects-bucket
+           "someday-projects" 2 projects children area-order org-only)
+          parts)
     ;; Reference
-    (setq out (concat out (mindwtr-render--task-bucket
-                           "reference" 1
-                           (mindwtr-render--standalone-for "reference" tasks) org-only)))
+    (push (mindwtr-render--task-bucket
+           "reference" 1
+           (mindwtr-render--standalone-for "reference" tasks) org-only)
+          parts)
     ;; Areas of Focus reference section
-    (setq out (concat out (mindwtr-render--container "areas" 1)))
+    (push (mindwtr-render--container "areas" 1) parts)
     (dolist (a (mindwtr-render--sorted areas))
-      (setq out (concat out (mindwtr-render--entity a 'area 2 org-only))))
+      (push (mindwtr-render--entity a 'area 2 org-only) parts))
     ;; People reference section (modeled on Areas; sorted by name, KTD5)
-    (setq out (concat out (mindwtr-render--container "people" 1)))
+    (push (mindwtr-render--container "people" 1) parts)
     (dolist (p (mindwtr-render--people-sorted
                 (mindwtr-render--live (plist-get appdata :people))))
-      (setq out (concat out (mindwtr-render--entity p 'person 2 org-only))))
-    out))
+      (push (mindwtr-render--entity p 'person 2 org-only) parts))
+    (mapconcat #'identity (nreverse parts) "")))
 
 ;;; Archive surface render -----------------------------------------------------
 
@@ -457,13 +482,19 @@ A task whose nearest container (section first, else project) belongs to an
 archived project rendered in this file is pulled into that subtree by
 `mindwtr-render--project-subtree'; such a task must be excluded from the flat
 archived-task list so it appears exactly once (R3).  ARCH-PROJ-IDS and
-ARCH-SECTION-IDS are the ids of the archived projects and of the sections that
-belong to them."
+ARCH-SECTION-IDS are hash sets (id -> t) of the archived projects and of the
+sections that belong to them."
   (let ((sid (plist-get task :sectionId))
         (pid (plist-get task :projectId)))
-    (cond (sid (and (member sid arch-section-ids) t))
-          (pid (and (member pid arch-proj-ids) t))
+    (cond (sid (and (gethash sid arch-section-ids) t))
+          (pid (and (gethash pid arch-proj-ids) t))
           (t nil))))
+
+(defun mindwtr-render--id-set (entities)
+  "Return a hash set (id -> t) of ENTITIES' `:id' values."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (e entities) (puthash (plist-get e :id) t h))
+    h))
 
 (defun mindwtr-render-archive-appdata (appdata &optional org-only)
   "Render APPDATA's archived entities to the canonical archive-file layout.
@@ -483,16 +514,17 @@ determinism, and the render round-trips byte-stably (R4)."
          ;; where archived entities live.
          (sections (mindwtr-render--live (plist-get appdata :sections)))
          (tasks (mindwtr-render--live (plist-get appdata :tasks)))
+         (children (mindwtr-render--group-children sections tasks))
          (arch-projects
           (cl-remove-if-not
            (lambda (p) (equal (plist-get p :status) "archived"))
            (mindwtr-render--live (plist-get appdata :projects))))
-         (arch-proj-ids (mapcar (lambda (p) (plist-get p :id)) arch-projects))
+         (arch-proj-ids (mindwtr-render--id-set arch-projects))
          (arch-section-ids
-          (mapcar (lambda (s) (plist-get s :id))
-                  (cl-remove-if-not
-                   (lambda (s) (member (plist-get s :projectId) arch-proj-ids))
-                   sections)))
+          (mindwtr-render--id-set
+           (cl-remove-if-not
+            (lambda (s) (gethash (plist-get s :projectId) arch-proj-ids))
+            sections)))
          (flat-tasks
           (cl-remove-if-not
            (lambda (tk)
@@ -500,17 +532,17 @@ determinism, and the render round-trips byte-stably (R4)."
                   (not (mindwtr-render--archived-in-subtree-p
                         tk arch-proj-ids arch-section-ids))))
            tasks))
-         (out (concat (mindwtr-model-todo-keyword-line) "\n")))
-    (setq out (concat out (mindwtr-render--container "archive" 1)))
+         (parts (list (concat (mindwtr-model-todo-keyword-line) "\n"))))
+    (push (mindwtr-render--container "archive" 1) parts)
     ;; (a) flat archived tasks, containment props injected into the drawer
     (dolist (tk (mindwtr-render--sorted flat-tasks))
-      (setq out (concat out (mindwtr-render--inject-containment
-                             (mindwtr-render--entity tk 'task 2 org-only) tk))))
+      (push (mindwtr-render--inject-containment
+             (mindwtr-render--entity tk 'task 2 org-only) tk)
+            parts))
     ;; (b) archived projects as full subtrees (children NOT dropped for archived)
     (dolist (proj (mindwtr-render--sorted-projects arch-projects area-order))
-      (setq out (concat out (mindwtr-render--project-subtree
-                             proj 2 sections tasks org-only))))
-    out))
+      (push (mindwtr-render--project-subtree proj 2 children org-only) parts))
+    (mapconcat #'identity (nreverse parts) "")))
 
 (provide 'mindwtr-render)
 ;;; mindwtr-render.el ends here
