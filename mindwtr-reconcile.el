@@ -24,19 +24,18 @@
 (require 'mindwtr-signature)
 (require 'mindwtr-util)
 
-(defun mindwtr-reconcile--id-markers ()
-  "Return a hash MW_ID -> marker at heading start for every entity heading."
-  (let ((h (make-hash-table :test 'equal)))
-    (mindwtr-util--map-entries
-     (lambda ()
-       ;; Use the parser's own drawer scan rather than `org-entry-get': the
-       ;; latter fails to associate a PROPERTIES drawer with its heading when
-       ;; another drawer (e.g. a LOGBOOK placed above PROPERTIES) precedes it,
-       ;; which would leave the entity unmatched and make reconcile append a
-       ;; spurious duplicate instead of updating it in place.
-       (let ((id (mindwtr-parse--prop "MW_ID")))
-         (when id (puthash id (point-marker) h)))))
-    h))
+(defun mindwtr-reconcile--find-id-pos (id)
+  "Return the heading-start position of the entity whose MW_ID is ID, or nil.
+A direct drawer-line regex search (like `mindwtr-reconcile--goto-id', but
+side-effect-free and MW_ID-only), replacing the old whole-buffer marker-hash
+scan -- which cost a full `org-map-entries' pass per lookup and left a live
+marker on every heading until GC (markers tax every subsequent buffer edit)."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((re (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" (regexp-quote id))))
+      (when (re-search-forward re nil t)
+        (org-back-to-heading t)
+        (point)))))
 
 (defun mindwtr-reconcile--body-start ()
   "Return the position just after this entry's PROPERTIES drawer.
@@ -473,11 +472,10 @@ A no-op when ID is nil or its heading no longer exists (a remote delete of the
 clocked entry).  Targets the open clock -- a `CLOCK:' line with a start stamp
 and no `--' end -- so the markers match org's own clock-in placement."
   (when id
-    (let ((m (gethash id (mindwtr-reconcile--id-markers))))
-      (when m
+    (let ((pos (mindwtr-reconcile--find-id-pos id)))
+      (when pos
         (save-excursion
-          (goto-char m)
-          (org-back-to-heading t)
+          (goto-char pos)
           (move-marker org-clock-hd-marker (point) (current-buffer))
           (let ((end (save-excursion (outline-next-heading) (point))))
             (when (re-search-forward "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$" end t)
@@ -504,8 +502,12 @@ staged in a temporary one."
           ;; baseline (29.3); it was marked obsolete in 31.1 (in favour of a
           ;; reworked `replace-region-contents' with an incompatible signature),
           ;; so suppress that newer-Emacs warning rather than branch on version.
+          ;; MAX-SECS bounds the diff: on a large, heavily-changed buffer the
+          ;; comparison can go quadratic, and past the bound it degrades to a
+          ;; coarser replacement (markers may then move -- the pre-diff
+          ;; behavior) instead of freezing Emacs.
           (with-suppressed-warnings ((obsolete replace-buffer-contents))
-            (replace-buffer-contents source)))))))
+            (replace-buffer-contents source 2)))))))
 
 (defun mindwtr-reconcile-buffer (merged &optional render-fn)
   "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
@@ -590,12 +592,12 @@ the next sync proposes it again.  Returns:
                by a remote deletion).
 The caller surfaces `partial'/nil so a lost edit is never silently
 reported as restored; the user falls back to the pre-sync backup."
-  (let ((m (gethash (plist-get entity :id) (mindwtr-reconcile--id-markers)))
+  (let ((pos (mindwtr-reconcile--find-id-pos (plist-get entity :id)))
         (mindwtr-render-area-names (mindwtr-render--area-name-map (mindwtr-parse-buffer))))
-    (if (not m)
+    (if (not pos)
         nil
       (save-excursion
-        (goto-char m)
+        (goto-char pos)
         (mindwtr-reconcile--rebuild-entry entity kind))
       (let ((re (mindwtr-reconcile--find-parsed (plist-get entity :id))))
         (if (and re (string= (mindwtr-signature re) (mindwtr-signature entity)))

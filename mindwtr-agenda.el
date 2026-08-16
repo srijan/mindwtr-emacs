@@ -63,24 +63,27 @@ done entities are not actionable and must not appear in these views."
   (unless mindwtr-file (error "mindwtr-agenda: set `mindwtr-file'"))
   (list mindwtr-file))
 
+(defvar mindwtr-agenda--stuck-cache nil
+  "When non-nil (a hash (BUFFER . POS) -> boolean), memoizes stuck-project scans.
+Bound to a fresh hash by `mindwtr-agenda--open' around one agenda build: the
+Projects view runs `mindwtr-agenda--project-stuck-p' once per line via the
+prefix format AND once per comparison in the sort (O(n log n) subtree scans
+without the memo), all against an unchanging source buffer.  Nil outside a
+build (e.g. an `org-agenda-redo'), where the uncached scan runs as before.")
+
 (defun mindwtr-agenda--open (spec)
   "Open the agenda for the custom-command SPEC, scoped to the Mindwtr file.
 Binds `org-agenda-files' to the Mindwtr file and `org-agenda-custom-commands' to
 SPEC alone, then dispatches on SPEC's own key (its `car') -- so nothing leaks
 into the user's global agenda configuration.  Shared by `mindwtr-engage' and
-`mindwtr-projects'."
+`mindwtr-projects'.  Also binds `mindwtr-agenda--stuck-cache' for the build."
   (let ((org-agenda-files (mindwtr-agenda--files))
-        (org-agenda-custom-commands (list spec)))
+        (org-agenda-custom-commands (list spec))
+        (mindwtr-agenda--stuck-cache (make-hash-table :test 'equal)))
     (org-agenda nil (car spec))))
 
-(defun mindwtr-agenda--project-stuck-p ()
-  "Non-nil when the project heading at point is stuck.
-A project is stuck when it is active (TODO keyword ACTIVE) and has no
-descendant carrying the NEXT keyword.  Only NEXT clears stuck: WAIT, SOMEDAY,
-and DONE children do not.  The scan covers the whole subtree, so a NEXT task
-nested under a section still counts.  Returns nil off an active project
-heading.  Used both as the Projects view's inline stuck flag and its sort key,
-so the definition lives in one place."
+(defun mindwtr-agenda--project-stuck-p-1 ()
+  "Uncached subtree scan behind `mindwtr-agenda--project-stuck-p'."
   (save-excursion
     (org-back-to-heading t)
     (and (equal (org-get-todo-state) "ACTIVE")
@@ -93,6 +96,25 @@ so the definition lives in one place."
                (when (equal (org-get-todo-state) "NEXT")
                  (setq found t))))
            (not found)))))
+
+(defun mindwtr-agenda--project-stuck-p ()
+  "Non-nil when the project heading at point is stuck.
+A project is stuck when it is active (TODO keyword ACTIVE) and has no
+descendant carrying the NEXT keyword.  Only NEXT clears stuck: WAIT, SOMEDAY,
+and DONE children do not.  The scan covers the whole subtree, so a NEXT task
+nested under a section still counts.  Returns nil off an active project
+heading.  Used both as the Projects view's inline stuck flag and its sort key,
+so the definition lives in one place; memoized per heading during one agenda
+build (`mindwtr-agenda--stuck-cache')."
+  (if (not mindwtr-agenda--stuck-cache)
+      (mindwtr-agenda--project-stuck-p-1)
+    (let* ((key (cons (current-buffer)
+                      (save-excursion (org-back-to-heading t) (point))))
+           (v (gethash key mindwtr-agenda--stuck-cache 'miss)))
+      (if (eq v 'miss)
+          (puthash key (mindwtr-agenda--project-stuck-p-1)
+                   mindwtr-agenda--stuck-cache)
+        v))))
 
 ;;; Engage prefix: owning project / area ---------------------------------------
 

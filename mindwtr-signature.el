@@ -95,10 +95,25 @@ after a render/parse cycle and trigger a phantom `rev' bump."
         (setq flat (plist-put flat (car p) (cdr p))))
       flat)))
 
+(defvar mindwtr-signature--cache (make-hash-table :test 'eq :weakness 'key)
+  "Weak eq-keyed memo of ENTITY object -> signature string.
+One sync cycle signs the same entity plists repeatedly (change detection,
+stats, the change list, candidate construction, conflict detection), and each
+signature is a canonicalize + JSON-encode + SHA-256 -- the engine's dominant
+per-entity CPU cost.  Keying on the plist object (eq) is sound because the
+engine never mutates an entity in place after signing: every derived entity is
+built via `copy-sequence'/fresh construction first.  KEEP IT THAT WAY -- an
+in-place `plist-put' on a signed entity would silently serve a stale
+signature.  Key weakness lets GC drop entries once a cycle's objects die.")
+
 (defun mindwtr-signature (entity)
-  "Return a stable SHA-256 signature string for ENTITY's editable content."
-  (secure-hash 'sha256 (mindwtr-util-json-encode
-                        (mindwtr-signature--canonical-plist entity))))
+  "Return a stable SHA-256 signature string for ENTITY's editable content.
+Memoized per ENTITY object (see `mindwtr-signature--cache')."
+  (or (gethash entity mindwtr-signature--cache)
+      (puthash entity
+               (secure-hash 'sha256 (mindwtr-util-json-encode
+                                     (mindwtr-signature--canonical-plist entity)))
+               mindwtr-signature--cache)))
 
 (provide 'mindwtr-signature)
 ;;; mindwtr-signature.el ends here
