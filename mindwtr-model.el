@@ -248,8 +248,8 @@ incoming-changes) do not each re-spell the `(or :title :name)' idiom."
                 :rev :revBy :createdAt :updatedAt
                 :deletedAt :purgedAt))
     (project . (:id :title :status :color :order :tagIds :isSequential
-                :sequentialScope :isFocused :supportNotes :attachments
-                :dueDate :reviewAt :areaId :areaTitle :rev :revBy
+                :sequentialScope :taskSortBy :isFocused :supportNotes
+                :attachments :dueDate :reviewAt :areaId :areaTitle :rev :revBy
                 :createdAt :updatedAt :deletedAt :purgedAt))
     (section . (:id :projectId :title :description :order :isCollapsed
                 :rev :revBy :createdAt :updatedAt :deletedAt
@@ -274,12 +274,17 @@ org only if it is also in `mindwtr-model-content-fields' (round-trips) or the
 render drawer.  The following are recognized-only -- preserved verbatim in the
 shadow and merged back on write, never rendered or edited:
 `:timeSpentMinutes', `:relativeStartOffset', `:suppressMindwtrReminders',
-`:repeatReminderMinutes' (each participates in the SERVER's content signature,
-per `sync-signatures.ts', but the client does not diff them -- they can only
-drift server-side, and a verbatim echo preserves them), and the order-only
-`:boardOrder'/`:focusOrder' (manual Board-column / Today's-Focus ordering the
-apps clear on status change; the server excludes them from its signature).
-`:purgedAt' is a Trash tombstone marker on both task and project.")
+`:repeatReminderMinutes', and project `:taskSortBy' (added server-side in
+1.2.0: a synced per-project task-list sort, absent = manual order; each
+participates in the SERVER's content signature, per `sync-signatures.ts', but
+the client does not diff them -- they can only drift server-side, and a
+verbatim echo preserves them), and the order-only `:boardOrder'/`:focusOrder'
+\(manual Board-column / Today's-Focus ordering the apps clear on status
+change; the server excludes them from its signature).  `:purgedAt' is a Trash
+tombstone marker on both task and project; since server 1.2.0 a purged
+tombstone may arrive COMPACTED (content fields reset to neutral placeholders,
+only id/rev/revBy/deletedAt/purgedAt meaningful) -- transparent here because
+tombstoned entities are never rendered or pushed, only echoed via the shadow.")
 
 (defun mindwtr-model-default-settings ()
   "Return a fresh, minimal non-null `settings' object for a new namespace.

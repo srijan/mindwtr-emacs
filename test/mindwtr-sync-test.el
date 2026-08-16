@@ -2772,3 +2772,22 @@ signal immediately instead of spinning."
                                  :areas nil :settings nil))
           (should-error (mindwtr-sync-once (current-buffer) "2026-07-24T12:00:00Z")))
       (delete-directory dir t))))
+
+(ert-deftest mindwtr-sync-echoes-project-tasksortby-verbatim ()
+  "Server 1.2.0's project :taskSortBy is recognized-only: an org-side edit to
+the project must carry the shadow's value through to the wire untouched, so
+the app-configured sort survives an Emacs rename."
+  (let* ((local '(:tasks nil
+                  :projects ((:id "p1" :title "Renamed" :status "active"))
+                  :sections nil :areas nil :people nil))
+         (shadow '(:tasks nil
+                   :projects ((:id "p1" :title "Old" :status "active"
+                               :taskSortBy "due" :rev 3))
+                   :sections nil :areas nil :people nil
+                   :settings (:syncPreferences (:initialized t))))
+         (cand (mindwtr-sync-build-candidate local shadow "dev"
+                                             "2026-08-16T00:00:00Z"))
+         (proj (car (plist-get cand :projects))))
+    (should (equal (plist-get proj :title) "Renamed"))
+    (should (equal (plist-get proj :taskSortBy) "due"))
+    (should (= (plist-get proj :rev) 4))))
