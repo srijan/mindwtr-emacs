@@ -23,13 +23,13 @@
 (require 'mindwtr-parse)
 (require 'mindwtr-render)
 (require 'mindwtr-archive)
+(require 'mindwtr-heading)
 
 (defun mindwtr-commands--kind-at-point ()
   "Return the MW_TYPE symbol of the heading at point, or nil."
   (save-excursion
     (when (ignore-errors (org-back-to-heading t) t)
-      (let ((type (mindwtr-parse--prop "MW_TYPE")))
-        (and type (intern type))))))
+      (mindwtr-heading-kind))))
 
 (defun mindwtr-commands--read-keyword (kind choices)
   "Prompt for one of CHOICES (list of (KEYWORD . CHAR)) for KIND.
@@ -112,13 +112,13 @@ The union of the People roster (person headings, mirroring
 tasks, de-duplicated in document order.  Roster people that have never been
 assigned still appear, so a never-used person is offered as a candidate."
   (let (names)
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
-       (if (equal (mindwtr-parse--prop "MW_TYPE") "person")
+       (if (equal (mindwtr-heading-prop "MW_TYPE") "person")
            (let ((name (org-get-heading t t t t)))
              (when (and name (not (string-empty-p name)))
                (push name names)))
-         (let ((a (mindwtr-parse--prop "MW_ASSIGNED_TO")))
+         (let ((a (mindwtr-heading-prop "MW_ASSIGNED_TO")))
            (when (and a (not (string-empty-p (string-trim a))))
              (push (string-trim a) names))))))
     (delete-dups (nreverse names))))
@@ -142,7 +142,7 @@ stores it; this command never touches the People roster itself."
         (message "mindwtr-set-assignee: point is not on a task")
       (save-excursion
         (org-back-to-heading t)
-        (let* ((current (mindwtr-parse--prop "MW_ASSIGNED_TO"))
+        (let* ((current (mindwtr-heading-prop "MW_ASSIGNED_TO"))
                (cands (mindwtr-set-assignee--candidates))
                (choice (string-trim
                         (completing-read "Assignee: " cands nil nil current))))
@@ -196,7 +196,7 @@ contexts are task-only in the model."
         (message "mindwtr-set-context: point is not on a task")
       (save-excursion
         (org-back-to-heading t)
-        (let* ((mw (mindwtr-parse--prop "MW_CONTEXTS"))
+        (let* ((mw (mindwtr-heading-prop "MW_CONTEXTS"))
                (mw-vals (and mw (mindwtr-util-json-decode mw))))
           (if (and mw-vals
                    (not (seq-every-p
@@ -228,8 +228,8 @@ contexts are task-only in the model."
 
 (defun mindwtr-commands--in-project-p ()
   "Non-nil if the heading at point has a project or section ancestor."
-  (or (mindwtr-parse--ancestor-id 'section)
-      (mindwtr-parse--ancestor-id 'project)))
+  (or (mindwtr-heading-ancestor-id 'section)
+      (mindwtr-heading-ancestor-id 'project)))
 
 (defun mindwtr-commands--target-role (kind)
   "Container role the KIND entity at point should live under, or nil for no move.
@@ -243,19 +243,13 @@ Only standalone tasks and projects relocate; archived statuses have no role."
     (_ nil)))
 
 (defun mindwtr-commands--parent-list-role ()
-  "Return the MW_LIST role of the nearest container ancestor of point, or nil.
-Thin alias over the parser's own walk (the lower layer commands already depends
-on) so the two stay in lockstep."
-  (mindwtr-parse--ancestor-list-role))
+  "Return the MW_LIST role of the nearest container ancestor of point, or nil."
+  (mindwtr-heading-container-role))
 
 (defun mindwtr-commands--container-marker (role)
   "Return a marker at the container heading whose MW_LIST is ROLE, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((re (format "^[ \t]*:MW_LIST:[ \t]*%s[ \t]*$" (regexp-quote role))))
-      (when (re-search-forward re nil t)
-        (org-back-to-heading t)
-        (point-marker)))))
+  (let ((pos (mindwtr-heading-find-role role)))
+    (and pos (copy-marker pos))))
 
 (defun mindwtr-commands--relocate (kind)
   "Move the KIND entity at point under the container matching its current status.
