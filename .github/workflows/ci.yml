@@ -6,7 +6,8 @@ on:
   push:
     branches: [main]
 
-# Least privilege: the jobs only read the repo and pull a public image.
+# Least privilege default: read the repo and pull a public image. The unit job
+# widens this to write pull-requests for its parity comment; nothing else does.
 permissions:
   contents: read
 
@@ -19,6 +20,12 @@ jobs:
   unit:
     name: compile + unit tests
     runs-on: ubuntu-latest
+    # Overrides the workflow default rather than adding to it, so `contents`
+    # must be restated. `pull-requests: write` is only for the sticky parity
+    # comment below; the integration job keeps the read-only default.
+    permissions:
+      contents: read
+      pull-requests: write
     timeout-minutes: 10   # safety net: a batch-mode hang (e.g. an interactive
                           # prompt with no stdin) fails fast instead of stalling
     steps:
@@ -33,10 +40,99 @@ jobs:
           sudo apt-get install -y --no-install-recommends emacs-nox
           emacs --version | head -1
 
+      # The synced-field parity gate compares mindwtr-model-known-fields against
+      # the Mindwtr core's own sync-schema fixtures. It reads them at the SAME
+      # version the dockerized smoke gate runs against -- DEFAULT_CLOUD_TAG in
+      # test/integration/run.sh -- so both gates describe one server, and
+      # Renovate's existing bump of that token upgrades this too (no second
+      # version to track). Docker tags are unprefixed, git tags carry a "v".
+      - name: Resolve the pinned upstream version
+        id: upstream
+        run: |
+          tag=$(sed -n 's/^DEFAULT_CLOUD_TAG="\(.*\)"$/\1/p' test/integration/run.sh)
+          test -n "$tag" || { echo "::error::DEFAULT_CLOUD_TAG not found in test/integration/run.sh"; exit 1; }
+          echo "ref=v${tag}" >> "$GITHUB_OUTPUT"
+          echo "Pinned upstream: v${tag}"
+
+      # Public repo, so no token is needed. Sparse + shallow: the monorepo is
+      # ~180 MB and all we read are five JSON fixtures.
+      - name: Check out Mindwtr core fixtures at that version
+        uses: actions/checkout@v7
+        with:
+          repository: dongdongbh/Mindwtr
+          ref: ${{ steps.upstream.outputs.ref }}
+          path: upstream
+          sparse-checkout: packages/core/src
+          sparse-checkout-cone-mode: true
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Byte-compile (error on warnings)
         run: make compile
 
+      # Explicit step so drift reads as its own red line rather than one ERT
+      # failure among hundreds. Fails only on a field the server can send that
+      # the model does not recognize; a field newer than the pin is just noted.
+      - name: Synced-field parity against upstream fixtures
+        id: parity
+        env:
+          MINDWTR_CORE_PATH: ${{ github.workspace }}/upstream
+        run: |
+          set -o pipefail
+          make parity 2>&1 | tee "$RUNNER_TEMP/parity.log"
+
+      # The report is the point of the gate, so put it where the reviewer is
+      # rather than four clicks into a job log. One sticky comment, edited in
+      # place on every push, so a long-running branch does not accrete a wall of
+      # them. `always()` because the drift case -- the one worth reading -- is
+      # exactly the case where the step above failed.
+      #
+      # Skipped for a fork PR: that token is read-only, so the API call would
+      # fail and turn an otherwise-green run red for the wrong reason.
+      - name: Comment the parity report on the PR
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REF: ${{ steps.upstream.outputs.ref }}
+          OUTCOME: ${{ steps.parity.outcome }}
+        run: |
+          set -euo pipefail
+          marker='<!-- mindwtr-parity-report -->'
+
+          case "$OUTCOME" in
+            success)
+              headline='**Synced-field parity: clean.** No field upstream declares is missing from `mindwtr-model-known-fields`.' ;;
+            failure)
+              headline='**Synced-field parity: DRIFT.** Upstream declares a field the model does not recognize — the server can send it and nothing here reads it. Adopt it into `mindwtr-model-known-fields` (recognition only; `mindwtr-model-content-fields` stays allow-list-LAST).' ;;
+            *)
+              # Skipped or cancelled: the check never ran, so claiming either
+              # verdict would be a lie. Usually the upstream checkout failed.
+              headline='**Synced-field parity: did not run** (`'"$OUTCOME"'`). The upstream fixture checkout probably failed — this is not a clean result.' ;;
+          esac
+
+          # Only the report lines; the make/emacs invocation is noise here.
+          report=$(grep -E '^(ok|note|DRIFT|parity:)' "$RUNNER_TEMP/parity.log" || echo '(no report produced)')
+
+          body=$(printf '%s\n%s\n\nCompared against `dongdongbh/Mindwtr` at `%s` — the same version `make smoke-docker` pins via `DEFAULT_CLOUD_TAG`.\n\n```\n%s\n```\n\n<sub>`note` lines are informational: a field the model knows that this pinned fixture omits is forward compatibility, not drift. They clear when the pin bumps.</sub>\n' \
+            "$marker" "$headline" "$REF" "$report")
+
+          id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+                 --jq "map(select(.body | startswith(\"$marker\"))) | .[0].id // empty")
+
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -f body="$body" --silent
+            echo "updated comment $id"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$body" --silent
+            echo "created comment"
+          fi
+
       - name: Run ERT unit tests
+        env:
+          MINDWTR_CORE_PATH: ${{ github.workspace }}/upstream
         run: make test
 
   integration:

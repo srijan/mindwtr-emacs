@@ -240,7 +240,8 @@ incoming-changes) do not each re-spell the `(or :title :name)' idiom."
                 :showFutureRecurrence :pushCount :tags :contexts :checklist
                 :description :textDirection :attachments :location
                 :suppressMindwtrReminders :repeatReminderMinutes
-                :projectId :sectionId :areaId :isFocusedToday :reviewAt
+                :projectId :sectionId :viewSectionIds :areaId :isFocusedToday
+                :reviewAt
                 :completedAt :statusBeforeProjectArchive
                 :completedAtBeforeProjectArchive
                 :isFocusedTodayBeforeProjectArchive :projectArchivedAt
@@ -249,7 +250,8 @@ incoming-changes) do not each re-spell the `(or :title :name)' idiom."
                 :deletedAt :purgedAt))
     (project . (:id :title :status :color :order :tagIds :isSequential
                 :sequentialScope :taskSortBy :isFocused :supportNotes
-                :attachments :dueDate :reviewAt :areaId :areaTitle :rev :revBy
+                :attachments :startDate :dueDate :reviewAt :areaId :areaTitle
+                :rev :revBy
                 :createdAt :updatedAt :deletedAt :purgedAt))
     (section . (:id :projectId :title :description :order :isCollapsed
                 :rev :revBy :createdAt :updatedAt :deletedAt
@@ -274,11 +276,16 @@ org only if it is also in `mindwtr-model-content-fields' (round-trips) or the
 render drawer.  The following are recognized-only -- preserved verbatim in the
 shadow and merged back on write, never rendered or edited:
 `:timeSpentMinutes', `:relativeStartOffset', `:suppressMindwtrReminders',
-`:repeatReminderMinutes', and project `:taskSortBy' (added server-side in
-1.2.0: a synced per-project task-list sort, absent = manual order; each
-participates in the SERVER's content signature, per `sync-signatures.ts', but
-the client does not diff them -- they can only drift server-side, and a
-verbatim echo preserves them), and the order-only `:boardOrder'/`:focusOrder'
+`:repeatReminderMinutes', project `:taskSortBy' (added server-side in
+1.2.0: a synced per-project task-list sort, absent = manual order), task
+`:viewSectionIds' (1.2.5: the named Someday/Waiting/Focus view section a task
+sits in, keyed by scope, with the catalogue in `settings.viewSections' -- org
+renders those lists flat, so the assignment is echoed rather than surfaced)
+and project `:startDate' (1.2.7: pairs with `:dueDate' to span a desktop
+Timeline bar); each participates in the SERVER's content signature, per
+`sync-signatures.ts', but the client does not diff them -- they can only
+drift server-side, and a verbatim echo preserves them.  Also the
+order-only `:boardOrder'/`:focusOrder'
 \(manual Board-column / Today's-Focus ordering the apps clear on status
 change; the server excludes them from its signature).  `:purgedAt' is a Trash
 tombstone marker on both task and project; since server 1.2.0 a purged

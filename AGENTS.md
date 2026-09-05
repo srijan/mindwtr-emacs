@@ -51,6 +51,21 @@ JSON snapshot lets changes be detected without re-fetching.
 
 - `make test` — the **offline** correctness gate: ERT unit tests, no server needed. This plus
   `make compile` (byte-compile) is the ship gate; run them before every commit.
+- `make parity` — **offline** synced-field parity: diffs `mindwtr-model-known-fields` against
+  the Mindwtr core's own sync-schema fixtures (`packages/core/src/<entity>-sync-schema.fixture.json`).
+  Set `MINDWTR_CORE_PATH` to an upstream checkout (monorepo root or `packages/core/src`); skips
+  cleanly when unset. The same comparison runs as an ERT gate inside `make test` and as the first
+  phase of `make smoke`. Prefer this over the live schema-coverage phase when adopting a new
+  server version: schema coverage only sees fields some entity on that instance actually carries,
+  so it is blind to a field the server has learned but nobody has set yet.
+  **Severities are asymmetric on purpose.** A field the fixture declares that the model lacks
+  fails (exit 1) — the server can send it and nothing recognizes it. A field the model knows that
+  the fixture omits is only *noted*: CI reads the fixtures at the pinned server version, which
+  normally lags upstream, so recognizing a newer field is forward compatibility, not drift.
+  CI checks out `dongdongbh/Mindwtr` at `v$DEFAULT_CLOUD_TAG` — the same version token
+  `make smoke-docker` pins — so both gates describe one server and Renovate's existing bump of
+  that token upgrades this too. Adopting a field the check finds is *recognition only*: add it to
+  `mindwtr-model-known-fields`, never straight to `mindwtr-model-content-fields` (allow-list-LAST).
 - `make smoke` / `make smoke-write` — **online** integration tests that require a live
   `MINDWTR_URL` (and credentials); they exit early with a connection error when no server is
   reachable, so run *directly* they're manual/staging-only, not a CI gate. Always exercise at
