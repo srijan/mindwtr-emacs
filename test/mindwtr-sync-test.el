@@ -1490,14 +1490,14 @@ latch is gated on a confirmed save (see `mindwtr-sync-once')."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
              :projects nil :sections nil
              :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-          (should-not (mindwtr-shadow-notes-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'notes))
           (cl-letf (((symbol-function 'save-buffer)
                      (lambda (&rest _) (error "disk full"))))
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
               (should (plist-get res :save-failed))
               ;; The save failed, so the on-disk file is stale -- protection
               ;; must remain on for the next sync.
-              (should-not (mindwtr-shadow-notes-migrated-p)))))
+              (should-not (mindwtr-shadow-latched-p 'notes)))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
@@ -1529,11 +1529,11 @@ notes migration, so subsequent syncs stop protecting empty notes."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
              :projects nil :sections nil
              :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-          (should-not (mindwtr-shadow-notes-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'notes))
           (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
             (should (plist-get res :ok))
             (should-not (plist-get res :save-failed))
-            (should (mindwtr-shadow-notes-migrated-p))))
+            (should (mindwtr-shadow-latched-p 'notes))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
@@ -1567,12 +1567,12 @@ on a confirmed save, exactly like the notes latch."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
              :projects nil :sections nil
              :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-          (should-not (mindwtr-shadow-fields-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'fields))
           (cl-letf (((symbol-function 'save-buffer)
                      (lambda (&rest _) (error "disk full"))))
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
               (should (plist-get res :save-failed))
-              (should-not (mindwtr-shadow-fields-migrated-p)))))
+              (should-not (mindwtr-shadow-latched-p 'fields)))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
@@ -1604,11 +1604,11 @@ the fields migration, so subsequent syncs stop protecting empty booleans."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
              :projects nil :sections nil
              :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-          (should-not (mindwtr-shadow-fields-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'fields))
           (let ((res (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
             (should (plist-get res :ok))
             (should-not (plist-get res :save-failed))
-            (should (mindwtr-shadow-fields-migrated-p))))
+            (should (mindwtr-shadow-latched-p 'fields))))
       (mindwtr-test--kill-file-buffer f)
       (delete-file f)
       (delete-directory dir t))))
@@ -1723,9 +1723,13 @@ server's version, and the report must surface that path."
       (delete-directory dir t))))
 
 (ert-deftest mindwtr-sync-once-survives-prune-failure ()
-  "A prune that signals must not abort the sync (post-PUT must never throw)."
+  "A prune that fails must not abort the sync (post-PUT must never throw).
+The failure is injected at the store seam -- a backup listing that signals --
+so it exercises the guard inside `mindwtr-shadow-prune-backups' instead of
+replacing the function."
   (let* ((dir (make-temp-file "mw-prunefail" t))
-         (mindwtr-shadow-directory dir)
+         (store (mindwtr-shadow-memory-store))
+         (mindwtr-shadow-store store)
          (mindwtr-backup-retention-days 3)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
@@ -1738,22 +1742,21 @@ server's version, and the report must surface that path."
               ("PUT" (setq put-body (plist-get req :body))
                      '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
               ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+    (setf (mindwtr-shadow-store-keys store) (lambda (_prefix) (error "boom")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mindwtr-shadow-prune-backups)
-                   (lambda (&optional _now) (error "boom"))))
-          (with-temp-buffer
-            (setq buffer-file-name orgfile)
-            (let ((org-inhibit-startup t))
-              (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
-                      "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
-              (org-mode))
-            (mindwtr-shadow-save
-             '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
-                        :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
-               :projects nil :sections nil
-               :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
-            (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z") :ok))
-            (set-buffer-modified-p nil)))
+        (with-temp-buffer
+          (setq buffer-file-name orgfile)
+          (let ((org-inhibit-startup t))
+            (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                    "** NEXT do it :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+            (org-mode))
+          (mindwtr-shadow-save
+           '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                      :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+             :projects nil :sections nil
+             :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
+          (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z") :ok))
+          (set-buffer-modified-p nil))
       (delete-directory dir t))))
 
 ;;; U4: migration latch + strict absence semantics ---------------------------
@@ -1830,9 +1833,9 @@ notes/fields latches."
          (mindwtr-shadow-directory dir))
     (unwind-protect
         (progn
-          (should (null (mindwtr-shadow-archive-migrated-p)))
-          (mindwtr-shadow-set-archive-migrated)
-          (should (mindwtr-shadow-archive-migrated-p)))
+          (should (null (mindwtr-shadow-latched-p 'archive)))
+          (mindwtr-shadow-latch 'archive)
+          (should (mindwtr-shadow-latched-p 'archive)))
       (delete-directory dir t))))
 
 ;;; U5: surface-list orchestration (end-to-end, file-visiting) ---------------
@@ -1883,7 +1886,7 @@ cycle; the migration latch flips."
                                              (buffer-string))))
                 (should (string-match-p "^\\* Archive" atext))
                 (should (string-match-p "ARCH Old task" atext)))
-              (should (mindwtr-shadow-archive-migrated-p)))))
+              (should (mindwtr-shadow-latched-p 'archive)))))
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
@@ -1926,7 +1929,7 @@ drops it from the archive file."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
              :projects nil :sections nil :areas nil :settings nil))
           (mindwtr-shadow-set-etag "v1")
-          (mindwtr-shadow-set-archive-migrated)
+          (mindwtr-shadow-latch 'archive)
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
@@ -1983,7 +1986,7 @@ file is created containing it (backfill)."
              :projects nil :sections nil :areas nil :settings nil))
           (mindwtr-shadow-set-etag "v1")
           (should-not (file-exists-p archive-file))
-          (should-not (mindwtr-shadow-archive-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'archive))
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
@@ -1994,7 +1997,7 @@ file is created containing it (backfill)."
               (let ((atext (with-temp-buffer (insert-file-contents archive-file)
                                              (buffer-string))))
                 (should (string-match-p "ARCH Backlog item" atext)))
-              (should (mindwtr-shadow-archive-migrated-p)))))
+              (should (mindwtr-shadow-latched-p 'archive)))))
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
@@ -2087,7 +2090,7 @@ local is echoed (no tombstone) and the archive file is recreated."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
              :projects nil :sections nil :areas nil :settings nil))
           ;; Latch set (migrated) but NO etag and NO archive file on disk.
-          (mindwtr-shadow-set-archive-migrated)
+          (mindwtr-shadow-latch 'archive)
           (should-not (file-exists-p archive-file))
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
@@ -2138,7 +2141,7 @@ and the archive file is re-backfilled."
            '(:tasks ((:id "t1" :title "Backlog" :status "archived" :rev 2
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
              :projects nil :sections nil :areas nil :settings nil))
-          (mindwtr-shadow-set-archive-migrated)
+          (mindwtr-shadow-latch 'archive)
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
@@ -2194,7 +2197,7 @@ the absent task is echoed rather than tombstoned despite no count shortfall."
                      (:id "t3" :title "Mangled" :status "archived" :rev 2
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
              :projects nil :sections nil :areas nil :settings nil))
-          (mindwtr-shadow-set-archive-migrated)
+          (mindwtr-shadow-latch 'archive)
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
@@ -2241,7 +2244,7 @@ warning) and the PUT tombstones the removed task only."
                      (:id "t2" :title "Kept" :status "archived" :rev 2
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
              :projects nil :sections nil :areas nil :settings nil))
-          (mindwtr-shadow-set-archive-migrated)
+          (mindwtr-shadow-latch 'archive)
           (with-current-buffer (find-file-noselect tasks-file)
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
@@ -2291,7 +2294,7 @@ latch."
                       :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-05T00:00:00Z"))
              :projects nil :sections nil :areas nil :settings nil))
           (mindwtr-shadow-set-etag "v1")
-          (should-not (mindwtr-shadow-archive-migrated-p))
+          (should-not (mindwtr-shadow-latched-p 'archive))
           ;; Fail only the archive buffer's save; the main save succeeds.
           (cl-letf (((symbol-function 'save-buffer)
                      (lambda (&rest args)
@@ -2303,7 +2306,7 @@ latch."
               (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
                 (should (plist-get res :save-failed))
                 ;; The archive save failed -> latch withheld -> strict stays off.
-                (should-not (mindwtr-shadow-archive-migrated-p))))))
+                (should-not (mindwtr-shadow-latched-p 'archive))))))
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
