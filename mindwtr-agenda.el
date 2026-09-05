@@ -33,6 +33,7 @@
 (require 'org)
 (require 'org-agenda)
 (require 'mindwtr-model)
+(require 'mindwtr-heading)
 
 (defvar mindwtr-file)
 
@@ -138,7 +139,7 @@ org's default filename category.  Area-bearing lines now carry a real per-item
 `:CATEGORY:' drawer value (the area name), which fills what was otherwise the
 dead filename-category slot; area-less lines still fall back to org's filename
 category -- the useless `mindwtr:' or, when the buffer's category cache was
-primed during a filename-less scan (see `mindwtr-util--map-entries'), the bare
+primed during a filename-less scan (see `mindwtr-heading-map'), the bare
 `???' placeholder -- so this column replaces it for every line.  The trailing
 `%?-12t% s' is org's own default tail: it keeps the time-of-day column and the
 scheduled/deadline leader (`Scheduled:', `In N d.:'), so only the leading
@@ -150,14 +151,8 @@ Walks up the outline from the heading at point (the heading itself counts).
 Mindwtr links a task to its project by outline nesting in the main file -- there
 is no MW_PROJECT_ID there -- so the owning project is found by ancestry, the
 inverse of the subtree walk in `mindwtr-agenda--project-stuck-p'."
-  (save-excursion
-    (org-back-to-heading t)
-    (catch 'found
-      (while t
-        (when (equal (org-entry-get (point) "MW_TYPE") "project")
-          (throw 'found (point-marker)))
-        (unless (org-up-heading-safe)
-          (throw 'found nil))))))
+  (let ((pos (mindwtr-heading-ancestor-pos 'project t)))
+    (and pos (copy-marker pos))))
 
 (defun mindwtr-agenda--resolve-project ()
   "Return the clean title of point's owning project, or nil if standalone.
@@ -167,28 +162,6 @@ The title is stripped of TODO keyword, priority cookie, and tags."
       (prog1 (org-with-point-at m (org-get-heading t t t t))
         (set-marker m nil)))))
 
-(defun mindwtr-agenda--local-category ()
-  "Return the heading at point's own literal `:CATEGORY:' drawer value, or nil.
-Scans the physical PROPERTIES drawer line rather than calling
-`org-entry-get'/`org-get-category', both of which route the special CATEGORY
-property to the buffer/filename fallback -- the dead `???' / `mindwtr:' slot --
-instead of nil when no drawer value exists (KTD5).  A blank value reads as nil
-(the same blank-guard discipline the parser uses)."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((end (save-excursion (outline-next-heading) (point)))
-          (case-fold-search nil))
-      (forward-line 1)
-      (when (re-search-forward "^[ \t]*:PROPERTIES:[ \t]*$" end t)
-        (let ((drawer-end (save-excursion
-                            (if (re-search-forward "^[ \t]*:END:[ \t]*$" end t)
-                                (point)
-                              end))))
-          (when (re-search-forward "^[ \t]*:CATEGORY:[ \t]*\\(.*?\\)[ \t]*$"
-                                   drawer-end t)
-            (let ((v (match-string-no-properties 1)))
-              (unless (string-empty-p v) v))))))))
-
 (defun mindwtr-agenda--resolve-area ()
   "Return point's area of focus (org `:CATEGORY:'), or nil.
 Walks the outline ancestry (the heading itself counts) reading each heading's
@@ -197,17 +170,8 @@ project task that carries no category of its own inherits its project's.
 Returns nil when no ancestor carries a category, NEVER the filename-category
 fallback `org-entry-get'/`org-get-category' would yield for the special
 CATEGORY property (KTD5), so the prefix resolver still falls through to the
-empty marker on an area-less line.  Mirrors the ancestry walk of
-`mindwtr-agenda--nearest-project-marker', swapping its `org-entry-get' read for
-the literal-drawer scan."
-  (save-excursion
-    (org-back-to-heading t)
-    (catch 'found
-      (while t
-        (let ((cat (mindwtr-agenda--local-category)))
-          (when cat (throw 'found cat)))
-        (unless (org-up-heading-safe)
-          (throw 'found nil))))))
+empty marker on an area-less line.  A blank value reads as nil."
+  (mindwtr-heading-inherited-prop "CATEGORY"))
 
 (defun mindwtr-agenda--resolve-prefix ()
   "Return the Engage prefix string for the heading at point.
