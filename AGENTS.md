@@ -17,6 +17,7 @@ JSON snapshot lets changes be detected without re-fetching.
 | `mindwtr-sync.el` | Sync engine (the parse→PUT→GET→reconcile cycle) |
 | `mindwtr-api.el` | Mindwtr Cloud REST client (`plz`, falls back to `url.el`) |
 | `mindwtr-model.el` | Data model & validation (content-field definitions) |
+| `mindwtr-heading.el` | Read access to org headings: drawer props, MW_ID/MW_LIST lookup, ancestry, extent, safe iteration. Every module reads headings through it |
 | `mindwtr-parse.el` | org buffer → appdata content (incl. MW_TYPE inference) |
 | `mindwtr-render.el` | appdata → canonical org text |
 | `mindwtr-reconcile.el` | Apply merged appdata into the buffer (per surface, via a render fn); view-state + quarantine |

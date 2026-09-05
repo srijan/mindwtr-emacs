@@ -1127,7 +1127,7 @@ rebuild keeps point on that container instead of dropping it to point-min."
       (mindwtr-reconcile-buffer merged)
       ;; point landed back on the Projects container, not at point-min
       (should (org-at-heading-p))
-      (should (string= (mindwtr-parse--prop "MW_LIST") "projects")))))
+      (should (string= (mindwtr-heading-prop "MW_LIST") "projects")))))
 
 (ert-deftest mindwtr-reconcile-render-error-leaves-buffer-intact ()
   "If rendering the merged appdata errors, the buffer is NOT wiped.

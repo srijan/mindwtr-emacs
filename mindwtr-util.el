@@ -175,37 +175,5 @@ hand-rolled at several sites.  PLIST is not mutated; key order is preserved."
       (setq plist (cddr plist)))
     (nreverse out)))
 
-(defmacro mindwtr-util--map-entries (func &rest args)
-  "Run `org-map-entries' (FUNC plus optional ARGS) under two scan bindings.
-
-`buffer-file-name' is bound nil because `org-map-entries' (nil scope)
-otherwise hands this buffer's file to Org's agenda-file check, which prompts
-\"Non-existent agenda file ...  [R]emove from list or [A]bort?\" -- a hang
-under `--batch', a stray prompt interactively -- whenever the file is not yet
-on disk (e.g. parsing or rebuilding the live buffer on a first sync, before
-its initial save).  Our scans read only buffer text, so hiding the file name
-leaves their results unchanged.
-
-`org-element-use-cache' is bound nil for a different reason.  With the cache
-on, `org-scan-tags' dispatches into `org-element-cache-map'; in a long-lived
-session that path has been observed to degrade catastrophically, turning a
-scan that costs ~0.06s into minutes of 100% CPU.  Because these scans run
-from the `mindwtr-auto-sync-mode' timer they are not interruptible by
-ordinary means, so the freeze presents as a wedged Emacs recoverable only
-with \\[keyboard-quit].  Without the cache `org-scan-tags' falls back to a
-plain regexp outline walk whose cost depends only on buffer size -- ~0.09s on
-a 110KB archive, a ~30ms premium per cycle to make the timer's worst case
-bounded rather than unbounded.  Every call site is a structural read that
-never inserts or deletes characters (the fold-restore scan in
-`mindwtr-reconcile--restore-view' changes visibility only), so skipping
-cache invalidation for the duration cannot strand a stale cache.
-
-Binding both here, around just the scan, keeps each suppression a single
-enforced obligation rather than a comment repeated at each call site."
-  (declare (indent 1) (debug t))
-  `(let ((buffer-file-name nil)
-         (org-element-use-cache nil))
-     (org-map-entries ,func ,@args)))
-
 (provide 'mindwtr-util)
 ;;; mindwtr-util.el ends here

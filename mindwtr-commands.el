@@ -59,7 +59,7 @@ Shadows `org-todo' in `mindwtr-mode'.  After setting, relocate a standalone
 task or a project to the container matching its new status."
   (interactive)
   (let ((kind (or (mindwtr-commands--kind-at-point)
-                  (ignore-errors (mindwtr-parse--infer-kind)))))
+                  (ignore-errors (mindwtr-parse-infer-kind)))))
     (if (not (memq kind '(task project)))
         (call-interactively #'org-todo)
       (let ((kw (mindwtr-commands--read-keyword
@@ -89,7 +89,7 @@ the task with BOTH a project and an area -- the dual-container over-stamp that
 silently re-parents on the next PUT.  No-ops off a task/project heading."
   (interactive)
   (let ((kind (or (mindwtr-commands--kind-at-point)
-                  (ignore-errors (mindwtr-parse--infer-kind)))))
+                  (ignore-errors (mindwtr-parse-infer-kind)))))
     (cond
      ((not (memq kind '(task project)))
       (message "mindwtr-set-area: point is not on a task or project"))
@@ -137,7 +137,7 @@ The task->person link is free-text name (no `personId'), exactly as the server
 stores it; this command never touches the People roster itself."
   (interactive)
   (let ((kind (or (mindwtr-commands--kind-at-point)
-                  (ignore-errors (mindwtr-parse--infer-kind)))))
+                  (ignore-errors (mindwtr-parse-infer-kind)))))
     (if (not (eq kind 'task))
         (message "mindwtr-set-assignee: point is not on a task")
       (save-excursion
@@ -191,7 +191,7 @@ so the edit is authoritative on the next parse.  No-ops off a task heading:
 contexts are task-only in the model."
   (interactive)
   (let ((kind (or (mindwtr-commands--kind-at-point)
-                  (ignore-errors (mindwtr-parse--infer-kind)))))
+                  (ignore-errors (mindwtr-parse-infer-kind)))))
     (if (not (eq kind 'task))
         (message "mindwtr-set-context: point is not on a task")
       (save-excursion
@@ -385,7 +385,7 @@ current title): its old title usually names the outcome, which just became
 the project's name, not the first action.  A task with sketched child
 headings skips that prompt -- the children are the actions; they ride
 along, keyword-less ones stamped NEXT, and parse as the project's tasks
-(`mindwtr-parse--ancestor-id' skips intermediate task headings, and the
+(`mindwtr-heading-ancestor-id' skips intermediate task headings, and the
 next reconcile renders them flat under the project).
 
 Refuses on anything but a task heading, and on a task that already belongs
@@ -393,7 +393,7 @@ to a project or section (lift it out with `org-refile' first)."
   (interactive)
   (org-back-to-heading t)
   (let ((kind (or (mindwtr-commands--kind-at-point)
-                  (mindwtr-parse--infer-kind))))
+                  (mindwtr-parse-infer-kind))))
     (cond
      ((not (eq kind 'task))
       (user-error "mindwtr-promote-to-project: point is not on a task heading"))

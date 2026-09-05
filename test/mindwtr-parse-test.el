@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'org)
 (require 'mindwtr-parse)
+(require 'mindwtr-heading)
 (require 'mindwtr-render)
 
 (defmacro mindwtr-parse-test--with (text &rest body)
@@ -421,7 +422,7 @@ left unparsed so the quarantine guard (U2) can preserve it."
       (org-mode)
       (goto-char (point-min))
       (org-next-visible-heading 1)
-      (should (null (mindwtr-parse--infer-kind))))
+      (should (null (mindwtr-parse-infer-kind))))
     (should (null (plist-get (mindwtr-parse-buffer) :tasks)))))
 
 (ert-deftest mindwtr-parse-blank-mw-type-treated-as-absent ()
@@ -442,7 +443,7 @@ and silently dropped."
 
 (ert-deftest mindwtr-parse-infer-kind-covers-every-entity-role ()
   "Drift guard: every container role that holds ENTITIES must infer a kind, so
-adding a render-layer role without teaching `mindwtr-parse--infer-kind' fails
+adding a render-layer role without teaching `mindwtr-parse-infer-kind' fails
 loudly here instead of silently quarantining everything under the new bucket.
 Exceptions: `someday' (a parent whose children are themselves containers) infers
 nil, the reconcile quarantine role `sync-failures' (not a model list-role) must
@@ -462,8 +463,8 @@ quarantine rather than be guessed."
           (org-next-visible-heading 1)   ; container
           (org-next-visible-heading 1)   ; child H
           (if (member role un-inferable)
-              (should (null (mindwtr-parse--infer-kind)))
-            (should (mindwtr-parse--infer-kind))))))))
+              (should (null (mindwtr-parse-infer-kind)))
+            (should (mindwtr-parse-infer-kind))))))))
 
 (ert-deftest mindwtr-parse-notes-field-round-trips-for-every-note-bearing-kind ()
   "Drift guard: every kind in `mindwtr-model--notes-fields' must render its notes
@@ -963,28 +964,6 @@ CLOCK: [2026-07-24 Thu 10:00]--[2026-07-24 Thu 11:30] =>  1:30
           (insert rendered) (org-mode) (goto-char (point-min))
           (unless (org-at-heading-p) (org-next-visible-heading 1))
           (should (eq (plist-get (mindwtr-parse-heading) :mw-clock-synced) 45)))))))
-
-(ert-deftest mindwtr-parse-drawer-cache-invalidates-on-edit ()
-  "The per-heading drawer memo must serve fresh values after any buffer edit
-(the cache is keyed on `buffer-chars-modified-tick')."
-  (with-temp-buffer
-    (let ((org-inhibit-startup t))
-      (insert "* Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
-      (org-mode))
-    (goto-char (point-min))
-    (should (equal (mindwtr-parse--prop "MW_ID") "t1"))
-    ;; Edit the drawer value in place; a stale cache would still say t1.
-    (goto-char (point-min))
-    (search-forward ":MW_ID: t1")
-    (replace-match ":MW_ID: t2")
-    (goto-char (point-min))
-    (should (equal (mindwtr-parse--prop "MW_ID") "t2"))
-    ;; A structural edit (new heading above) shifts positions; the tick bump
-    ;; must invalidate position-keyed entries rather than misattribute them.
-    (goto-char (point-min))
-    (insert "* Other\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: o1\n:END:\n")
-    (goto-char (point-max))
-    (should (equal (mindwtr-parse--prop "MW_ID") "t2"))))
 
 ;; --- #26: body parser must not mistake prose for org structure ------------
 

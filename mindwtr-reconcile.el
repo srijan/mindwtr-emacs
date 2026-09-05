@@ -77,7 +77,7 @@ notes field).  Child headings are outside the entry region and are left
 untouched."
   (org-back-to-heading t)
   (let* ((level (org-current-level))
-         (extra (mindwtr-parse--extra-props))
+         (extra (mindwtr-parse-extra-props))
          ;; Capture the running clock's id before insert/delete-region detaches
          ;; org's clock markers (the CLOCK text is grafted back as preserved
          ;; body, but the in-memory markers must be re-pointed too).
@@ -126,7 +126,7 @@ rebuild can carry it across."
            (let* ((end (mindwtr-heading-entry-end))
                   (body (mindwtr-reconcile--preserved-body
                          (intern kind) (mindwtr-heading-body-start) end))
-                  (extra (mindwtr-parse--extra-props)))
+                  (extra (mindwtr-parse-extra-props)))
              (when (or body extra)
                (puthash id (list :body body :extra extra) h)))))))
     h))
@@ -349,7 +349,7 @@ accumulates.")
 no (non-blank) :MW_TYPE: and no kind inferable from context.  A typed entity, a
 container, and an inferable heading all return nil."
   (and (null (mindwtr-heading-type))
-       (null (mindwtr-parse--infer-kind))))
+       (null (mindwtr-parse-infer-kind))))
 
 (defun mindwtr-reconcile--collect-orphans ()
   "Return raw strings for headings reconcile would otherwise erase.

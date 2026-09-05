@@ -130,6 +130,27 @@ No drawer here.
     (mindwtr-heading-test--goto "p1")
     (should (equal (mindwtr-heading-id) "p1"))))
 
+(ert-deftest mindwtr-heading-properties-memo-survives-position-shift ()
+  "A structural edit above a heading shifts positions; the tick bump must
+invalidate position-keyed entries rather than misattribute them."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Task\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (goto-char (point-min))
+    (should (equal (mindwtr-heading-id) "t1"))
+    (goto-char (point-min))
+    (search-forward ":MW_ID: t1")
+    (replace-match ":MW_ID: t2")
+    (goto-char (point-min))
+    (should (equal (mindwtr-heading-id) "t2"))
+    (goto-char (point-min))
+    (insert "* Other\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: o1\n:END:\n")
+    (goto-char (point-max))
+    (should (equal (mindwtr-heading-id) "t2"))
+    (goto-char (point-min))
+    (should (equal (mindwtr-heading-id) "o1"))))
+
 ;;; Lookup
 
 (ert-deftest mindwtr-heading-find-id-and-role ()

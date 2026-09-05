@@ -16,7 +16,7 @@
 ;; variant also suits an `org-protocol' template).  New headings are stamped
 ;; with :MW_TYPE: task and a freshly minted :MW_ID:.  The stamping is belt-
 ;; and-suspenders: the parser also infers `task' for a heading under the
-;; Inbox container (`mindwtr-parse--infer-kind'), and the sync engine mints
+;; Inbox container (`mindwtr-parse-infer-kind'), and the sync engine mints
 ;; an MW_ID for any new heading lacking one -- so a capture that omits
 ;; either still round-trips.  This module just makes the heading first-class
 ;; from birth.
