@@ -127,13 +127,6 @@ content out from under the just-passed concurrency guard."
   "Non-nil if content value V counts as absent (nil, empty list/string)."
   (or (null v) (and (stringp v) (string-empty-p v))))
 
-(defun mindwtr-sync--field-canonical (k v)
-  "Canonical comparison form of content field K's value V, or nil if empty.
-Uses the signature's own per-field normalization so the write-merge and
-change detection agree on what \"the same content\" means."
-  (if (mindwtr-sync--empty-p v) nil
-    (mindwtr-signature-canonical-value k v)))
-
 (defun mindwtr-sync--plist-remove (pl k)
   "Return PL without key K."
   (mindwtr-util-plist-omit pl (list k)))
@@ -195,8 +188,8 @@ recovered here -- the caller resolves the set."
         (setq out (plist-put out k (plist-get le k)))))
     (dolist (k mindwtr-model-content-fields)
       (let ((lv (plist-get le k)) (sv (plist-get se k)))
-        (unless (equal (mindwtr-sync--field-canonical k lv)
-                       (mindwtr-sync--field-canonical k sv))
+        (unless (equal (mindwtr-signature-field-canonical k lv)
+                       (mindwtr-signature-field-canonical k sv))
           (if (mindwtr-sync--empty-p lv)
               ;; `:status' is mandatory for task/project; an empty local value
               ;; means the parser could not determine it (a type-invalid or
@@ -924,7 +917,8 @@ WHAT names the guarded window in the error message."
       ;; Even when nothing needs pushing, a stray keyword should not be
       ;; silently swallowed -- surface it in the report.
       (when parse-warnings
-        (mindwtr-report-show stats nil nil nil (current-buffer) parse-warnings))
+        (mindwtr-report-show (list :stats stats :warnings parse-warnings)
+                             (current-buffer)))
       ;; The migration latches are intentionally NOT set here: a noop skips
       ;; reconcile, so the buffers still hold their old render.  Migration
       ;; protection must stay on until a full cycle actually rewrites them
@@ -1059,11 +1053,12 @@ a process sentinel on the async path)."
          (unless save-failed
            (append '(notes fields)
                    (and (mindwtr-sync-cycle-archive-active cycle) '(archive)))))
-        (mindwtr-report-show stats conflicts skew backup-file (current-buffer)
-                             parse-warnings incoming nil local-changes)
-        (list :ok t :conflicts conflicts :stats stats :skew skew
-              :warnings parse-warnings :incoming incoming
-              :save-failed save-failed)))))
+        (let ((result (list :ok t :conflicts conflicts :stats stats :skew skew
+                            :warnings parse-warnings :incoming incoming
+                            :local-changes local-changes
+                            :save-failed save-failed)))
+          (mindwtr-report-show result (current-buffer) backup-file)
+          result)))))
 
 (defun mindwtr-sync-once-async (buffer now callback)
   "Run one full sync cycle for org BUFFER, stamping changes with NOW.

@@ -28,9 +28,8 @@
 
 (ert-deftest mindwtr-report-renders-buffer ()
   (let ((buf (mindwtr-report-show
-              '(:created 2 :updated 1 :deleted 0)
-              '((:id "t1" :mine (:title "MINE") :theirs (:title "THEIRS")))
-              nil)))
+              (list :stats '(:created 2 :updated 1 :deleted 0)
+                    :conflicts '((:id "t1" :mine (:title "MINE") :theirs (:title "THEIRS")))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -68,11 +67,12 @@ server-overridden project note appears in the override report's field diff."
 
 (ert-deftest mindwtr-report-shows-field-diff-and-backup ()
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              '((:id "t1" :kind task
+              (list :stats '(:created 0 :updated 1 :deleted 0)
+                    :conflicts '((:id "t1" :kind task
                  :mine (:id "t1" :title "MINE" :priority "high")
                  :theirs (:id "t1" :title "THEIRS" :priority "low")))
-              "clock off by 5m"
+                    :skew "clock off by 5m")
+              nil
               "/tmp/mindwtr/backups/mindwtr-x.org")))
     (unwind-protect
         (with-current-buffer buf
@@ -98,10 +98,10 @@ the synced buffer so the next sync will push it."
            (mine '(:id "t1" :title "mine again" :status "next" :areaId "a1"
                    :rev 9 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
            (report (mindwtr-report-show
-                    '(:created 0 :updated 0 :deleted 0)
-                    (list (list :id "t1" :kind 'task :mine mine
-                                :theirs '(:id "t1" :title "theirs version")))
-                    nil nil target)))
+                    (list :stats '(:created 0 :updated 0 :deleted 0)
+                          :conflicts (list (list :id "t1" :kind 'task :mine mine
+                                :theirs '(:id "t1" :title "theirs version"))))
+                    target)))
       (unwind-protect
           (progn
             (with-current-buffer report
@@ -128,9 +128,8 @@ incoming-from-remote section."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 0 :deleted 0)
-              nil nil nil nil nil
-              '((:id "t1" :kind task :title "Renamed on phone" :change updated)))))
+              (list :stats '(:created 0 :updated 0 :deleted 0)
+                    :incoming '((:id "t1" :kind task :title "Renamed on phone" :change updated))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -145,11 +144,10 @@ field-diff line per changed content field."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 0 :deleted 0)
-              nil nil nil nil nil
-              '((:id "t1" :kind task :title "Task A" :change updated
+              (list :stats '(:created 0 :updated 0 :deleted 0)
+                    :incoming '((:id "t1" :kind task :title "Task A" :change updated
                  :before (:id "t1" :title "Task A" :status "next")
-                 :after  (:id "t1" :title "Task A" :status "done"))))))
+                 :after  (:id "t1" :title "Task A" :status "done")))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -164,11 +162,10 @@ field-diff line per changed content field."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 0 :deleted 0)
-              nil nil nil nil nil
-              '((:id "t1" :kind task :title "Task A" :change updated
+              (list :stats '(:created 0 :updated 0 :deleted 0)
+                    :incoming '((:id "t1" :kind task :title "Task A" :change updated
                  :before (:id "t1" :title "Task A" :status "next" :rev 1)
-                 :after  (:id "t1" :title "Task A" :status "next" :rev 2))))))
+                 :after  (:id "t1" :title "Task A" :status "next" :rev 2)))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -184,13 +181,12 @@ arrows after the Proposed count line; updated entries show a field diff."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 1 :updated 1 :deleted 1)
-              nil nil nil nil nil nil nil
-              '((:id "t1" :kind task :title "New one" :change created)
+              (list :stats '(:created 1 :updated 1 :deleted 1)
+                    :local-changes '((:id "t1" :kind task :title "New one" :change created)
                 (:id "t2" :kind task :title "Edited" :change updated
                  :before (:id "t2" :title "Edited" :status "next")
                  :after  (:id "t2" :title "Edited" :status "done"))
-                (:id "t3" :kind task :title "Gone" :change deleted)))))
+                (:id "t3" :kind task :title "Gone" :change deleted))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -244,13 +240,12 @@ with compact change lines, never the raw `(:title ... :isCompleted ...)' form."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              nil nil nil nil nil nil nil
-              '((:id "t1" :kind task :title "Fix budget" :change updated
+              (list :stats '(:created 0 :updated 1 :deleted 0)
+                    :local-changes '((:id "t1" :kind task :title "Fix budget" :change updated
                  :before (:id "t1" :title "Fix budget"
                           :checklist ((:title "Split fees" :isCompleted :false)))
                  :after  (:id "t1" :title "Fix budget"
-                          :checklist ((:title "Split fees" :isCompleted t))))))))
+                          :checklist ((:title "Split fees" :isCompleted t)))))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -266,8 +261,7 @@ with compact change lines, never the raw `(:title ... :isCompleted ...)' form."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              nil nil nil nil nil nil nil nil)))
+              (list :stats '(:created 0 :updated 1 :deleted 0)))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -282,10 +276,16 @@ headings in one buffer, not a replaced single entry."
   (let (buf)
     (unwind-protect
         (progn
-          (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
-                               nil nil nil nil "sync-one")
-          (setq buf (mindwtr-report-show '(:created 0 :updated 1 :deleted 0) nil nil
-                                         nil nil nil nil "sync-two"))
+          (mindwtr-report-show
+           (list :stats '(:created 1 :updated 0 :deleted 0))
+           nil
+           nil
+           "sync-one")
+          (setq buf (mindwtr-report-show
+                     (list :stats '(:created 0 :updated 1 :deleted 0))
+                     nil
+                     nil
+                     "sync-two"))
           (with-current-buffer buf
             (should (= (mindwtr-report-test--count-headings) 2))
             (goto-char (point-min))
@@ -302,13 +302,17 @@ entry's conflict block no longer carries `mindwtr-conflict'; the newest does."
     (unwind-protect
         (progn
           (mindwtr-report-show
-           '(:created 0 :updated 0 :deleted 0)
-           '((:id "old1" :kind task :mine (:title "A") :theirs (:title "B")))
-           nil nil nil nil nil "sync-one")
+           (list :stats '(:created 0 :updated 0 :deleted 0)
+                 :conflicts '((:id "old1" :kind task :mine (:title "A") :theirs (:title "B"))))
+           nil
+           nil
+           "sync-one")
           (setq buf (mindwtr-report-show
-                     '(:created 0 :updated 0 :deleted 0)
-                     '((:id "new2" :kind task :mine (:title "C") :theirs (:title "D")))
-                     nil nil nil nil nil "sync-two"))
+                     (list :stats '(:created 0 :updated 0 :deleted 0)
+                           :conflicts '((:id "new2" :kind task :mine (:title "C") :theirs (:title "D"))))
+                     nil
+                     nil
+                     "sync-two"))
           (with-current-buffer buf
             ;; The older entry's conflict block has been de-tagged.
             (goto-char (point-min))
@@ -327,8 +331,11 @@ entry's conflict block no longer carries `mindwtr-conflict'; the newest does."
 appends no heading."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
-  (let ((buf (mindwtr-report-show '(:created 0 :updated 0 :deleted 0)
-                                  nil nil nil nil nil nil "quiet")))
+  (let ((buf (mindwtr-report-show
+              (list :stats '(:created 0 :updated 0 :deleted 0))
+              nil
+              nil
+              "quiet")))
     (unwind-protect
         (with-current-buffer buf
           (should (= (mindwtr-report-test--count-headings) 0))
@@ -340,11 +347,17 @@ appends no heading."
 title header) on the next sync rather than resurrecting prior history."
   (when (get-buffer "*Mindwtr Sync Report*")
     (kill-buffer "*Mindwtr Sync Report*"))
-  (let ((first (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
-                                    nil nil nil nil "sync-one")))
+  (let ((first (mindwtr-report-show
+                (list :stats '(:created 1 :updated 0 :deleted 0))
+                nil
+                nil
+                "sync-one")))
     (kill-buffer first))
-  (let ((buf (mindwtr-report-show '(:created 0 :updated 1 :deleted 0) nil nil
-                                  nil nil nil nil "sync-two")))
+  (let ((buf (mindwtr-report-show
+              (list :stats '(:created 0 :updated 1 :deleted 0))
+              nil
+              nil
+              "sync-two")))
     (unwind-protect
         (with-current-buffer buf
           (should (= (mindwtr-report-test--count-headings) 1))
@@ -366,16 +379,20 @@ title header) on the next sync rather than resurrecting prior history."
             ;; Incoming-only: quiet.
             (setq popped nil)
             (setq buf (mindwtr-report-show
-                       '(:created 0 :updated 0 :deleted 0) nil nil nil nil nil
-                       '((:id "t1" :kind task :title "x" :change updated))
+                       (list :stats '(:created 0 :updated 0 :deleted 0)
+                             :incoming '((:id "t1" :kind task :title "x" :change updated)))
+                       nil
+                       nil
                        "sync-one"))
             (should-not popped)
             ;; Conflict: pops.
             (setq popped nil)
             (mindwtr-report-show
-             '(:created 0 :updated 0 :deleted 0)
-             '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B")))
-             nil nil nil nil nil "sync-two")
+             (list :stats '(:created 0 :updated 0 :deleted 0)
+                   :conflicts '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B"))))
+             nil
+             nil
+             "sync-two")
             (should popped))
         (when buf (kill-buffer buf))))))
 
@@ -386,12 +403,17 @@ title header) on the next sync rather than resurrecting prior history."
   (let (buf)
     (unwind-protect
         (progn
-          (mindwtr-report-show '(:created 1 :updated 0 :deleted 0) nil nil
-                               nil nil nil nil "sync-one")
+          (mindwtr-report-show
+           (list :stats '(:created 1 :updated 0 :deleted 0))
+           nil
+           nil
+           "sync-one")
           (setq buf (mindwtr-report-show
-                     '(:created 0 :updated 0 :deleted 0)
-                     '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B")))
-                     nil nil nil nil nil "sync-two"))
+                     (list :stats '(:created 0 :updated 0 :deleted 0)
+                           :conflicts '((:id "t1" :kind task :mine (:title "A") :theirs (:title "B"))))
+                     nil
+                     nil
+                     "sync-two"))
           (with-current-buffer buf
             (should (looking-at-p "\\* sync-two"))))
       (when buf (kill-buffer buf)))))
@@ -399,9 +421,8 @@ title header) on the next sync rather than resurrecting prior history."
 (ert-deftest mindwtr-report-shows-parse-warnings ()
   "Type-invalid keyword warnings are surfaced in the report buffer."
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 0 :deleted 0)
-              nil nil nil nil
-              '((:id "p1" :title "Build the deck" :keyword "NEXT" :kind project)))))
+              (list :stats '(:created 0 :updated 0 :deleted 0)
+                    :warnings '((:id "p1" :title "Build the deck" :keyword "NEXT" :kind project))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -417,11 +438,10 @@ title header) on the next sync rather than resurrecting prior history."
   "A conflict whose server version was written by the server's integrity
 repair (`revBy' \"sync-repair\") says so, with a plain-language hint (#28)."
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              '((:id "t1" :kind task
+              (list :stats '(:created 0 :updated 1 :deleted 0)
+                    :conflicts '((:id "t1" :kind task
                  :mine (:id "t1" :title "x" :areaId "a1")
-                 :theirs (:id "t1" :title "x" :rev 5 :revBy "sync-repair")))
-              nil)))
+                 :theirs (:id "t1" :title "x" :rev 5 :revBy "sync-repair")))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -433,11 +453,10 @@ repair (`revBy' \"sync-repair\") says so, with a plain-language hint (#28)."
   "A conflict from another device shows that device's revBy without the
 repair explainer."
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              '((:id "t1" :kind task
+              (list :stats '(:created 0 :updated 1 :deleted 0)
+                    :conflicts '((:id "t1" :kind task
                  :mine (:id "t1" :title "x")
-                 :theirs (:id "t1" :title "y" :rev 5 :revBy "phone-abc")))
-              nil)))
+                 :theirs (:id "t1" :title "y" :rev 5 :revBy "phone-abc")))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))
@@ -449,11 +468,10 @@ repair explainer."
   "No `revBy' on the server entity (older servers, tests) renders no
 attribution line at all."
   (let ((buf (mindwtr-report-show
-              '(:created 0 :updated 1 :deleted 0)
-              '((:id "t1" :kind task
+              (list :stats '(:created 0 :updated 1 :deleted 0)
+                    :conflicts '((:id "t1" :kind task
                  :mine (:id "t1" :title "x")
-                 :theirs (:id "t1" :title "y")))
-              nil)))
+                 :theirs (:id "t1" :title "y")))))))
     (unwind-protect
         (with-current-buffer buf
           (goto-char (point-min))

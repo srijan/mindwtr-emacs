@@ -62,6 +62,15 @@ definition of \"the same content\"."
     (mindwtr-signature--norm-checklist v))
    (t v)))
 
+(defun mindwtr-signature-field-canonical (k v)
+  "Canonical comparison form of content field K's value V, or nil if empty.
+`mindwtr-signature-canonical-value' plus the empty-as-absent rule (nil, an
+empty string or an empty list all read as absent), so the write-merge,
+change detection and the sync report agree on what \"the same content\"
+means regardless of how a producer spelled an empty value."
+  (if (or (null v) (and (stringp v) (string-empty-p v))) nil
+    (mindwtr-signature-canonical-value k v)))
+
 (defun mindwtr-signature--canonical-plist (entity)
   "Return a canonical flat plist of ENTITY's content fields, sorted by key.
 Signs only the editable fields named in `mindwtr-model-content-fields'
