@@ -51,6 +51,13 @@ JSON snapshot lets changes be detected without re-fetching.
 
 - `make test` — the **offline** correctness gate: ERT unit tests, no server needed. This plus
   `make compile` (byte-compile) is the ship gate; run them before every commit.
+- `make parity` — **offline** synced-field parity: diffs `mindwtr-model-known-fields` against
+  the Mindwtr core's own sync-schema fixtures (`packages/core/src/<entity>-sync-schema.fixture.json`).
+  Set `MINDWTR_CORE_PATH` to an upstream checkout (monorepo root or `packages/core/src`); skips
+  cleanly when unset, exits 1 on drift. The same comparison runs as an ERT gate inside `make test`
+  and as the first phase of `make smoke`. Prefer this over the live schema-coverage phase when
+  adopting a new server version: schema coverage only sees fields some entity on that instance
+  actually carries, so it is blind to a field the server has learned but nobody has set yet.
 - `make smoke` / `make smoke-write` — **online** integration tests that require a live
   `MINDWTR_URL` (and credentials); they exit early with a connection error when no server is
   reachable, so run *directly* they're manual/staging-only, not a CI gate. Always exercise at
