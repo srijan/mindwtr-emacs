@@ -335,7 +335,7 @@ recenters, so it absorbs the body-length change from the inline note above it."
               (set-window-start win (point-min))
               ;; cursor on P2, which sits below P1's note and would shift down
               ;; as the note grows if the row anchor did not absorb it.
-              (mindwtr-reconcile--goto-id "p2")
+              (mindwtr-heading-goto-key "p2")
               (let ((row-before (count-screen-lines (window-start win)
                                                     (line-beginning-position) nil win))
                     (merged '(:tasks nil
@@ -350,7 +350,7 @@ recenters, so it absorbs the body-length change from the inline note above it."
                 (mindwtr-reconcile-buffer merged)
                 ;; P2 grew its distance from buffer top (5-line note vs 1) but its
                 ;; SCREEN row is unchanged -- the anchor absorbed the reflow.
-                (mindwtr-reconcile--goto-id "p2")
+                (mindwtr-heading-goto-key "p2")
                 (should (= row-before
                            (count-screen-lines (window-start win)
                                                (line-beginning-position) nil win)))))))
@@ -633,7 +633,7 @@ runs identically on Org 9.5 and 9.8."
               "body of one\n"
               "** NEXT task two\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t2\n:END:\n")
       (org-mode))
-    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-heading-goto-key "t1")
     (mindwtr-reconcile--hide-subtree)
     (should (org-invisible-p (line-end-position))) ; sanity: folded before
     (let ((merged '(:tasks ((:id "t1" :title "task one" :status "next" :areaId "a1"
@@ -648,7 +648,7 @@ runs identically on Org 9.5 and 9.8."
       (mindwtr-reconcile-buffer merged)
       (goto-char (point-min))
       (should (search-forward "task two RENAMED" nil t)) ; the unrelated change landed
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should (org-invisible-p (line-end-position)))))) ; still folded after
 
 (ert-deftest mindwtr-reconcile-keeps-unfolded-heading-unfolded ()
@@ -667,7 +667,7 @@ runs identically on Org 9.5 and 9.8."
                     :projects nil :sections nil
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged)
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should-not (org-invisible-p (line-end-position))))))
 
 (ert-deftest mindwtr-reconcile-fold-follows-status-relocation ()
@@ -679,7 +679,7 @@ folded again in its new location, because fold state is keyed by MW_ID."
               "** NEXT relocate me\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n"
               "some body\n")
       (org-mode))
-    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-heading-goto-key "t1")
     (mindwtr-reconcile--hide-subtree)
     (should (org-invisible-p (line-end-position)))
     (let ((merged '(:tasks ((:id "t1" :title "relocate me" :status "next" :projectId "p1"
@@ -692,7 +692,7 @@ folded again in its new location, because fold state is keyed by MW_ID."
                     :sections nil
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged)
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       ;; it now lives under the project subtree; still folded
       (should (org-invisible-p (line-end-position))))))
 
@@ -705,7 +705,7 @@ after folding, and the buffer is correctly rebuilt -- proves the
       (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
               "** NEXT t\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
       (org-mode))
-    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-heading-goto-key "t1")
     (mindwtr-reconcile--hide-subtree)
     (let ((merged '(:tasks ((:id "t1" :title "renamed t" :status "next" :areaId "a1"
                              :rev 2 :createdAt "2026-01-01T00:00:00Z"
@@ -728,7 +728,7 @@ ancestor-skip limitation: only the ancestor's record drives restoration)."
               "child body\n")
       (org-mode))
     ;; fold the ancestor (project); the child is hidden only because of it
-    (mindwtr-reconcile--goto-id "p1")
+    (mindwtr-heading-goto-key "p1")
     (mindwtr-reconcile--hide-subtree)
     (should (org-invisible-p (line-end-position)))
     (let ((merged '(:tasks ((:id "t1" :title "child" :status "next" :projectId "p1"
@@ -741,7 +741,7 @@ ancestor-skip limitation: only the ancestor's record drives restoration)."
                     :sections nil
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged) ; must not signal
-      (mindwtr-reconcile--goto-id "p1")
+      (mindwtr-heading-goto-key "p1")
       (should (org-invisible-p (line-end-position)))))) ; ancestor still folded
 
 ;;; View-state preservation -- global cycle state + scroll anchor (U2)
@@ -770,7 +770,7 @@ it stays hidden, faithfully reproducing overview without a backdrop call."
       (should-not (org-invisible-p (line-beginning-position)))
       (should (org-invisible-p (line-end-position)))
       ;; ...and the task under it stays hidden.
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should (org-invisible-p (line-beginning-position))))))
 
 (ert-deftest mindwtr-reconcile-contents-state-preserved-per-heading ()
@@ -793,7 +793,7 @@ no-backdrop path keeps the child heading from collapsing."
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged)
       ;; the ancestor's child heading remained visible (not collapsed)
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should-not (org-invisible-p (line-beginning-position))) ; heading visible
       (should (org-invisible-p (line-end-position))))))        ; body folded
 
@@ -810,10 +810,10 @@ heading restored from its own recorded state."
       (org-mode))
     (org-overview)
     ;; reveal Work's immediate children (t1/t2 headings show, bodies folded)
-    (mindwtr-reconcile--goto-id "a1")
+    (mindwtr-heading-goto-key "a1")
     (mindwtr-reconcile-test--show-children)
     ;; user expands t1's body only; t2 stays folded
-    (mindwtr-reconcile--goto-id "t1")
+    (mindwtr-heading-goto-key "t1")
     (mindwtr-reconcile--show-entry)
     (let ((merged '(:tasks ((:id "t1" :title "t1" :status "next" :areaId "a1"
                              :description "body one"
@@ -826,9 +826,9 @@ heading restored from its own recorded state."
                     :projects nil :sections nil
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (mindwtr-reconcile-buffer merged)
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should-not (org-invisible-p (line-end-position))) ; reopened
-      (mindwtr-reconcile--goto-id "t2")
+      (mindwtr-heading-goto-key "t2")
       (should (org-invisible-p (line-end-position)))))) ; still folded
 
 (ert-deftest mindwtr-reconcile-no-window-skips-scroll-anchor ()
@@ -868,7 +868,7 @@ rather than being swallowed at the start."
       (should (null (mindwtr-reconcile--restore-view view))) ; no throw
       (goto-char (point-min))
       (should-not (org-invisible-p (line-beginning-position))) ; container line shown
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should (org-invisible-p (line-beginning-position)))))) ; folded under container
 
 (ert-deftest mindwtr-reconcile-restore-view-preserves-modified-flag ()
@@ -884,7 +884,7 @@ rather than being swallowed at the start."
                                (puthash "t1" 'folded h) h)
                       :top-id nil :anchor-line nil)))
       (mindwtr-reconcile--restore-view view)
-      (mindwtr-reconcile--goto-id "t1")
+      (mindwtr-heading-goto-key "t1")
       (should (org-invisible-p (line-end-position))) ; the fold was applied
       (should-not (buffer-modified-p)))))            ; but the flag is untouched
 
@@ -912,7 +912,7 @@ determinism note."
               (skip-unless (window-live-p win))
               (set-window-start win (point-min))
               ;; point on the at-id heading, as reconcile-buffer leaves it
-              (mindwtr-reconcile--goto-id "id3")
+              (mindwtr-heading-goto-key "id3")
               ;; anchor-line non-nil -> recenter branch (no :top-id needed)
               (should (null (mindwtr-reconcile--restore-view (list :anchor-line 4))))
               (should (= 4 (count-screen-lines (window-start win)
@@ -944,7 +944,7 @@ Without that, `recenter' would center on the stale point, not the heading."
               (set-window-start win (point-min))
               (set-window-point win (point-min)) ; stale window-point at the top
               ;; reconcile sets BUFFER point to the at-id heading (window unselected)
-              (mindwtr-reconcile--goto-id "id3")
+              (mindwtr-heading-goto-key "id3")
               (should (null (mindwtr-reconcile--restore-view (list :anchor-line 4))))
               ;; the id3 heading -- not the stale top -- sits at row 4
               (with-selected-window win
@@ -974,17 +974,17 @@ non-nil :top-id, and restore anchors the window via the :top-id
               ;; scroll so id5's BODY is the viewport top: :top-id resolves to the
               ;; next heading forward (id6), distinct from the initial start, so a
               ;; successful fallback visibly moves `window-start'.
-              (mindwtr-reconcile--goto-id "id5")
+              (mindwtr-heading-goto-key "id5")
               (forward-line 5)            ; onto id5's body line
               (set-window-start win (line-beginning-position))
               ;; point sits on id1, far above window-start -> off-screen anchor
-              (mindwtr-reconcile--goto-id "id1")
+              (mindwtr-heading-goto-key "id1")
               (let ((snap (mindwtr-reconcile--snapshot-view)))
                 (should (null (plist-get snap :anchor-line)))  ; off-screen: no recenter
                 (should (equal "id6" (plist-get snap :top-id))) ; viewport-top heading
                 (should (null (mindwtr-reconcile--restore-view snap)))
                 (save-excursion
-                  (mindwtr-reconcile--goto-id "id6")
+                  (mindwtr-heading-goto-key "id6")
                   ;; window-start was moved by the :top-id fallback onto id6's line
                   (should (= (window-start win) (line-beginning-position))))))))
       (kill-buffer buf))))
@@ -1011,9 +1011,9 @@ viewport to the buffer top, the very jump this change exists to prevent."
             (skip-unless (window-live-p win))
             (with-current-buffer buf
               ;; viewport top is t2 (survives the sync); cursor is on t3 (deleted)
-              (mindwtr-reconcile--goto-id "t2")
+              (mindwtr-heading-goto-key "t2")
               (set-window-start win (line-beginning-position))
-              (mindwtr-reconcile--goto-id "t3")
+              (mindwtr-heading-goto-key "t3")
               (let ((snap (mindwtr-reconcile--snapshot-view)))
                 (should (plist-get snap :anchor-line))       ; t3 on-screen -> recorded
                 (should (equal "t2" (plist-get snap :top-id)))) ; viewport-top anchor
@@ -1029,7 +1029,7 @@ viewport to the buffer top, the very jump this change exists to prevent."
               ;; t3 is gone, and the viewport did NOT collapse to the buffer top
               ;; (the surviving :top-id t2 renders well below point-min).
               (should (/= (window-start win) (point-min)))
-              (should-not (mindwtr-reconcile--goto-id "t3")))))
+              (should-not (mindwtr-heading-goto-key "t3")))))
       (kill-buffer buf))))
 
 (ert-deftest mindwtr-reconcile-expanded-buffer-survives-repeated-sync ()
@@ -1054,7 +1054,7 @@ consecutive syncs -- the old code degraded the buffer further each sync."
                     :areas ((:id "a1" :name "Work")) :settings nil)))
       (dotimes (_ 2)
         (mindwtr-reconcile-buffer merged)
-        (mindwtr-reconcile--goto-id "t1")
+        (mindwtr-heading-goto-key "t1")
         (should-not (org-invisible-p (line-beginning-position)))   ; heading shown
         (should-not (org-invisible-p (line-end-position)))))))     ; body shown
 
@@ -1085,10 +1085,10 @@ user left open stays open.  No drift in either direction (the degrade loop)."
       (dotimes (_ 2)
         (mindwtr-reconcile-buffer merged)
         ;; Inbox's task stays hidden under the re-folded container...
-        (mindwtr-reconcile--goto-id "t1")
+        (mindwtr-heading-goto-key "t1")
         (should (org-invisible-p (line-beginning-position)))
         ;; ...while the open container's task stays fully shown.
-        (mindwtr-reconcile--goto-id "t2")
+        (mindwtr-heading-goto-key "t2")
         (should-not (org-invisible-p (line-beginning-position)))
         (should-not (org-invisible-p (line-end-position)))))))
 
@@ -1107,7 +1107,7 @@ key in both cases."
     (goto-char (point-min))
     (should (string= (mindwtr-reconcile--id-at-point) "projects"))
     ;; on the entity heading -> its id
-    (mindwtr-reconcile--goto-id "p1")
+    (mindwtr-heading-goto-key "p1")
     (should (string= (mindwtr-reconcile--id-at-point) "p1"))))
 
 (ert-deftest mindwtr-reconcile-restores-point-on-container ()
