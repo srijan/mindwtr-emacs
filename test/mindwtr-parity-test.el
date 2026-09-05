@@ -57,6 +57,26 @@ look identical to a clean run."
       (should (memq :title (plist-get task :missing)))
       (should (mindwtr-parity-drift result)))))
 
+(ert-deftest mindwtr-parity-extra-field-is-not-drift ()
+  "A field the model knows but the fixture omits is noted, never a failure.
+CI reads the fixtures at the pinned server version (`DEFAULT_CLOUD_TAG'),
+which normally lags upstream, so recognizing a newer field must not turn the
+build red.  Only `:missing' -- a field the server can send that nothing here
+recognizes -- is drift."
+  (let ((dir (mindwtr-parity-core-dir)))
+    (skip-unless dir)
+    (let* ((mindwtr-model-known-fields
+            (mapcar (lambda (entry)
+                      (if (eq (car entry) 'area)
+                          (cons 'area (cons :notAFieldUpstreamHas (cdr entry)))
+                        entry))
+                    mindwtr-model-known-fields))
+           (result (mindwtr-parity-check dir))
+           (area (cdr (assq 'area result))))
+      (should (memq :notAFieldUpstreamHas (plist-get area :extra)))
+      (should-not (plist-get area :missing))
+      (should-not (mindwtr-parity-drift result)))))
+
 (ert-deftest mindwtr-parity-ignores-legacy-aliases ()
   "A deprecated upstream alias is noted, never reported as missing.
 Task `orderNum' is `legacy-alias' upstream; the model still reads it as an

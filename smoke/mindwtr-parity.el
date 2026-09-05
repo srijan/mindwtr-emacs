@@ -21,12 +21,17 @@
 ;;
 ;;   MINDWTR_CORE_PATH=~/src/Mindwtr make parity
 ;;
-;; Two fixture generations are in the wild and both are read:
+;; The fixtures are not uniform, and `schemaVersion' does NOT tell them apart:
+;; the task fixture already carried `sync'/`signature' keys while still declaring
+;; schemaVersion 1, and the other entities describe a field with `cloudSynced'.
+;; So this reads whichever keys a field actually has rather than branching on the
+;; version, and treats a key's absence as "this fixture does not say":
 ;;
-;;   v1 (area, person, project, section) -- each field carries `cloudSynced'.
-;;   v2 (task) -- each field carries a `sync' category (identity, content,
-;;       order, revision-metadata, archive-metadata, tombstone, legacy-alias)
-;;       and a `signature' membership.
+;;   name       -- always present; the only thing parity strictly needs.
+;;   sync       -- category: identity, content, order, revision-metadata,
+;;                 archive-metadata, tombstone, legacy-alias.
+;;   signature  -- membership in the server's own content signature.
+;;   cloudSynced/cloudWrite -- the older per-field spelling.
 ;;
 ;; `legacy-alias' fields (e.g. task `orderNum') are deprecated upstream spellings:
 ;; the model MAY still read them for old data, so they are never reported as
@@ -88,9 +93,13 @@ built without libjansson still works."
 
 (defun mindwtr-parity-fixture (entity dir)
   "Read ENTITY's fixture from DIR into a plist describing its synced fields.
-Keys: `:version' (fixture schemaVersion), `:wire' (every declared field),
-`:legacy' (deprecated aliases, v2 only) and `:signature' (fields in the
-server's own content signature, v2 only).  Signals if the file is unreadable."
+Keys: `:version' (the fixture's own schemaVersion, reported but never
+branched on -- see the Commentary), `:wire' (every declared field),
+`:legacy' (deprecated aliases) and `:signature' (fields in the server's own
+content signature).  The last two come back empty for a fixture that does not
+spell those keys, which is indistinguishable from having none -- safe here,
+because both only ever suppress or annotate a report, never trigger one.
+Signals if the file is unreadable."
   (let* ((file (expand-file-name (mindwtr-parity--fixture-name entity) dir))
          (doc (mindwtr-parity--read-json file))
          (version (alist-get 'schemaVersion doc))
@@ -110,10 +119,12 @@ server's own content signature, v2 only).  Signals if the file is unreadable."
 (defun mindwtr-parity-compare (entity dir)
   "Compare ENTITY's model fields against its upstream fixture in DIR.
 Return a plist with `:missing' (upstream declares it, the model does not --
-this is drift the model must adopt), `:extra' (the model carries a field
-upstream no longer declares) and `:legacy' (deprecated aliases, reported for
-information only).  `:missing' excludes legacy aliases: the model may keep
-reading one for old data without upstream still declaring it current."
+drift the model must adopt), `:extra' (the model carries a field this
+fixture does not declare -- usually one newer than the pinned version) and
+`:legacy' (deprecated aliases).  Only `:missing' is a failure; see
+`mindwtr-parity-drift' for why the severities are asymmetric.  `:missing'
+excludes legacy aliases: the model may keep reading one for old data without
+upstream still declaring it current."
   (let* ((fx (mindwtr-parity-fixture entity dir))
          (known (cdr (assq entity mindwtr-model-known-fields)))
          (wire (plist-get fx :wire))
@@ -134,11 +145,22 @@ upstream checkout is configured."
               mindwtr-parity-entities))))
 
 (defun mindwtr-parity-drift (result)
-  "Return the entries of RESULT that carry `:missing' or `:extra' fields."
-  (seq-filter (lambda (entry)
-                (or (plist-get (cdr entry) :missing)
-                    (plist-get (cdr entry) :extra)))
-              result))
+  "Return the entries of RESULT that carry `:missing' fields.
+
+Only `:missing' counts as drift -- the severities are deliberately
+asymmetric.  A field the fixture declares that the model lacks is the
+dangerous direction: the server can send it and nothing here recognizes it,
+which is precisely how `:startDate' and `:viewSectionIds' went unnoticed.
+
+`:extra' is not a failure.  The fixtures are read at the pinned server
+version (`DEFAULT_CLOUD_TAG'), which normally lags upstream, so a model that
+recognizes a NEWER field than the pin legitimately reports it as extra --
+forward compatibility, not drift.  Recognition costs nothing either way: an
+extra field is outside the `mindwtr-model-content-fields' allow-list, so it
+is echoed through the shadow and can neither churn a signature nor be
+clobbered.  A field upstream genuinely removed therefore surfaces as a note
+for a human to read, never as a red build."
+  (seq-filter (lambda (entry) (plist-get (cdr entry) :missing)) result))
 
 (defun mindwtr-parity-format (result)
   "Return RESULT as a list of human-readable report lines."
@@ -148,20 +170,19 @@ upstream checkout is configured."
              (missing (plist-get pl :missing))
              (extra (plist-get pl :extra))
              (legacy (plist-get pl :legacy)))
-        (cond
-         ((or missing extra)
-          (when missing
+        (if missing
             (push (format "DRIFT %s: upstream declares %S -- absent from mindwtr-model-known-fields"
                           entity missing)
-                  lines))
-          (when extra
-            (push (format "DRIFT %s: model carries %S -- no longer declared upstream"
-                          entity extra)
-                  lines)))
-         (t (push (format "ok    %s: %d fields match (fixture v%s)"
-                          entity (length (plist-get pl :wire))
-                          (plist-get pl :version))
-                  lines)))
+                  lines)
+          (push (format "ok    %s: %d fields match (fixture v%s)"
+                        entity (length (plist-get pl :wire))
+                        (plist-get pl :version))
+                lines))
+        ;; Informational: see `mindwtr-parity-drift' for why neither fails.
+        (when extra
+          (push (format "note  %s: model also knows %S -- newer than the pinned fixture, or dropped upstream"
+                        entity extra)
+                lines))
         (when legacy
           (push (format "note  %s: upstream marks %S legacy-alias" entity legacy)
                 lines))))

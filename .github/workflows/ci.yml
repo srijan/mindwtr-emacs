@@ -33,10 +33,47 @@ jobs:
           sudo apt-get install -y --no-install-recommends emacs-nox
           emacs --version | head -1
 
+      # The synced-field parity gate compares mindwtr-model-known-fields against
+      # the Mindwtr core's own sync-schema fixtures. It reads them at the SAME
+      # version the dockerized smoke gate runs against -- DEFAULT_CLOUD_TAG in
+      # test/integration/run.sh -- so both gates describe one server, and
+      # Renovate's existing bump of that token upgrades this too (no second
+      # version to track). Docker tags are unprefixed, git tags carry a "v".
+      - name: Resolve the pinned upstream version
+        id: upstream
+        run: |
+          tag=$(sed -n 's/^DEFAULT_CLOUD_TAG="\(.*\)"$/\1/p' test/integration/run.sh)
+          test -n "$tag" || { echo "::error::DEFAULT_CLOUD_TAG not found in test/integration/run.sh"; exit 1; }
+          echo "ref=v${tag}" >> "$GITHUB_OUTPUT"
+          echo "Pinned upstream: v${tag}"
+
+      # Public repo, so no token is needed. Sparse + shallow: the monorepo is
+      # ~180 MB and all we read are five JSON fixtures.
+      - name: Check out Mindwtr core fixtures at that version
+        uses: actions/checkout@v7
+        with:
+          repository: dongdongbh/Mindwtr
+          ref: ${{ steps.upstream.outputs.ref }}
+          path: upstream
+          sparse-checkout: packages/core/src
+          sparse-checkout-cone-mode: true
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Byte-compile (error on warnings)
         run: make compile
 
+      # Explicit step so drift reads as its own red line rather than one ERT
+      # failure among hundreds. Fails only on a field the server can send that
+      # the model does not recognize; a field newer than the pin is just noted.
+      - name: Synced-field parity against upstream fixtures
+        env:
+          MINDWTR_CORE_PATH: ${{ github.workspace }}/upstream
+        run: make parity
+
       - name: Run ERT unit tests
+        env:
+          MINDWTR_CORE_PATH: ${{ github.workspace }}/upstream
         run: make test
 
   integration:
