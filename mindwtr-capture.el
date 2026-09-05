@@ -16,7 +16,7 @@
 ;; variant also suits an `org-protocol' template).  New headings are stamped
 ;; with :MW_TYPE: task and a freshly minted :MW_ID:.  The stamping is belt-
 ;; and-suspenders: the parser also infers `task' for a heading under the
-;; Inbox container (`mindwtr-parse--infer-kind'), and the sync engine mints
+;; Inbox container (`mindwtr-parse-infer-kind'), and the sync engine mints
 ;; an MW_ID for any new heading lacking one -- so a capture that omits
 ;; either still round-trips.  This module just makes the heading first-class
 ;; from birth.
@@ -25,6 +25,7 @@
 (require 'org)
 (require 'mindwtr-util)
 (require 'mindwtr-model)
+(require 'mindwtr-heading)
 
 (defvar mindwtr-file)
 (defvar org-capture-templates)
@@ -59,13 +60,13 @@ the container whose :MW_LIST: is `inbox' (robust to a renamed heading);
 falls back to a literal top-level `* Inbox' headline for a hand-written
 file; errors when neither exists."
   (goto-char (point-min))
-  (cond
-   ((re-search-forward "^[ \t]*:MW_LIST:[ \t]*inbox[ \t]*$" nil t)
-    (org-back-to-heading t))
-   ((re-search-forward "^\\* Inbox[ \t]*$" nil t)
-    (beginning-of-line))
-   (t (user-error "mindwtr-capture: no `* Inbox' container in %s (run `mindwtr-bootstrap'?)"
-                  (buffer-name)))))
+  (let ((pos (mindwtr-heading-find-role "inbox")))
+    (cond
+     (pos (goto-char pos))
+     ((re-search-forward "^\\* Inbox[ \t]*$" nil t)
+      (beginning-of-line))
+     (t (user-error "mindwtr-capture: no `* Inbox' container in %s (run `mindwtr-bootstrap'?)"
+                    (buffer-name))))))
 
 (defun mindwtr-capture-template-entry (&optional key description with-link)
   "Return an `org-capture-templates' entry capturing into the Mindwtr inbox.

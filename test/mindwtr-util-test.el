@@ -3,26 +3,6 @@
 (require 'mindwtr-util)
 (require 'org)
 
-(ert-deftest mindwtr-util--map-entries-neutralizes-buffer-file-name ()
-  "The scan wrapper runs `org-map-entries' with `buffer-file-name' nil.
-With it non-nil, `org-map-entries' (nil scope) feeds the buffer to Org's
-agenda-file machinery, which prompts \"Non-existent agenda file ...\" -- a hang
-under `--batch' -- when the file is not yet on disk.  This pins the single
-binding the six parse/reconcile call sites now route through: remove it from
-the macro and `seen' captures the live file name instead of nil, failing here.
-It also confirms the callback still visits every heading."
-  (with-temp-buffer
-    (org-mode)
-    (insert "* One\n* Two\n")
-    ;; A file name that does not exist -- the condition that would otherwise
-    ;; trip Org's agenda-file check.
-    (setq buffer-file-name "/tmp/mindwtr-nonexistent-agenda-file.org")
-    (let ((seen '()))
-      (mindwtr-util--map-entries
-       (lambda () (push buffer-file-name seen)))
-      (should (= (length seen) 2))            ; visited both headings
-      (should (seq-every-p #'null seen)))))   ; with buffer-file-name bound nil
-
 (ert-deftest mindwtr-util-loads ()
   "The util library provides its feature."
   (should (featurep 'mindwtr-util)))

@@ -57,7 +57,7 @@ defines."
 `* Someday' is a container whose children are the `someday-single-actions'
 and `someday-projects' containers; the rest are top-level.  `archive' is the
 container role of the synced archive file's single `* Archive' heading; it is
-deliberately absent from `mindwtr-parse--infer-kind' (KTD9) -- a direct child
+deliberately absent from `mindwtr-parse-infer-kind' (KTD9) -- a direct child
 of `* Archive' could be a task or a project, so an untyped heading there
 quarantines rather than being guessed.")
 

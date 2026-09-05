@@ -21,6 +21,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-util)
 (require 'mindwtr-clock)
+(require 'mindwtr-heading)
 
 (defconst mindwtr-parse--known-props
   '("MW_TYPE" "MW_ID" "MW_ENERGY" "MW_TIME_ESTIMATE" "MW_RECURRENCE"
@@ -57,72 +58,6 @@ to a nil status, leaking the keyword into the title and aborting the sync."
           (org-inhibit-startup t))
       (org-mode))))
 
-(defvar-local mindwtr-parse--drawer-cache nil
-  "Per-buffer memo for `mindwtr-parse--drawer-alist': (TICK . HASH pos->alist).
-The parser reads a heading's drawer once per property (`mindwtr-parse--prop'),
-which without a memo re-scans the same entry ~15-20 times per heading -- the
-dominant CPU cost of a parse.  The hash maps a heading's start position to its
-scanned alist; the whole hash is discarded whenever the buffer's
-`buffer-chars-modified-tick' moves, so any edit invalidates every entry (a
-position-keyed memo would otherwise go stale as text shifts).  An entry with
-no drawer caches the sentinel `none' (nil would read as a miss).")
-
-(defun mindwtr-parse--drawer-alist-1 ()
-  "Scan and return this entry's PROPERTIES drawer alist (uncached).
-Point must be at the heading.  This scans the heading body directly rather
-than relying on `org-entry-get', because the latter fails to associate a
-property drawer with its heading when more than one planning line (e.g. both
-SCHEDULED and DEADLINE on separate lines) precedes the drawer."
-  (save-excursion
-    (let ((end (save-excursion (outline-next-heading) (point)))
-          (case-fold-search nil)
-          props)
-      (forward-line 1)
-      (when (re-search-forward "^[ \t]*:PROPERTIES:[ \t]*$" end t)
-        (forward-line 1)
-        (while (and (< (point) end)
-                    (not (looking-at-p "^[ \t]*:END:[ \t]*$")))
-          (when (looking-at "^[ \t]*:\\([^:\n]+\\):[ \t]*\\(.*?\\)[ \t]*$")
-            (push (cons (match-string-no-properties 1)
-                        (match-string-no-properties 2))
-                  props))
-          (forward-line 1)))
-      (nreverse props))))
-
-(defun mindwtr-parse--drawer-alist ()
-  "Return an alist (KEY . VALUE) of the PROPERTIES drawer for this entry.
-Memoized per (buffer tick, heading position) -- see
-`mindwtr-parse--drawer-cache'; the scan itself is
-`mindwtr-parse--drawer-alist-1'."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((tick (buffer-chars-modified-tick)))
-      (unless (and mindwtr-parse--drawer-cache
-                   (= (car mindwtr-parse--drawer-cache) tick))
-        (setq mindwtr-parse--drawer-cache
-              (cons tick (make-hash-table :test 'eql))))
-      (let* ((h (cdr mindwtr-parse--drawer-cache))
-             (cached (gethash (point) h)))
-        (cond
-         ((eq cached 'none) nil)
-         (cached cached)
-         (t (let ((props (mindwtr-parse--drawer-alist-1)))
-              (puthash (point) (or props 'none) h)
-              props)))))))
-
-(defun mindwtr-parse--prop (key)
-  "Return raw value of property KEY for this entry, or nil."
-  (cdr (assoc key (mindwtr-parse--drawer-alist))))
-
-(defun mindwtr-parse--mw-type ()
-  "Return this heading's :MW_TYPE: value, or nil when absent OR blank.
-A blank value (a raw edit that left `:MW_TYPE:' with nothing after it) is
-treated as absent so the heading routes through context inference / quarantine
-rather than interning to the empty symbol and being silently dropped as
-neither a real kind nor an orphan."
-  (let ((v (mindwtr-parse--prop "MW_TYPE")))
-    (and v (not (string-empty-p v)) v)))
-
 (defun mindwtr-parse--split-tags (tags)
   "Split org TAGS list into (contexts . hashtags) per the @-convention."
   (let (contexts hashtags)
@@ -136,7 +71,7 @@ neither a real kind nor an orphan."
   "Return ISO timestamp for a planning line matching REGEXP in this entry."
   (save-excursion
     (org-back-to-heading t)
-    (let ((end (save-excursion (outline-next-heading) (point))))
+    (let ((end (mindwtr-heading-entry-end)))
       (when (re-search-forward regexp end t)
         (mindwtr-util-org->iso (match-string 1))))))
 
@@ -198,7 +133,7 @@ Two hardening rules keep prose that merely LOOKS structural (#26):
     (org-back-to-heading t)
     (let* ((el (org-element-at-point))
            (cbeg (org-element-property :contents-begin el))
-           (end (save-excursion (outline-next-heading) (point)))
+           (end (mindwtr-heading-entry-end))
            (lines (when cbeg
                     (vconcat
                      (split-string (buffer-substring-no-properties cbeg end)
@@ -234,10 +169,10 @@ Two hardening rules keep prose that merely LOOKS structural (#26):
              (string-trim (mapconcat #'identity (nreverse prose) "\n")))
             (nreverse checklist)))))
 
-(defun mindwtr-parse--extra-props ()
+(defun mindwtr-parse-extra-props ()
   "Return a plist (string key -> value) of unknown PROPERTIES at point."
   (let (extra)
-    (pcase-dolist (`(,k . ,v) (mindwtr-parse--drawer-alist))
+    (pcase-dolist (`(,k . ,v) (mindwtr-heading-properties))
       (unless (member k mindwtr-parse--known-props)
         (setq extra (plist-put extra k v))))
     extra))
@@ -263,14 +198,14 @@ the parse was clean."
   "Scan the current buffer for area headings, returning a name->id hash.
 Warns on a duplicate name (keeps the first id)."
   (let ((h (make-hash-table :test 'equal)))
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
-       (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "area")
+       (when (string= (or (mindwtr-heading-prop "MW_TYPE") "") "area")
          ;; Same link conversion as `mindwtr-parse-heading' titles, so the
          ;; name->id map keys match the server-side (markdown) names that
          ;; `:CATEGORY:' values carry.
          (let ((name (mindwtr-parse--org->mw-links (org-get-heading t t t t)))
-               (id (mindwtr-parse--prop "MW_ID")))
+               (id (mindwtr-heading-prop "MW_ID")))
            (when (and name id)
              (if (gethash name h)
                  (message "mindwtr: duplicate area name %S; keeping first" name)
@@ -286,16 +221,16 @@ Warns on a duplicate name (keeps the first id)."
   "Parse the org heading at point into a Mindwtr entity content plist.
 KIND, when given, is the entity kind symbol to use (e.g. for a heading whose
 type was inferred from context).  When omitted it is read from the
-:MW_TYPE: property, falling back to `mindwtr-parse--infer-kind'."
+:MW_TYPE: property, falling back to `mindwtr-parse-infer-kind'."
   (save-excursion (mindwtr-parse-ensure-keywords))
   (org-back-to-heading t)
   (let* ((kind (or kind
-                   (let ((mt (mindwtr-parse--prop "MW_TYPE")))
+                   (let ((mt (mindwtr-heading-prop "MW_TYPE")))
                      (and mt (intern mt)))
-                   (mindwtr-parse--infer-kind)
+                   (mindwtr-parse-infer-kind)
                    (error "Heading has no MW_TYPE and type could not be inferred: %s"
                           (org-get-heading t t t t))))
-         (id (mindwtr-parse--prop "MW_ID"))
+         (id (mindwtr-heading-prop "MW_ID"))
          ;; Titles convert org links to markdown like body prose does (#29);
          ;; links-only, so a title starting with `+ ' is not bullet-mangled.
          (title (mindwtr-parse--org->mw-links (org-get-heading t t t t)))
@@ -303,7 +238,7 @@ type was inferred from context).  When omitted it is read from the
          (tags (org-get-tags nil t))
          (split (mindwtr-parse--split-tags tags))
          (e (list :id id :mw-kind kind
-                  :mw-extra-props (mindwtr-parse--extra-props))))
+                  :mw-extra-props (mindwtr-parse-extra-props))))
     (pcase kind
       ((or 'area 'person) (setq e (plist-put e :name title)))
       ((or 'project 'section 'task) (setq e (plist-put e :title title))))
@@ -327,8 +262,8 @@ type was inferred from context).  When omitted it is read from the
         ;; org tags can't hold; when present they are authoritative and the
         ;; native `:tags:' line (suppressed by render in that case) is
         ;; ignored for the corresponding list.
-        (let ((mw-contexts (mindwtr-parse--prop "MW_CONTEXTS"))
-              (mw-tags (mindwtr-parse--prop "MW_TAGS")))
+        (let ((mw-contexts (mindwtr-heading-prop "MW_CONTEXTS"))
+              (mw-tags (mindwtr-heading-prop "MW_TAGS")))
           (setq e (plist-put e :contexts
                              (if mw-contexts
                                  (mindwtr-util-json-decode mw-contexts)
@@ -348,7 +283,7 @@ type was inferred from context).  When omitted it is read from the
         (dolist (p '(("MW_ENERGY" . :energyLevel) ("MW_TIME_ESTIMATE" . :timeEstimate)
                      ("MW_ASSIGNED_TO" . :assignedTo) ("MW_LOCATION" . :location)
                      ("MW_TASK_MODE" . :taskMode)))
-          (let ((v (mindwtr-parse--prop (car p))))
+          (let ((v (mindwtr-heading-prop (car p))))
             (when v (setq e (plist-put e (cdr p) v)))))
         ;; Device-local clock-time roll-up input: the task's closed LOGBOOK sum
         ;; (minutes), carried to the sync reconcile pass; never rendered, signed,
@@ -377,23 +312,23 @@ type was inferred from context).  When omitted it is read from the
     (dolist (p '(("MW_FOCUS_TODAY" . :isFocusedToday)
                  ("MW_SEQUENTIAL" . :isSequential)
                  ("MW_FOCUSED" . :isFocused)))
-      (let ((v (mindwtr-parse--prop (car p))))
+      (let ((v (mindwtr-heading-prop (car p))))
         (when (and v (string= (string-trim v) "t"))
           (setq e (plist-put e (cdr p) t)))))
-    (let ((rv (mindwtr-parse--prop "MW_REVIEW_AT")))
+    (let ((rv (mindwtr-heading-prop "MW_REVIEW_AT")))
       (when (and rv (not (string-empty-p (string-trim rv))))
         (setq e (plist-put e :reviewAt rv))))
     ;; MW_REFERENCE_LINK is person-only, but parsed kind-agnostically (mirrors
     ;; MW_REVIEW_AT above): a kind that never carries it simply lacks the key.
     ;; A blank value omits the key (the blank-guard discipline).
-    (let ((rl (mindwtr-parse--prop "MW_REFERENCE_LINK")))
+    (let ((rl (mindwtr-heading-prop "MW_REFERENCE_LINK")))
       (when (and rl (not (string-empty-p (string-trim rl))))
         (setq e (plist-put e :referenceLink rl))))
     ;; MW_CLOCK_SYNCED is the device-local clock-time baseline (minutes we last
     ;; synced), read kind-agnostically like MW_REVIEW_AT above.  A blank value
     ;; omits the key (treated as 0 downstream).  It is stripped before the wire
     ;; (KTD13) and never signed, so it is device-local state kept in the drawer.
-    (let ((cs (mindwtr-parse--prop "MW_CLOCK_SYNCED")))
+    (let ((cs (mindwtr-heading-prop "MW_CLOCK_SYNCED")))
       (when (and cs (not (string-empty-p (string-trim cs))))
         (setq e (plist-put e :mw-clock-synced (string-to-number cs)))))
     ;; Area: org-native `:CATEGORY:' is the vehicle; fall back to a legacy
@@ -402,8 +337,8 @@ type was inferred from context).  When omitted it is read from the
     ;; reads as the user clearing the area).  Both reads are drawer-local
     ;; (KTD2/KTD3).
     (let ((aid (mindwtr-parse--area-id
-                (or (mindwtr-parse--prop "CATEGORY")
-                    (mindwtr-parse--prop "MW_AREA")))))
+                (or (mindwtr-heading-prop "CATEGORY")
+                    (mindwtr-heading-prop "MW_AREA")))))
       (when aid (setq e (plist-put e :areaId aid))))
     e))
 
@@ -414,29 +349,7 @@ type was inferred from context).  When omitted it is read from the
   "Return E without internal :mw-* keys (but keep :mw-extra-props in metadata)."
   (mindwtr-util-plist-omit e '(:mw-kind :mw-ancestors)))
 
-(defun mindwtr-parse--ancestor-id (kind)
-  "Return MW_ID of the nearest ancestor heading whose MW_TYPE is KIND, or nil."
-  (save-excursion
-    (let (found)
-      (while (and (not found) (org-up-heading-safe))
-        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") (symbol-name kind))
-          (setq found (mindwtr-parse--prop "MW_ID"))))
-      found)))
-
-(defun mindwtr-parse--ancestor-list-role ()
-  "Return the :MW_LIST: role of the nearest container ancestor of point, or nil.
-The first container ancestor wins (its empty :MW_LIST: maps to nil, like \"no
-container\"); point may sit anywhere within an entry.  Mirrors the single-var
-walk of `mindwtr-parse--ancestor-id'."
-  (save-excursion
-    (org-back-to-heading t)
-    (let (role)
-      (while (and (not role) (org-up-heading-safe))
-        (when (string= (or (mindwtr-parse--prop "MW_TYPE") "") "container")
-          (setq role (or (mindwtr-parse--prop "MW_LIST") ""))))
-      (and role (not (string-empty-p role)) role))))
-
-(defun mindwtr-parse--infer-kind ()
+(defun mindwtr-parse-infer-kind ()
   "Infer an entity kind for a heading lacking :MW_TYPE: from its outline context.
 Returns `task', `project', `area', or `person', or nil when the position
 implies no mindwtr entity (no recognized container ancestor -- e.g. a stray
@@ -448,11 +361,11 @@ container's :MW_LIST: plus project/section ancestry:
   projects / someday-projects, direct child of the container    -> project
   areas                                                         -> area
   people                                                        -> person"
-  (pcase (mindwtr-parse--ancestor-list-role)
+  (pcase (mindwtr-heading-container-role)
     ((or "inbox" "single-actions" "someday-single-actions" "reference") 'task)
     ((or "projects" "someday-projects")
-     (if (or (mindwtr-parse--ancestor-id 'section)
-             (mindwtr-parse--ancestor-id 'project))
+     (if (or (mindwtr-heading-ancestor-id 'section)
+             (mindwtr-heading-ancestor-id 'project))
          'task 'project))
     ("areas" 'area)
     ("people" 'person)
@@ -464,15 +377,15 @@ container's :MW_LIST: plus project/section ancestry:
   (mindwtr-parse-ensure-keywords)
   (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
         tasks projects sections areas people)
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
        ;; A heading's kind comes from its :MW_TYPE: property; a `container'
        ;; is structural, not an entity.  When :MW_TYPE: is absent (org-capture,
        ;; raw edit, mobile), fall back to inferring the kind from outline
        ;; context so the heading still round-trips instead of being silently
        ;; dropped (and then erased by reconcile).
-       (let* ((mt (mindwtr-parse--mw-type))
-              (kind (cond ((null mt) (mindwtr-parse--infer-kind))
+       (let* ((mt (mindwtr-heading-type))
+              (kind (cond ((null mt) (mindwtr-parse-infer-kind))
                           ((string= mt "container") nil)
                           (t (intern mt)))))
          (when kind
@@ -482,7 +395,7 @@ container's :MW_LIST: plus project/section ancestry:
                ('person (push (mindwtr-parse--strip-internal e) people))
                ('project (push (mindwtr-parse--strip-internal e) projects))
                ('section
-                (let ((pid (mindwtr-parse--ancestor-id 'project)))
+                (let ((pid (mindwtr-heading-ancestor-id 'project)))
                   (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) sections))
                ('task
@@ -492,10 +405,10 @@ container's :MW_LIST: plus project/section ancestry:
                 ;; project, exactly as the ancestry-only cond did.  In the main
                 ;; file the props are never emitted, so this is identical to
                 ;; the prior ancestry walk there.
-                (let ((sid (or (mindwtr-parse--prop "MW_SECTION_ID")
-                               (mindwtr-parse--ancestor-id 'section)))
-                      (pid (or (mindwtr-parse--prop "MW_PROJECT_ID")
-                               (mindwtr-parse--ancestor-id 'project))))
+                (let ((sid (or (mindwtr-heading-prop "MW_SECTION_ID")
+                               (mindwtr-heading-ancestor-id 'section)))
+                      (pid (or (mindwtr-heading-prop "MW_PROJECT_ID")
+                               (mindwtr-heading-ancestor-id 'project))))
                   (cond (sid (setq e (plist-put e :sectionId sid)))
                         (pid (setq e (plist-put e :projectId pid)))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))

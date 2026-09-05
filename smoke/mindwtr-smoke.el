@@ -313,7 +313,7 @@ On drift, FAIL and print the per-field canonical diff for each entity."
   "Replace the top-level heading with MW_ID ID by re-rendering ENTITY.
 ENTITY is a task content plist; it is rendered at level 1 (the lifecycle
 task has no container)."
-  (let ((m (mindwtr-reconcile--find-id-pos id)))
+  (let ((m (mindwtr-heading-find-id id)))
     (unless m (error "smoke: heading %s not found in buffer" id))
     (goto-char m) (org-back-to-heading t)
     ;; `org-cut-subtree' echoes "Cut: Subtree(s) with N characters"; quiet it.
@@ -389,7 +389,7 @@ to call: a no-op PASS if the task is already gone."
             (mindwtr-smoke-pass "cleanup (already gone)")
           (with-temp-buffer
             (mindwtr-smoke--render-appdata prior)
-            (let ((m (mindwtr-reconcile--find-id-pos id)))
+            (let ((m (mindwtr-heading-find-id id)))
               (when m (goto-char m) (org-back-to-heading t)
                     (let ((inhibit-message t)) (org-cut-subtree))))
             (let* ((local (mindwtr-parse-buffer))

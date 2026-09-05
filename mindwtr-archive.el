@@ -32,6 +32,7 @@
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
 (require 'mindwtr-render)
+(require 'mindwtr-heading)
 
 (defvar mindwtr-file)
 ;; Declared in `mindwtr-sync' (the layer that requires this one), so the quiet
@@ -100,8 +101,8 @@ point is not on a task or project heading, or the heading lacks an MW_ID."
   (save-excursion
     (unless (ignore-errors (org-back-to-heading t) t)
       (user-error "mindwtr-archive: point is not on a heading"))
-    (let ((kind (let ((ty (mindwtr-parse--prop "MW_TYPE"))) (and ty (intern ty))))
-          (id (mindwtr-parse--prop "MW_ID")))
+    (let ((kind (mindwtr-heading-kind))
+          (id (mindwtr-heading-id)))
       (unless (memq kind '(task project))
         (user-error "mindwtr-archive: point is not on a task or project heading"))
       (unless id
@@ -112,18 +113,18 @@ point is not on a task or project heading, or the heading lacks an MW_ID."
   "Return the position of the archive buffer's `* Archive' container.
 Creates it (plus a leading keyword line so org honours ARCH etc.) at the end of
 the buffer when absent.  Point is left undefined; callers reposition."
-  (goto-char (point-min))
-  (if (re-search-forward "^[ \t]*:MW_LIST:[ \t]*archive[ \t]*$" nil t)
-      (progn (org-back-to-heading t) (point))
-    (goto-char (point-min))
-    (unless (re-search-forward "^#\\+TODO:" nil t)
+  (let ((pos (mindwtr-heading-find-role "archive")))
+    (if pos
+        pos
       (goto-char (point-min))
-      (insert (mindwtr-model-todo-keyword-line) "\n"))
-    (goto-char (point-max))
-    (unless (bolp) (insert "\n"))
-    (let ((pos (point)))
-      (insert (mindwtr-render--container "archive" 1))
-      pos)))
+      (unless (re-search-forward "^#\\+TODO:" nil t)
+        (goto-char (point-min))
+        (insert (mindwtr-model-todo-keyword-line) "\n"))
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (let ((pos (point)))
+        (insert (mindwtr-render--container "archive" 1))
+        pos))))
 
 (defun mindwtr-archive--save-quietly (buffer)
   "Save BUFFER to disk best-effort, without arming the auto-sync or signaling.
@@ -162,8 +163,8 @@ kill ring if the paste threw)."
          (src (current-buffer)))
     (org-back-to-heading t)
     (when (eq kind 'task)
-      (let ((sid (mindwtr-parse--ancestor-id 'section))
-            (pid (mindwtr-parse--ancestor-id 'project)))
+      (let ((sid (mindwtr-heading-ancestor-id 'section))
+            (pid (mindwtr-heading-ancestor-id 'project)))
         (cond (sid (org-set-property "MW_SECTION_ID" sid))
               (pid (org-set-property "MW_PROJECT_ID" pid)))))
     ;; Bind `last-command' so the copy starts a FRESH kill instead of appending:

@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'org)
 (require 'mindwtr-commands)
+(require 'mindwtr-heading)
 (require 'mindwtr-render)
 
 (defmacro mindwtr-commands-test--with-appdata (appdata &rest body)
@@ -160,7 +161,7 @@
       (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
       ;; Read the drawer-local value, not `org-entry-get' -- CATEGORY is a
       ;; special property org would resolve to the filename fallback (KTD5).
-      (should (string= (mindwtr-parse--prop "CATEGORY") "Work")))
+      (should (string= (mindwtr-heading-prop "CATEGORY") "Work")))
     (should (string= (plist-get (mindwtr-commands-test--task-by-id "t1") :areaId) "a2"))))
 
 (ert-deftest mindwtr-commands-set-area-on-project ()
@@ -174,7 +175,7 @@
       (mindwtr-set-area))
     (save-excursion
       (goto-char (point-min)) (re-search-forward "ACTIVE Proj") (org-back-to-heading t)
-      (should (string= (mindwtr-parse--prop "CATEGORY") "Personal")))))
+      (should (string= (mindwtr-heading-prop "CATEGORY") "Personal")))))
 
 (ert-deftest mindwtr-commands-set-area-refuses-task-under-project ()
   "On a task under a project, the command refuses: no :CATEGORY: written, and parse
@@ -191,7 +192,7 @@ yields :projectId with NO :areaId (guards the dual-container over-stamp)."
       (mindwtr-set-area))
     (save-excursion
       (goto-char (point-min)) (re-search-forward "Child") (org-back-to-heading t)
-      (should-not (mindwtr-parse--prop "CATEGORY")))
+      (should-not (mindwtr-heading-prop "CATEGORY")))
     (let ((task (mindwtr-commands-test--task-by-id "t1")))
       (should (string= (plist-get task :projectId) "p1"))
       (should-not (plist-get task :areaId)))))
@@ -208,7 +209,7 @@ not prompt and writes no :CATEGORY:."
                (lambda (&rest _) (error "should not prompt off an entity"))))
       (mindwtr-set-area))
     (org-back-to-heading t)
-    (should-not (mindwtr-parse--prop "CATEGORY"))))
+    (should-not (mindwtr-heading-prop "CATEGORY"))))
 
 (ert-deftest mindwtr-commands-set-area-offers-exactly-area-names ()
   "Completion offers exactly the buffer's existing area names."
@@ -235,7 +236,7 @@ not prompt and writes no :CATEGORY:."
     (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Work")))
       (mindwtr-set-area))
     (goto-char (point-min)) (re-search-forward "Loose") (org-back-to-heading t)
-    (should (string= (mindwtr-parse--prop "CATEGORY") "Work"))
+    (should (string= (mindwtr-heading-prop "CATEGORY") "Work"))
     (let ((end (save-excursion (outline-next-heading) (point))) (count 0))
       (save-excursion
         (while (re-search-forward "^[ \t]*:CATEGORY:" end t) (setq count (1+ count))))

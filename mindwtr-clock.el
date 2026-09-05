@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'org)
+(require 'mindwtr-heading)
 (require 'org-duration)
 
 (defun mindwtr-clock--logbook-minutes ()
@@ -30,7 +31,7 @@ hand-rolled H:MM scan, so it honors `org-duration-format' -- notably a clock of
 `4d 4:00' for 100h) and a raw H:MM regex would silently drop to 0."
   (save-excursion
     (org-back-to-heading t)
-    (let ((end (save-excursion (outline-next-heading) (point)))
+    (let ((end (mindwtr-heading-entry-end))
           (case-fold-search nil)
           (total 0))
       (forward-line 1)

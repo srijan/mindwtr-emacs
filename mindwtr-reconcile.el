@@ -23,32 +23,7 @@
 (require 'mindwtr-render)
 (require 'mindwtr-signature)
 (require 'mindwtr-util)
-
-(defun mindwtr-reconcile--find-id-pos (id)
-  "Return the heading-start position of the entity whose MW_ID is ID, or nil.
-A direct drawer-line regex search (like `mindwtr-reconcile--goto-id', but
-side-effect-free and MW_ID-only), replacing the old whole-buffer marker-hash
-scan -- which cost a full `org-map-entries' pass per lookup and left a live
-marker on every heading until GC (markers tax every subsequent buffer edit)."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((re (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" (regexp-quote id))))
-      (when (re-search-forward re nil t)
-        (org-back-to-heading t)
-        (point)))))
-
-(defun mindwtr-reconcile--body-start ()
-  "Return the position just after this entry's PROPERTIES drawer.
-Point must be at the heading.  Falls back to the line after the heading
-when there is no PROPERTIES drawer (so the body scan still has a start)."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((end (save-excursion (outline-next-heading) (point)))
-          (case-fold-search nil))
-      (if (and (re-search-forward "^[ \t]*:PROPERTIES:[ \t]*$" end t)
-               (re-search-forward "^[ \t]*:END:[ \t]*$" end t))
-          (min (1+ (point)) end)
-        (progn (org-back-to-heading t) (forward-line 1) (point))))))
+(require 'mindwtr-heading)
 
 (defun mindwtr-reconcile--preserved-body (kind body-start end)
   "Return org-only body text between BODY-START and END to carry across a rebuild.
@@ -102,15 +77,15 @@ notes field).  Child headings are outside the entry region and are left
 untouched."
   (org-back-to-heading t)
   (let* ((level (org-current-level))
-         (extra (mindwtr-parse--extra-props))
+         (extra (mindwtr-parse-extra-props))
          ;; Capture the running clock's id before insert/delete-region detaches
          ;; org's clock markers (the CLOCK text is grafted back as preserved
          ;; body, but the in-memory markers must be re-pointed too).
          (clock-id (mindwtr-reconcile--running-clock-id))
          (beg (point))
-         (end (save-excursion (outline-next-heading) (point)))
+         (end (mindwtr-heading-entry-end))
          (preserved (mindwtr-reconcile--preserved-body
-                     kind (mindwtr-reconcile--body-start) end))
+                     kind (mindwtr-heading-body-start) end))
          ;; ENTITY doubles as the display-mirror source: it carries the
          ;; merged createdAt/updatedAt that render writes as MW_CREATED/UPDATED.
          (e (plist-put (plist-put (copy-sequence entity) :mw-kind kind)
@@ -143,15 +118,15 @@ untouched."
 This is collected for every MW_ID heading in the current buffer, so a full
 rebuild can carry it across."
   (let ((h (make-hash-table :test 'equal)))
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
-       (let ((id (mindwtr-parse--prop "MW_ID"))
-             (kind (mindwtr-parse--prop "MW_TYPE")))
+       (let ((id (mindwtr-heading-id))
+             (kind (mindwtr-heading-prop "MW_TYPE")))
          (when (and id kind (not (string= kind "container")))
-           (let* ((end (save-excursion (outline-next-heading) (point)))
+           (let* ((end (mindwtr-heading-entry-end))
                   (body (mindwtr-reconcile--preserved-body
-                         (intern kind) (mindwtr-reconcile--body-start) end))
-                  (extra (mindwtr-parse--extra-props)))
+                         (intern kind) (mindwtr-heading-body-start) end))
+                  (extra (mindwtr-parse-extra-props)))
              (when (or body extra)
                (puthash id (list :body body :extra extra) h)))))))
     h))
@@ -164,44 +139,24 @@ role of the heading point is on, so a cursor parked on a container (e.g.
 when point is on a heading with neither property."
   (save-excursion
     (when (ignore-errors (org-back-to-heading t) t)
-      (let ((own-list (mindwtr-parse--prop "MW_LIST"))
-            (id (mindwtr-parse--prop "MW_ID")))
-        (while (and (not id) (org-up-heading-safe))
-          (setq id (mindwtr-parse--prop "MW_ID")))
-        (or id own-list)))))
+      (or (car (mindwtr-heading-nearest-id-pos))
+          (mindwtr-heading-prop "MW_LIST")))))
 
 (defun mindwtr-reconcile--anchor-heading-pos ()
-  "Return the buffer position of the heading `--goto-id (--id-at-point)' lands on.
+  "Return the buffer position of the heading `--id-at-point' resolves to.
 The scroll anchor recenters on the heading point is restored to, so the
-snapshot must measure that same heading's screen line.  This resolves it by the
-SAME (or MW_ID MW_LIST) walk-up as `mindwtr-reconcile--id-at-point': the
+snapshot must measure that same heading's screen line.  This resolves it by
+the SAME (or MW_ID MW_LIST) walk-up as `mindwtr-reconcile--id-at-point': the
 heading bearing the nearest enclosing MW_ID (self or ancestor), or -- when no
 MW_ID is found -- the heading point is on if it carries an MW_LIST (a
 container).  Nil when point is on a heading with neither property (then
-`--id-at-point' is nil too and `--goto-id' is a no-op, so there is no row to
-anchor)."
+`--id-at-point' is nil too and `mindwtr-heading-goto-key' is a no-op, so
+there is no row to anchor)."
   (save-excursion
     (when (ignore-errors (org-back-to-heading t) t)
-      (let ((own-list (mindwtr-parse--prop "MW_LIST"))
-            (start-pos (line-beginning-position))
-            (id (mindwtr-parse--prop "MW_ID")))
-        (if id
-            start-pos
-          (let (anc-pos)
-            (while (and (not id) (org-up-heading-safe))
-              (setq id (mindwtr-parse--prop "MW_ID"))
-              (when id (setq anc-pos (line-beginning-position))))
-            (or anc-pos (and own-list start-pos))))))))
-
-(defun mindwtr-reconcile--goto-id (id)
-  "Move point to the heading whose MW_ID or MW_LIST equals ID, if present.
-Entity ids (UUIDs) and container roles share no values, so one search handles
-both -- letting point and scroll anchors target containers, not just entities."
-  (when id
-    (goto-char (point-min))
-    (let ((re (format ":MW_\\(?:ID\\|LIST\\): *%s *$" (regexp-quote id))))
-      (when (re-search-forward re nil t)
-        (org-back-to-heading t)))))
+      (let ((hit (mindwtr-heading-nearest-id-pos)))
+        (cond (hit (cdr hit))
+              ((mindwtr-heading-prop "MW_LIST") (line-beginning-position)))))))
 
 ;; Cross-version fold operations.  The `org-fold-*' namespace only exists in
 ;; Org 9.6+ (Emacs 29); the project floor is Emacs 28.1 / Org 9.5, where the
@@ -275,10 +230,10 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
   (let ((folds (make-hash-table :test 'equal))
         (win (get-buffer-window (current-buffer)))
         top-id anchor-line)
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
-       (let ((key (or (mindwtr-parse--prop "MW_ID")
-                      (mindwtr-parse--prop "MW_LIST"))))
+       (let ((key (or (mindwtr-heading-id)
+                      (mindwtr-heading-prop "MW_LIST"))))
          (when (and key (not (org-invisible-p (line-beginning-position))))
            (puthash key
                     (cond ((not (org-invisible-p (line-end-position))) 'open)
@@ -291,7 +246,7 @@ before the rebuild, outside `mindwtr-reconcile--restore-view''s guard.
         (when (re-search-forward
                "^[ \t]*:MW_\\(?:ID\\|LIST\\):[ \t]*\\(.+?\\)[ \t]*$" nil t)
           (setq top-id (match-string-no-properties 1))))
-      ;; :anchor-line -- locate the heading `--goto-id (--id-at-point)' will
+      ;; :anchor-line -- locate the heading `mindwtr-heading-goto-key (--id-at-point)' will
       ;; land point on after the rebuild, resolved by the SAME (or MW_ID
       ;; MW_LIST) walk-up `--id-at-point' uses, so capture and reapply target
       ;; the same row.  Record its screen line only if it is on-screen now.
@@ -331,10 +286,10 @@ visual state is touched (fold overlays, `window-start'), never content, so
         ;;    -- the recenter step below anchors on that point.
         (when folds
           (save-excursion
-            (mindwtr-util--map-entries
+            (mindwtr-heading-map
              (lambda ()
-               (let* ((key (or (mindwtr-parse--prop "MW_ID")
-                               (mindwtr-parse--prop "MW_LIST")))
+               (let* ((key (or (mindwtr-heading-id)
+                               (mindwtr-heading-prop "MW_LIST")))
                       (st (and key (gethash key folds))))
                  (when (not (org-invisible-p (line-beginning-position)))
                    (pcase st
@@ -363,9 +318,9 @@ visual state is touched (fold overlays, `window-start'), never content, so
                 (recenter anchor-line))))
            (top-id
             (save-excursion
-              ;; `--goto-id' returns non-nil (and leaves point on the heading)
+              ;; `mindwtr-heading-goto-key' returns non-nil (and leaves point on the heading)
               ;; only when the anchor entity still exists after the rebuild.
-              (when (mindwtr-reconcile--goto-id top-id)
+              (when (mindwtr-heading-goto-key top-id)
                 (set-window-start win (line-beginning-position)))))))
         nil)
     (error nil)))
@@ -393,8 +348,8 @@ accumulates.")
   "Non-nil if the heading at point is content reconcile would otherwise erase:
 no (non-blank) :MW_TYPE: and no kind inferable from context.  A typed entity, a
 container, and an inferable heading all return nil."
-  (and (null (mindwtr-parse--mw-type))
-       (null (mindwtr-parse--infer-kind))))
+  (and (null (mindwtr-heading-type))
+       (null (mindwtr-parse-infer-kind))))
 
 (defun mindwtr-reconcile--collect-orphans ()
   "Return raw strings for headings reconcile would otherwise erase.
@@ -415,7 +370,7 @@ quarantine idempotent (regenerated fresh on re-emit, never nested)."
         (while (not (eobp))
           (when (mindwtr-reconcile--orphan-heading-p)
             (let ((beg (point))
-                  (end (save-excursion (outline-next-heading) (point))))
+                  (end (mindwtr-heading-entry-end)))
               (push (buffer-substring-no-properties beg end) orphans)))
           (outline-next-heading)))
       (nreverse orphans))))
@@ -463,7 +418,7 @@ the markers can be re-pointed after the rebuild; nil when no clock runs here."
              (eq (marker-buffer org-clock-hd-marker) (current-buffer)))
     (save-excursion
       (goto-char org-clock-hd-marker)
-      (mindwtr-parse--prop "MW_ID"))))
+      (mindwtr-heading-id))))
 
 (defun mindwtr-reconcile--restore-running-clock (id)
   "Re-point the org clock markers at the open CLOCK line under MW_ID heading.
@@ -472,12 +427,12 @@ A no-op when ID is nil or its heading no longer exists (a remote delete of the
 clocked entry).  Targets the open clock -- a `CLOCK:' line with a start stamp
 and no `--' end -- so the markers match org's own clock-in placement."
   (when id
-    (let ((pos (mindwtr-reconcile--find-id-pos id)))
+    (let ((pos (mindwtr-heading-find-id id)))
       (when pos
         (save-excursion
           (goto-char pos)
           (move-marker org-clock-hd-marker (point) (current-buffer))
-          (let ((end (save-excursion (outline-next-heading) (point))))
+          (let ((end (mindwtr-heading-entry-end)))
             (when (re-search-forward "^[ \t]*CLOCK: \\[[^]]*\\][ \t]*$" end t)
               (move-marker org-clock-marker (point) (current-buffer)))))))))
 
@@ -558,12 +513,12 @@ silently erased."
       (goto-char (point-min))
       ;; Position point on the anchor entity for the scroll restore.  If it no
       ;; longer resolves -- the entity the cursor was on was deleted by THIS
-      ;; sync -- `--goto-id' leaves point at `point-min'.  The snapshot recorded
+      ;; sync -- `mindwtr-heading-goto-key' leaves point at `point-min'.  The snapshot recorded
       ;; an `:anchor-line' for it (it was on-screen pre-rebuild), so drop that
       ;; field: recentering on the stranded point-min would yank the viewport to
       ;; the buffer top.  Restore then falls back to the viewport-truthful
       ;; `:top-id' window-start anchor instead.
-      (unless (mindwtr-reconcile--goto-id at-id)
+      (unless (mindwtr-heading-goto-key at-id)
         (setq view (and view (plist-put view :anchor-line nil))))
       (mindwtr-reconcile--restore-view view)
       (mindwtr-reconcile--restore-running-clock clock-id))))
@@ -592,7 +547,7 @@ the next sync proposes it again.  Returns:
                by a remote deletion).
 The caller surfaces `partial'/nil so a lost edit is never silently
 reported as restored; the user falls back to the pre-sync backup."
-  (let ((pos (mindwtr-reconcile--find-id-pos (plist-get entity :id)))
+  (let ((pos (mindwtr-heading-find-id (plist-get entity :id)))
         (mindwtr-render-area-names (mindwtr-render--area-name-map (mindwtr-parse-buffer))))
     (if (not pos)
         nil
