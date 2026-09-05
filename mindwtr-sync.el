@@ -17,6 +17,7 @@
 (require 'mindwtr-signature)
 (require 'mindwtr-shadow)
 (require 'mindwtr-clock)
+(require 'mindwtr-heading)
 
 (defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas :people))
 
@@ -730,9 +731,9 @@ quarantine instead."
     (dolist (key mindwtr-sync--entity-keys)
       (dolist (e (plist-get appdata key))
         (when (plist-get e :id) (puthash (plist-get e :id) t ids))))
-    (mindwtr-util--map-entries
+    (mindwtr-heading-map
      (lambda ()
-       (let ((id (org-entry-get nil "MW_ID")))
+       (let ((id (mindwtr-heading-id)))
          (when (and id (not (gethash id ids))) (setq unparsed t)))))
     unparsed))
 
