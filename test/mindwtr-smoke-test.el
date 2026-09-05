@@ -1,6 +1,7 @@
 ;;; mindwtr-smoke-test.el --- Tests for the live smoke suite -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'mindwtr-smoke)
+(require 'mindwtr-test-helpers)
 
 (ert-deftest mindwtr-smoke-summary-exit-code ()
   "Summary returns non-zero exactly when a fail was recorded."
@@ -100,23 +101,6 @@
   (should (> (plist-get mindwtr-smoke--counts :warn) 0))
   (should (= 0 (plist-get mindwtr-smoke--counts :fail))))
 
-(defun mindwtr-smoke-test--server (initial)
-  "Return an `mindwtr-api-http-function' backed by an in-memory appdata.
-A PUT replaces the whole state (full-replace, like the real server); GET
-returns it re-encoded through JSON so nil/false/[] normalize as on the wire."
-  (let ((state (copy-tree initial)) (etag 0))
-    (lambda (req)
-      (pcase (plist-get req :method)
-        ("HEAD" (list :status 200
-                      :headers (list (cons "ETag" (number-to-string etag)))
-                      :body ""))
-        ("GET" (list :status 200
-                     :headers (list (cons "ETag" (number-to-string etag)))
-                     :body (mindwtr-util-json-ascii state)))
-        ("PUT" (setq state (mindwtr-util-json-decode (plist-get req :body)))
-               (setq etag (1+ etag))
-               (list :status 200 :headers nil :body "{\"ok\":true}"))))))
-
 (defconst mindwtr-smoke-test--initial
   '(:tasks ((:id "t-keep" :title "keep me" :status "next" :rev 1
              :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-01T00:00:00Z"
@@ -140,7 +124,7 @@ task nested under the project (`:projectId' round-tripped via nesting).")
   (let* ((mindwtr-api-base-url "https://mock/")
          (mindwtr-api-token "x")
          (mindwtr-api-http-function
-          (mindwtr-smoke-test--server mindwtr-smoke-test--initial)))
+          (mindwtr-test-server-http (mindwtr-test-server mindwtr-smoke-test--initial))))
     (mindwtr-smoke-reset)
     (should (mindwtr-smoke-phase-connectivity))
     (let ((ad (mindwtr-smoke-phase-snapshot)))
@@ -155,7 +139,7 @@ failures, leaving every pre-existing entity untouched."
   (let* ((mindwtr-api-base-url "https://mock/")
          (mindwtr-api-token "x")
          (mindwtr-api-http-function
-          (mindwtr-smoke-test--server mindwtr-smoke-test--initial)))
+          (mindwtr-test-server-http (mindwtr-test-server mindwtr-smoke-test--initial))))
     (mindwtr-smoke-reset)
     (mindwtr-smoke-phase-write-lifecycle)
     (should (= 0 (plist-get mindwtr-smoke--counts :fail)))

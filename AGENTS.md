@@ -23,7 +23,7 @@ JSON snapshot lets changes be detected without re-fetching.
 | `mindwtr-reconcile.el` | Apply merged appdata into the buffer (per surface, via a render fn); view-state + quarantine |
 | `mindwtr-archive.el` | Archive-file surface: path/buffer resolution, archive renderer entry, immediate refile (`mindwtr-archive-item-at-point`) |
 | `mindwtr-signature.el` | Content signatures (drives change detection) |
-| `mindwtr-shadow.el` | Local shadow snapshot + sync state |
+| `mindwtr-shadow.el` | Durable sync state: Shadow, ETag, device id, Migration latches, pre-sync backups. Sync reads it as one baseline and writes it with one commit; an internal store seam has a file adapter (default) and an in-memory one for tests |
 | `mindwtr-commands.el` | Interactive type-aware status commands |
 | `mindwtr-clarify.el` | Guided inbox triage (`mindwtr-clarify`, the clarify workflow) |
 | `mindwtr-capture.el` | Inbox capture (`mindwtr-capture` + org-capture template; stamps MW_TYPE + MW_ID) |
@@ -76,6 +76,12 @@ JSON snapshot lets changes be detected without re-fetching.
   in Docker, runs the smoke suite against it, cross-checks the wire with curl, and tears down.
   Because it self-provisions (no external `MINDWTR_URL` dependency) it *is* wired into CI; see
   `test/integration/README.md`. SKIPs cleanly without Docker/Emacs unless `MINDWTR_DOCKER_REQUIRE=1`.
+- `test/mindwtr-test-helpers.el` holds the shared fakes: `mindwtr-test-server` (an in-memory
+  Mindwtr Cloud at the HTTP seam, tags advance v1, v2, ... on PUT; inspect `-last-put` and
+  `-requests`) and `mindwtr-test-with-sync-env`, which binds that server plus the in-memory
+  shadow store so a full `mindwtr-sync-once` runs with no temp directory and no files. Prefer
+  it over an inline `pcase` fake unless the test needs fault injection or a specific ETag
+  sequence.
 - Remove stale `*.elc` before batch ERT runs if results look off (`rm -f *.elc`).
 
 ## Documented solutions

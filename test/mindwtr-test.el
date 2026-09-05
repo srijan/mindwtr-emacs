@@ -2,17 +2,12 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'mindwtr)
+(require 'mindwtr-test-helpers)
 
 ;; Default the archive surface OFF for the pre-archive trigger/gate tests (it
 ;; auto-derives a sibling file beside any file-visiting buffer).  The R10
 ;; archive-aware tests opt back in by let-binding `mindwtr-archive-file'.
 (setq mindwtr-archive-file (lambda () nil))
-
-(defun mindwtr-test--kill-file-buffer (f)
-  "Kill the buffer visiting F without a modified-buffer prompt."
-  (when (get-file-buffer f)
-    (with-current-buffer (get-file-buffer f) (set-buffer-modified-p nil))
-    (kill-buffer (get-file-buffer f))))
 
 (ert-deftest mindwtr-mode-sets-todo-keywords ()
   (with-temp-buffer
@@ -288,14 +283,8 @@ then stands down auto-sync until a manual sync clears it."
          (mindwtr--error-state nil)
          (mindwtr--sync-in-progress nil)
          (mindwtr--retry-timer nil)
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (with-temp-file f

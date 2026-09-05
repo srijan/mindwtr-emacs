@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'mindwtr-sync)
 (require 'mindwtr)
+(require 'mindwtr-test-helpers)
 
 ;; The archive surface auto-derives a sibling file beside any file-visiting
 ;; buffer, so these pre-archive sync tests would each create and leak a shared
@@ -507,6 +508,45 @@ stats in its result."
             (should (= (plist-get (plist-get result :stats) :deleted) 0))))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-full-cycle-commits-state-then-noops ()
+  "A full cycle on the in-memory adapters: no temp dir, no files.  The first
+cycle pushes the local edit and commits shadow, etag and the migration
+latches through `mindwtr-shadow-commit'; with nothing changed, the second
+cycle HEAD-matches the committed etag and is a noop that touches the server
+with HEAD only."
+  (mindwtr-test-with-sync-env
+      (:server srv
+       :initial '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                           :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                  :projects nil :sections nil
+                  :areas ((:id "a1" :name "Work" :rev 1)) :settings nil)
+       :shadow '(:tasks ((:id "t1" :title "old" :status "next" :rev 1
+                          :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                 :projects nil :sections nil
+                 :areas ((:id "a1" :name "Work" :rev 1)) :settings nil)
+       :etag "v1")
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
+                "** NEXT renamed :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+        (org-mode))
+      (should-not (mindwtr-shadow-set-latches))
+      (let ((r1 (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+        (should (plist-get r1 :ok))
+        (should-not (plist-get r1 :noop))
+        (should (= (plist-get (plist-get r1 :stats) :updated) 1)))
+      ;; Committed: shadow carries the pushed title, etag advanced, latches set
+      ;; (a temp buffer has no file, so its save is :skipped, not a failure).
+      (should (string= (plist-get (car (plist-get (mindwtr-shadow-load) :tasks)) :title)
+                       "renamed"))
+      (should (string= (mindwtr-shadow-get-etag) "v2"))
+      (should (equal (mindwtr-shadow-set-latches) '(notes fields)))
+      (should (equal (reverse (mindwtr-test-server-requests srv)) '("PUT" "GET")))
+      (setf (mindwtr-test-server-requests srv) nil)
+      (let ((r2 (mindwtr-sync-once (current-buffer) "2026-06-01T00:01:00Z")))
+        (should (plist-get r2 :noop)))
+      (should (equal (mindwtr-test-server-requests srv) '("HEAD"))))))
+
 (ert-deftest mindwtr-sync-detect-conflicts-records-kind ()
   "A detected conflict carries the entity KIND so a restore can rebuild it."
   (let* ((candidate '(:tasks ((:id "t1" :title "MINE" :status "next" :rev 8))
@@ -851,15 +891,8 @@ tombstoned -- the guard must not suppress genuine deletions."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2"))
-                           :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-temp-buffer
           (let ((org-inhibit-startup t))
@@ -873,7 +906,7 @@ tombstoned -- the guard must not suppress genuine deletions."
              :areas ((:id "a1" :name "Work" :rev 1)) :settings nil))
           (let ((result (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
             (should (plist-get result :ok))
-            (should (string-match-p "do it" put-body))
+            (should (string-match-p "do it" (mindwtr-test-server-last-put srv)))
             (let ((task (car (plist-get (mindwtr-shadow-load) :tasks))))
               (should (string= (plist-get task :title) "do it")))))
       (delete-directory dir t))))
@@ -905,15 +938,8 @@ default so validation does not abort."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2"))
-                           :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (when (get-buffer "*Mindwtr Sync Report*")
@@ -1300,12 +1326,6 @@ ordinary `C-x C-s'."
 
 ;;; U2: auto-save after a content-changing reconcile -------------------------
 
-(defun mindwtr-test--kill-file-buffer (f)
-  "Kill the buffer visiting F without a modified-buffer prompt."
-  (when (get-file-buffer f)
-    (with-current-buffer (get-file-buffer f) (set-buffer-modified-p nil))
-    (kill-buffer (get-file-buffer f))))
-
 (ert-deftest mindwtr-sync-once-saves-file-after-reconcile ()
   "A full reconcile cycle on a file-visiting buffer leaves the buffer clean
 and the file on disk holding the merged content.  (Also exercises the
@@ -1316,14 +1336,8 @@ guard, so the cycle completes without a \"buffer changed during sync\" error.)"
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1393,14 +1407,8 @@ mindwtr--maybe-debounced-sync live on after-save-hook."
          (mindwtr--debounce-timer nil)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1429,14 +1437,8 @@ write already committed, so a disk-write hiccup must not fail the sync."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1471,14 +1473,8 @@ latch is gated on a confirmed save (see `mindwtr-sync-once')."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1510,14 +1506,8 @@ notes migration, so subsequent syncs stop protecting empty notes."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1548,14 +1538,8 @@ on a confirmed save, exactly like the notes latch."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1585,14 +1569,8 @@ the fields migration, so subsequent syncs stop protecting empty booleans."
          (mindwtr-shadow-directory dir)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (with-current-buffer (find-file-noselect f)
           (let ((org-inhibit-startup t))
@@ -1691,14 +1669,8 @@ server's version, and the report must surface that path."
          (mindwtr-api-token "x")
          (orgfile (expand-file-name "mw.org" dir))
          (bdir (expand-file-name "backups/" dir))
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (make-directory bdir t)
@@ -1734,14 +1706,8 @@ replacing the function."
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
          (orgfile (expand-file-name "mw.org" dir))
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (setf (mindwtr-shadow-store-keys store) (lambda (_prefix) (error "boom")))
     (unwind-protect
         (with-temp-buffer
@@ -2072,14 +2038,8 @@ local is echoed (no tombstone) and the archive file is recreated."
          (mindwtr-archive-file nil)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (with-temp-file tasks-file
@@ -2096,7 +2056,7 @@ local is echoed (no tombstone) and the archive file is recreated."
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
               ;; strict stayed OFF (file absent) -> no tombstone for t1
-              (should-not (string-match-p "deletedAt" (or put-body "")))
+              (should-not (string-match-p "deletedAt" (or (mindwtr-test-server-last-put srv) "")))
               ;; the archive file is recreated holding the echoed archived task
               (should (file-exists-p archive-file))
               (should (string-match-p
@@ -2120,14 +2080,8 @@ and the archive file is re-backfilled."
          (mindwtr-archive-file nil)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (with-temp-file tasks-file
@@ -2146,7 +2100,7 @@ and the archive file is re-backfilled."
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
               ;; strict withheld -> NO mass deletion of the archived backlog
-              (should-not (string-match-p "deletedAt" (or put-body "")))
+              (should-not (string-match-p "deletedAt" (or (mindwtr-test-server-last-put srv) "")))
               ;; the empty archive file is re-backfilled with the echoed task
               (should (string-match-p
                        "ARCH Backlog"
@@ -2169,14 +2123,8 @@ the absent task is echoed rather than tombstoned despite no count shortfall."
          (mindwtr-archive-file nil)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (with-temp-file tasks-file
@@ -2202,7 +2150,7 @@ the absent task is echoed rather than tombstoned despite no count shortfall."
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
               ;; warned parse -> strict withheld -> no tombstone for the absent t1
-              (should-not (string-match-p "deletedAt" (or put-body ""))))))
+              (should-not (string-match-p "deletedAt" (or (mindwtr-test-server-last-put srv) ""))))))
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
@@ -2220,14 +2168,8 @@ warning) and the PUT tombstones the removed task only."
          (mindwtr-archive-file nil)
          (mindwtr-api-base-url "https://mw.example/")
          (mindwtr-api-token "x")
-         (put-body nil)
-         (mindwtr-api-http-function
-          (lambda (req)
-            (pcase (plist-get req :method)
-              ("HEAD" '(:status 200 :headers (("ETag" . "v1")) :body ""))
-              ("PUT" (setq put-body (plist-get req :body))
-                     '(:status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))
-              ("GET" (list :status 200 :headers '(("ETag" . "v2")) :body put-body))))))
+         (srv (mindwtr-test-server))
+         (mindwtr-api-http-function (mindwtr-test-server-http srv)))
     (unwind-protect
         (progn
           (with-temp-file tasks-file
@@ -2249,9 +2191,9 @@ warning) and the PUT tombstones the removed task only."
             (let ((res (mindwtr-sync-once (current-buffer) "2026-06-06T00:00:00Z")))
               (should (plist-get res :ok))
               ;; t1 (removed from the archive file) is tombstoned...
-              (should (string-match-p "\"id\":\"t1\"[^}]*\"deletedAt\"" put-body))
+              (should (string-match-p "\"id\":\"t1\"[^}]*\"deletedAt\"" (mindwtr-test-server-last-put srv)))
               ;; ...t2 (still present) is not deleted.
-              (should-not (string-match-p "\"id\":\"t2\"[^}]*\"deletedAt\"" put-body)))))
+              (should-not (string-match-p "\"id\":\"t2\"[^}]*\"deletedAt\"" (mindwtr-test-server-last-put srv))))))
       (mindwtr-test--kill-file-buffer tasks-file)
       (mindwtr-test--kill-file-buffer archive-file)
       (delete-directory root t))))
