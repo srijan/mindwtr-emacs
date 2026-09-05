@@ -49,6 +49,7 @@
 (require 'mindwtr-parse)
 (require 'mindwtr-commands)
 (require 'mindwtr-archive)
+(require 'mindwtr-heading)
 
 (defconst mindwtr-clarify--wip-buffer-name "*mindwtr-clarify*"
   "Name of the clarify WIP buffer.  Its liveness marks an active session.")
@@ -187,20 +188,11 @@ Signals a `user-error' when the buffer no longer holds a heading."
       (user-error "mindwtr-clarify: the WIP buffer has no heading left"))
     (buffer-substring-no-properties (point) (point-max))))
 
-(defun mindwtr-clarify--find-heading-by-id (id)
-  "Return the position of the heading whose MW_ID is ID, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((re (format "^[ \t]*:MW_ID:[ \t]*%s[ \t]*$" (regexp-quote id))))
-      (when (re-search-forward re nil t)
-        (org-back-to-heading t)
-        (point)))))
-
 (defun mindwtr-clarify--write-back (id text)
   "Replace the subtree of the heading with MW_ID ID by TEXT (level-adjusted).
 Leaves point on the replaced heading.  Signals a `user-error' when no
 heading carries ID anymore."
-  (let ((pos (mindwtr-clarify--find-heading-by-id id)))
+  (let ((pos (mindwtr-heading-find-id id)))
     (unless pos
       (user-error "mindwtr-clarify: the item vanished from the source buffer"))
     (goto-char pos)
@@ -233,7 +225,7 @@ by other means meanwhile) is dropped silently."
       (let ((id (pop mindwtr-clarify--pending)))
         (when (buffer-live-p mindwtr-clarify--source)
           (with-current-buffer mindwtr-clarify--source
-            (let ((pos (mindwtr-clarify--find-heading-by-id id)))
+            (let ((pos (mindwtr-heading-find-id id)))
               (when (and pos
                          (save-excursion
                            (goto-char pos)
@@ -260,7 +252,7 @@ buffer rewrites between items."
                         (save-excursion
                           (goto-char m)
                           (org-back-to-heading t)
-                          (or (mindwtr-parse--prop "MW_ID")
+                          (or (mindwtr-heading-id)
                               (let ((new (mindwtr-util-uuid)))
                                 (org-set-property "MW_ID" new)
                                 new))))
@@ -294,8 +286,8 @@ project."
               ;; Area lives in `:CATEGORY:' now; the legacy `:MW_AREA:' fallback
               ;; keeps a pre-upgrade item from being re-prompted before its
               ;; buffer rebuilds (mirrors the parser's read, KTD3).
-              (mindwtr-parse--prop "CATEGORY")
-              (mindwtr-parse--prop "MW_AREA")
+              (mindwtr-heading-prop "CATEGORY")
+              (mindwtr-heading-prop "MW_AREA")
               (mindwtr-commands--in-project-p)
               (null (mindwtr-set-area--names)))
     (mindwtr-set-area)))
@@ -432,7 +424,7 @@ when point is not within an inbox item."
     (user-error "mindwtr-clarify: point is not on an inbox item"))
   (while (not (save-excursion
                 (and (org-up-heading-safe)
-                     (equal (mindwtr-parse--prop "MW_LIST") "inbox"))))
+                     (equal (mindwtr-heading-prop "MW_LIST") "inbox"))))
     (org-up-heading-safe)))
 
 ;;;###autoload
