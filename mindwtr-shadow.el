@@ -175,7 +175,7 @@ the next reload (KTD5).  A new latch is one more row here.")
   "Set LATCH (a name from `mindwtr-shadow-latches').  One-way."
   (mindwtr-shadow--put (mindwtr-shadow--latch-key latch) "1"))
 
-(defun mindwtr-shadow-set-latches ()
+(defun mindwtr-shadow-latched-names ()
   "Return the list of latch names currently set."
   (seq-filter #'mindwtr-shadow-latched-p (mapcar #'car mindwtr-shadow-latches)))
 
@@ -194,7 +194,7 @@ DEVICE-ID the stable client id, LATCHES the list of latch names already set."
    :appdata (mindwtr-shadow-load)
    :etag (mindwtr-shadow-get-etag)
    :device-id (mindwtr-shadow-device-id)
-   :latches (mindwtr-shadow-set-latches)))
+   :latches (mindwtr-shadow-latched-names)))
 
 (defun mindwtr-shadow-commit (appdata etag &optional latches)
   "Commit a full sync cycle: APPDATA becomes the Shadow, then ETAG, then LATCHES.

@@ -530,7 +530,7 @@ with HEAD only."
         (insert "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n"
                 "** NEXT renamed :@x:\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
         (org-mode))
-      (should-not (mindwtr-shadow-set-latches))
+      (should-not (mindwtr-shadow-latched-names))
       (let ((r1 (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
         (should (plist-get r1 :ok))
         (should-not (plist-get r1 :noop))
@@ -540,7 +540,7 @@ with HEAD only."
       (should (string= (plist-get (car (plist-get (mindwtr-shadow-load) :tasks)) :title)
                        "renamed"))
       (should (string= (mindwtr-shadow-get-etag) "v2"))
-      (should (equal (mindwtr-shadow-set-latches) '(notes fields)))
+      (should (equal (mindwtr-shadow-latched-names) '(notes fields)))
       (should (equal (reverse (mindwtr-test-server-requests srv)) '("PUT" "GET")))
       (setf (mindwtr-test-server-requests srv) nil)
       (let ((r2 (mindwtr-sync-once (current-buffer) "2026-06-01T00:01:00Z")))

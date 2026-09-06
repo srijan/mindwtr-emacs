@@ -98,13 +98,13 @@ and nothing touches `mindwtr-shadow-directory'."
     (should (equal (mindwtr-shadow-commit ad "e2" '(notes archive)) '(notes archive)))
     (should (= (plist-get (car (plist-get (mindwtr-shadow-load) :tasks)) :rev) 4))
     (should (string= (mindwtr-shadow-get-etag) "e2"))
-    (should (equal (mindwtr-shadow-set-latches) '(notes archive)))))
+    (should (equal (mindwtr-shadow-latched-names) '(notes archive)))))
 
 (ert-deftest mindwtr-shadow-commit-without-latches-leaves-them-unset ()
   "The caller passes no latches when a save failed; protection stays on."
   (let ((mindwtr-shadow-store (mindwtr-shadow-memory-store)))
     (mindwtr-shadow-commit '(:tasks nil :projects nil :sections nil :areas nil :settings nil) "e1" nil)
-    (should (null (mindwtr-shadow-set-latches)))))
+    (should (null (mindwtr-shadow-latched-names)))))
 
 (ert-deftest mindwtr-shadow-commit-survives-latch-write-failure ()
   "A failing latch write is messaged and skipped; the shadow, etag and the
@@ -121,7 +121,7 @@ other latches still commit (post-PUT must never throw)."
                     "e3" '(notes fields archive))
                    '(notes archive)))
     (should (string= (mindwtr-shadow-get-etag) "e3"))
-    (should (equal (mindwtr-shadow-set-latches) '(notes archive)))))
+    (should (equal (mindwtr-shadow-latched-names) '(notes archive)))))
 
 (ert-deftest mindwtr-shadow-backup-and-prune-on-memory-store ()
   (let* ((store (mindwtr-shadow-memory-store))

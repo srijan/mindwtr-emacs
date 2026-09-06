@@ -62,12 +62,13 @@ binds `mindwtr-sync--archive-strict' from the cycle so the dynamic flag is
 set in exactly one place."
   (declare (indent 1) (debug t))
   (macroexp-let2 nil c cycle
-    `(let ((buffer (mindwtr-sync-cycle-buffer ,c)))
-       (unless (buffer-live-p buffer)
-         (error "mindwtr: buffer killed during sync; aborting"))
-       (with-current-buffer buffer
-         (let ((mindwtr-sync--archive-strict (mindwtr-sync-cycle-strict ,c)))
-           ,@body)))))
+    (let ((buf (make-symbol "buffer")))
+      `(let ((,buf (mindwtr-sync-cycle-buffer ,c)))
+         (unless (buffer-live-p ,buf)
+           (error "mindwtr: buffer killed during sync; aborting"))
+         (with-current-buffer ,buf
+           (let ((mindwtr-sync--archive-strict (mindwtr-sync-cycle-strict ,c)))
+             ,@body))))))
 
 (defvar mindwtr-sync--archive-strict nil
   "When non-nil, archived entities follow strict absence semantics (KTD6).
@@ -993,7 +994,8 @@ Reconciles and saves every surface, commits the shadow/etag/latches, shows
 the report, and returns the result plist.  Runs synchronously (possibly from
 a process sentinel on the async path)."
   (mindwtr-sync--with-cycle cycle
-    (let* ((shadow (mindwtr-sync-cycle-shadow cycle))
+    (let* ((buffer (mindwtr-sync-cycle-buffer cycle))
+           (shadow (mindwtr-sync-cycle-shadow cycle))
            (local (mindwtr-sync-cycle-local cycle))
            (wire (mindwtr-sync-cycle-wire cycle))
            (surfaces (mindwtr-sync-cycle-surfaces cycle))
