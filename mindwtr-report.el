@@ -36,14 +36,6 @@
   "Buffer position where the most recently appended sync entry begins.
 Point is moved here when the report pops for an actionable event (R9).")
 
-(defun mindwtr-report--canon (k v)
-  "Canonical signing form of content field K's value V, or nil if empty.
-Mirrors the signature's empty-as-absent rule so equal content compares
-equal regardless of how a producer spelled an empty value."
-  (if (or (null v) (and (stringp v) (string-empty-p v)))
-      nil
-    (mindwtr-signature-canonical-value k v)))
-
 (defun mindwtr-report--field-diff (mine theirs)
   "Return a list of (FIELD MINE-VALUE THEIRS-VALUE) for content fields that
 differ between MINE and THEIRS.  Comparison is canonical (tag order,
@@ -52,8 +44,8 @@ genuine content differences are reported; non-content fields (rev,
 updatedAt, ...) are ignored by construction."
   (let (diffs)
     (dolist (k mindwtr-model-content-fields)
-      (unless (equal (mindwtr-report--canon k (plist-get mine k))
-                     (mindwtr-report--canon k (plist-get theirs k)))
+      (unless (equal (mindwtr-signature-field-canonical k (plist-get mine k))
+                     (mindwtr-signature-field-canonical k (plist-get theirs k)))
         (push (list k (plist-get mine k) (plist-get theirs k)) diffs)))
     (nreverse diffs)))
 
@@ -358,22 +350,23 @@ restore live only on this newest entry (R8)."
         (put-text-property start (point) 'mindwtr-conflict c))))
   (insert "\n"))
 
-(defun mindwtr-report-show (stats conflicts skew-warning &optional backup-file
-                                  target-buffer parse-warnings incoming-changes
-                                  sync-time local-changes)
-  "Append a sync entry for STATS, CONFLICTS, SKEW-WARNING; return the buffer.
+(defun mindwtr-report-show (result &optional target-buffer backup-file sync-time)
+  "Append a sync entry for RESULT, a sync cycle's result plist; return the buffer.
+RESULT carries :stats (the create/update/delete counts), :conflicts (local
+edits the server overrode), :skew (the server's clock-skew warning),
+:warnings (parse warnings: plists (:id :title :keyword :kind) for headings
+whose TODO keyword was not valid for their entity kind), :incoming (remote
+changes the merge pulled in, plists (:id :kind :title :change), R1) and
+:local-changes (what this device proposed).  Any key may be absent.
+
 The report is an append-only org log: each reportable sync adds a top-level
 heading (R5) rather than erasing prior content, and the log persists for the
 buffer's lifetime -- killing the buffer starts a fresh log on the next sync
 \(R7).  A sync with nothing to report appends no heading (R6).
 
+TARGET-BUFFER is the org buffer a restore action writes back into.
 BACKUP-FILE, when given, is the pre-sync buffer snapshot, surfaced so a lost
-edit can be recovered from disk.  TARGET-BUFFER is the org buffer a restore
-action writes back into.  PARSE-WARNINGS, when given, is a list of plists
-\(:id :title :keyword :kind) for headings whose TODO keyword was not valid for
-their entity kind.  INCOMING-CHANGES, when given, is a list of plists
-\(:id :kind :title :change) for remote changes the merge pulled in (R1); they
-append quietly (no window pop).  SYNC-TIME overrides the heading timestamp
+edit can be recovered from disk.  SYNC-TIME overrides the heading timestamp
 \(defaults to the current time).
 
 Only conflicts, skew, and parse warnings pop the window; incoming changes
@@ -381,6 +374,19 @@ append quietly, preserving the user's point and scroll.  On an actionable pop,
 point lands on the newest entry (R9).  The whole render is wrapped so a
 rendering hiccup in this post-PUT path cannot throw a spurious sync failure
 \(KTD6)."
+  (let ((stats (plist-get result :stats))
+        (conflicts (plist-get result :conflicts))
+        (skew-warning (plist-get result :skew))
+        (parse-warnings (plist-get result :warnings))
+        (incoming-changes (plist-get result :incoming))
+        (local-changes (plist-get result :local-changes)))
+    (mindwtr-report--show stats conflicts skew-warning backup-file target-buffer
+                          parse-warnings incoming-changes sync-time local-changes)))
+
+(defun mindwtr-report--show (stats conflicts skew-warning backup-file
+                                   target-buffer parse-warnings incoming-changes
+                                   sync-time local-changes)
+  "Render one entry; see `mindwtr-report-show' for the arguments."
   (let ((buf (get-buffer-create "*Mindwtr Sync Report*")))
     (with-current-buffer buf
       (unless (derived-mode-p 'mindwtr-report-mode)
