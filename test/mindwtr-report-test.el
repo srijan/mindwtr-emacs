@@ -477,3 +477,20 @@ attribution line at all."
           (goto-char (point-min))
           (should-not (search-forward "server edit by:" nil t)))
       (kill-buffer buf))))
+
+(ert-deftest mindwtr-report-shows-blank-title-warnings ()
+  "Blank-title headings are reported in their own group, saying what happened
+to each: the previous title kept, or the heading moved to Sync Failures."
+  (let ((buf (mindwtr-report-show
+              (list :stats '(:created 0 :updated 0 :deleted 0)
+                    :warnings '((:id "t1" :kind task :blank-title kept :title "Order deodorant")
+                                (:id "t2" :kind task :blank-title quarantined))))))
+    (unwind-protect
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "2 heading(s) with no title" nil t))
+          (should (save-excursion (goto-char (point-min)) (search-forward "Order deodorant" nil t)))
+          (should (save-excursion (goto-char (point-min)) (search-forward "Sync Failures" nil t)))
+          (should-not (save-excursion (goto-char (point-min))
+                                      (search-forward "invalid status keyword" nil t))))
+      (kill-buffer buf))))

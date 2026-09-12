@@ -233,6 +233,16 @@ for the kind-agnostic title lookup so callers (the sync report,
 incoming-changes) do not each re-spell the `(or :title :name)' idiom."
   (or (plist-get entity :title) (plist-get entity :name)))
 
+(defun mindwtr-model-title-key (kind)
+  "Return the key holding KIND's label: `:name' for area/person, else `:title'."
+  (if (memq kind '(area person)) :name :title))
+
+(defun mindwtr-model-blank-title-p (s)
+  "Non-nil when label S is absent or whitespace-only.
+The server requires a non-blank string title (or name) on every entity, so
+a blank one is a payload it will reject, never a value to send."
+  (or (null s) (and (stringp s) (string-match-p "\\`[[:space:]]*\\'" s))))
+
 (defconst mindwtr-model-known-fields
   '((task    . (:id :title :status :priority :energyLevel :timeEstimate
                 :timeSpentMinutes :assignedTo :taskMode
@@ -322,6 +332,17 @@ substitution copies APPDATA rather than mutating the caller's structure."
   (dolist (key '(:tasks :projects :sections :areas :people))
     (unless (listp (plist-get appdata key))
       (error "appdata %s must be a list" key)))
+  ;; Every live entity needs a non-blank label: the server rejects the whole
+  ;; PUT otherwise ("each task must be an object with string id and title").
+  ;; The sync engine keeps such an entity off the wire (see
+  ;; `mindwtr-sync--drop-blank-titles'); this is the backstop.
+  (dolist (spec '((:tasks . task) (:projects . project) (:sections . section)
+                  (:areas . area) (:people . person)))
+    (dolist (e (plist-get appdata (car spec)))
+      (when (and (not (plist-get e :deletedAt))
+                 (mindwtr-model-blank-title-p
+                  (plist-get e (mindwtr-model-title-key (cdr spec)))))
+        (error "%s %s has no title" (cdr spec) (plist-get e :id)))))
   (dolist (task (plist-get appdata :tasks))
     (unless (and (plist-get task :id) (stringp (plist-get task :id)))
       (error "task missing string id: %S" task))

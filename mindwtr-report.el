@@ -299,7 +299,20 @@ restore live only on this newest entry (R8)."
     (insert (format "  ⚠ Clock skew: %s\n" skew-warning)))
   (when parse-warnings
     (let ((dupes (seq-filter (lambda (w) (plist-get w :duplicate)) parse-warnings))
-          (kw (seq-remove (lambda (w) (plist-get w :duplicate)) parse-warnings)))
+          (blank (seq-filter (lambda (w) (plist-get w :blank-title)) parse-warnings))
+          (kw (seq-remove (lambda (w) (or (plist-get w :duplicate)
+                                          (plist-get w :blank-title)))
+                          parse-warnings)))
+      (when blank
+        (insert (format "  ⚠ %d heading(s) with no title (the server rejects untitled entities):\n"
+                        (length blank)))
+        (dolist (w blank)
+          (insert (format "    • %s %s — %s\n"
+                          (or (plist-get w :id) "(new)")
+                          (plist-get w :kind)
+                          (if (eq (plist-get w :blank-title) 'kept)
+                              (format "kept the previous title %S" (plist-get w :title))
+                            "moved to * Sync Failures; give it a title and sync again")))))
       (when kw
         (insert (format "  ⚠ %d heading(s) with an invalid status keyword (status left unchanged):\n"
                         (length kw)))

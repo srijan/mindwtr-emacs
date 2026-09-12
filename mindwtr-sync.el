@@ -836,6 +836,37 @@ buffers because `mindwtr-parse--warnings' is per-run state, reset by each parse.
                                     duplicates))
           :archive-warned archive-warned :duplicates duplicates)))
 
+(defun mindwtr-sync--drop-blank-titles (local shadow)
+  "Keep LOCAL's blank-title entities off the wire; return (LOCAL* . WARNINGS).
+The server rejects the whole PUT when any entity lacks a non-blank title, so a
+single untitled heading used to fail every sync.  A blank title is never an
+intentional edit: an entity SHADOW knows keeps the shadow's title (the heading
+is re-rendered with it, like the `:status' rule in `--merge-content'); a new
+one, with nothing to fall back on, is dropped from LOCAL so reconcile
+quarantines its heading under * Sync Failures instead of erasing it (see
+`mindwtr-reconcile--orphan-heading-p').  Each case yields a warning plist
+\(:id :kind :blank-title kept|quarantined [:title KEPT]) for the report."
+  (let ((shadow-idx (mindwtr-sync--entry-index shadow))
+        (out (copy-sequence local))
+        warnings)
+    (dolist (key mindwtr-sync--entity-keys)
+      (let* ((kind (mindwtr-sync--key->kind key))
+             (tk (mindwtr-model-title-key kind))
+             kept)
+        (dolist (le (plist-get local key))
+          (if (not (mindwtr-model-blank-title-p (plist-get le tk)))
+              (push le kept)
+            (let* ((id (plist-get le :id))
+                   (se (and id (cdr (gethash id shadow-idx))))
+                   (st (and se (plist-get se tk))))
+              (if (mindwtr-model-blank-title-p st)
+                  (push (list :id id :kind kind :blank-title 'quarantined) warnings)
+                (push (plist-put (copy-sequence le) tk st) kept)
+                (push (list :id id :kind kind :blank-title 'kept :title st)
+                      warnings)))))
+        (setq out (plist-put out key (nreverse kept)))))
+    (cons out (nreverse warnings))))
+
 (defun mindwtr-sync--prepare (buffer)
   "Parse BUFFER's surfaces and compute this cycle's decision state (stage A).
 Pure CPU plus local state reads -- no network.  Returns the
@@ -854,8 +885,10 @@ Pure CPU plus local state reads -- no network.  Returns the
            (force-backfill (and archive-active (not archive-migrated)))
            (parsed (mindwtr-sync--parse-surfaces surfaces0))
            (surfaces (plist-get parsed :surfaces))
-           (local (plist-get parsed :appdata))
-           (parse-warnings (plist-get parsed :warnings))
+           (titled (mindwtr-sync--drop-blank-titles
+                    (plist-get parsed :appdata) shadow))
+           (local (car titled))
+           (parse-warnings (append (plist-get parsed :warnings) (cdr titled)))
            ;; Strict absence semantics (KTD5/KTD6) are eligible only when the
            ;; archive surface is active, its latch is set, AND the archive file
            ;; exists on disk -- an `rm'ed file reads as not-yet-rendered (echo,

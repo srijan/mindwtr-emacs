@@ -2736,3 +2736,68 @@ the app-configured sort survives an Emacs rename."
     (should (equal (plist-get proj :title) "Renamed"))
     (should (equal (plist-get proj :taskSortBy) "due"))
     (should (= (plist-get proj :rev) 4))))
+
+;; --- blank-title headings ----------------------------------------------------
+
+(ert-deftest mindwtr-sync-new-blank-title-heading-is-quarantined-not-pushed ()
+  "A new heading with no title never reaches the wire (the server rejects it
+with a 400 and the whole sync used to fail).  The rest of the buffer syncs,
+the heading is moved to * Sync Failures, and the report says so."
+  (mindwtr-test-with-sync-env
+      (:server srv
+       :initial '(:tasks nil :projects nil :sections nil :areas nil :settings nil)
+       :shadow '(:tasks nil :projects nil :sections nil :areas nil :settings nil)
+       :etag "v1")
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+                "** INBOX Real one\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: real\n:END:\n"
+                "** INBOX \n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: blank1\n:END:\n")
+        (org-mode))
+      (let* ((r (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z"))
+             (put (mindwtr-util-json-decode (mindwtr-test-server-last-put srv)))
+             (ids (mapcar (lambda (e) (plist-get e :id)) (plist-get put :tasks))))
+        (should (plist-get r :ok))
+        (should (equal ids '("real")))
+        (should (= (plist-get (plist-get r :stats) :created) 1))
+        (let ((w (seq-find (lambda (w) (plist-get w :blank-title)) (plist-get r :warnings))))
+          (should w)
+          (should (equal (plist-get w :id) "blank1"))
+          (should (eq (plist-get w :blank-title) 'quarantined))))
+      (goto-char (point-min))
+      (should (search-forward "* Sync Failures" nil t))
+      (should (search-forward ":MW_ID: blank1" nil t)))))
+
+(ert-deftest mindwtr-sync-blanked-title-of-existing-task-keeps-shadow-title ()
+  "Blanking an existing task's title is never an intentional clear (the
+server would reject it): the shadow's title is kept, the task is not
+re-pushed, and the report notes the kept title."
+  (mindwtr-test-with-sync-env
+      (:server srv
+       :initial '(:tasks ((:id "t1" :title "Keep me" :status "inbox" :rev 1
+                           :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                  :projects nil :sections nil :areas nil :settings nil)
+       :shadow '(:tasks ((:id "t1" :title "Keep me" :status "inbox" :rev 1
+                          :createdAt "2026-01-01T00:00:00Z" :updatedAt "U"))
+                 :projects nil :sections nil :areas nil :settings nil)
+       :etag "v1")
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+                "** INBOX \n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+        (org-mode))
+      (let ((r (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+        (should (plist-get r :ok))
+        (should (= (plist-get (plist-get r :stats) :updated) 0))
+        (let ((w (seq-find (lambda (w) (plist-get w :blank-title)) (plist-get r :warnings))))
+          (should w)
+          (should (equal (plist-get w :id) "t1"))
+          (should (eq (plist-get w :blank-title) 'kept))
+          (should (equal (plist-get w :title) "Keep me"))))
+      (should (string= (plist-get (car (plist-get (mindwtr-shadow-load) :tasks)) :title)
+                       "Keep me"))
+      ;; A HEAD-match noop leaves the buffer untouched (the report carries the
+      ;; warning); a full cycle re-renders the kept title.  Either way nothing
+      ;; is lost and no Sync Failures container appears.
+      (goto-char (point-min))
+      (should-not (search-forward "Sync Failures" nil t)))))

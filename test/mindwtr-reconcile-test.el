@@ -1279,3 +1279,35 @@ inferable) is quarantined, not silently erased."
     (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
     (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
     (should (save-excursion (goto-char (point-min)) (search-forward "Stray" nil t)))))
+
+;; --- blank-title headings ----------------------------------------------------
+
+(ert-deftest mindwtr-reconcile-quarantines-blank-title-heading-absent-from-merged ()
+  "A typed heading with no title that MERGED does not carry (the sync dropped
+it from the PUT) is quarantined under * Sync Failures with a no-title note,
+never erased."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX \n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: blank1\n:END:\nsome body\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer mindwtr-reconcile-test--empty)
+    (should (= 1 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (save-excursion (goto-char (point-min)) (search-forward ":MW_ID: blank1" nil t)))
+    (should (save-excursion (goto-char (point-min)) (search-forward "some body" nil t)))
+    (should (save-excursion (goto-char (point-min)) (search-forward "has no title" nil t)))))
+
+(ert-deftest mindwtr-reconcile-does-not-quarantine-blank-title-heading-in-merged ()
+  "A blank-title heading whose id MERGED still carries (the sync kept the
+previous title) renders from MERGED and is not quarantined."
+  (with-temp-buffer
+    (let ((org-inhibit-startup t))
+      (insert "* Inbox\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: inbox\n:END:\n"
+              "** INBOX \n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+      (org-mode))
+    (mindwtr-reconcile-buffer
+     '(:tasks ((:id "t1" :title "Kept title" :status "inbox" :rev 2
+                :createdAt "2026-06-01T00:00:00Z" :updatedAt "2026-06-01T00:00:00Z"))
+       :projects nil :sections nil :areas nil :settings nil))
+    (should (= 0 (mindwtr-reconcile-test--count "Sync Failures")))
+    (should (= 1 (mindwtr-reconcile-test--count "Kept title")))))

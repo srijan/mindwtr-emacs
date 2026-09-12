@@ -194,3 +194,34 @@ with fast-access keys and the done-state separator."
    (mindwtr-model-validate-appdata
     '(:tasks nil :projects nil :sections nil :areas nil
       :people ((:name "Alex")) :settings nil))))
+
+;; --- titles: the server rejects a live entity whose title/name is blank ----
+
+(ert-deftest mindwtr-model-validate-rejects-live-task-with-blank-title ()
+  "The server requires a non-blank string title on every task; a live task
+without one (or with a whitespace one) must never reach the wire."
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks ((:id "t1" :status "inbox")) :projects nil
+      :sections nil :areas nil :settings nil)))
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks ((:id "t1" :title "  " :status "inbox")) :projects nil
+      :sections nil :areas nil :settings nil))))
+
+(ert-deftest mindwtr-model-validate-rejects-live-project-and-area-without-title ()
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks nil :projects ((:id "p1" :status "active"))
+      :sections nil :areas nil :settings nil)))
+  (should-error
+   (mindwtr-model-validate-appdata
+    '(:tasks nil :projects nil :sections nil
+      :areas ((:id "a1" :name "")) :settings nil))))
+
+(ert-deftest mindwtr-model-title-key-per-kind ()
+  (should (eq (mindwtr-model-title-key 'task) :title))
+  (should (eq (mindwtr-model-title-key 'project) :title))
+  (should (eq (mindwtr-model-title-key 'section) :title))
+  (should (eq (mindwtr-model-title-key 'area) :name))
+  (should (eq (mindwtr-model-title-key 'person) :name)))

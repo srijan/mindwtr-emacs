@@ -340,19 +340,36 @@ every sync -- which is what keeps the container from nesting or growing.")
 
 (defconst mindwtr-reconcile--quarantine-note
   "# mindwtr: couldn't determine type from context -- add a :MW_TYPE: or move this under a list container, then sync again.\n"
-  "Annotation prefixed to each quarantined heading.  Regenerated every sync:
-it lives in the container body, not in any orphan subtree, so it never
-accumulates.")
+  "Annotation prefixed to each quarantined untyped heading.  Regenerated
+every sync: it lives in the container body, not in any orphan subtree, so it
+never accumulates.")
 
-(defun mindwtr-reconcile--orphan-heading-p ()
-  "Non-nil if the heading at point is content reconcile would otherwise erase:
-no (non-blank) :MW_TYPE: and no kind inferable from context.  A typed entity, a
-container, and an inferable heading all return nil."
-  (and (null (mindwtr-heading-type))
-       (null (mindwtr-parse-infer-kind))))
+(defconst mindwtr-reconcile--quarantine-no-title-note
+  "# mindwtr: heading has no title, so the server refused it -- give it a title, then sync again.\n"
+  "Annotation prefixed to a quarantined blank-title heading.")
 
-(defun mindwtr-reconcile--collect-orphans ()
+(defun mindwtr-reconcile--orphan-heading-p (&optional merged-ids)
+  "Return why the heading at point would otherwise be erased, or nil.
+`untyped': no (non-blank) :MW_TYPE: and no kind inferable from context.
+`no-title': a blank heading title whose id is not in MERGED-IDS (a hash of
+ids the rebuild renders) -- the sync kept it off the wire because the server
+rejects untitled entities, so nothing will re-render it.  A blank-title
+heading MERGED-IDS does carry renders from the merged data (its previous
+title was kept) and is not an orphan.  A typed entity, a container, and an
+inferable heading return nil."
+  (cond
+   ((and (null (mindwtr-heading-type)) (null (mindwtr-parse-infer-kind)))
+    'untyped)
+   ((and (mindwtr-model-blank-title-p (org-get-heading t t t t))
+         (not (string= (or (mindwtr-heading-type) "") "container"))
+         (let ((id (mindwtr-heading-id)))
+           (not (and id merged-ids (gethash id merged-ids)))))
+    'no-title)))
+
+(defun mindwtr-reconcile--collect-orphans (&optional merged-ids)
   "Return raw strings for headings reconcile would otherwise erase.
+Each string is the heading + body prefixed with its reason note (see
+`--orphan-heading-p', which takes MERGED-IDS).
 Walks every heading in the current buffer (before any erase -- R7).  An orphan
 heading (`--orphan-heading-p') is captured as just its own heading + body, NOT
 its whole subtree: a typed or inferable DESCENDANT is a real entity that
@@ -368,10 +385,15 @@ quarantine idempotent (regenerated fresh on re-emit, never nested)."
     (let (orphans)
       (when (or (org-at-heading-p) (outline-next-heading))
         (while (not (eobp))
-          (when (mindwtr-reconcile--orphan-heading-p)
-            (let ((beg (point))
-                  (end (mindwtr-heading-entry-end)))
-              (push (buffer-substring-no-properties beg end) orphans)))
+          (let ((why (mindwtr-reconcile--orphan-heading-p merged-ids)))
+            (when why
+              (let ((beg (point))
+                    (end (mindwtr-heading-entry-end)))
+                (push (concat (if (eq why 'no-title)
+                                  mindwtr-reconcile--quarantine-no-title-note
+                                mindwtr-reconcile--quarantine-note)
+                              (buffer-substring-no-properties beg end))
+                      orphans))))
           (outline-next-heading)))
       (nreverse orphans))))
 
@@ -391,17 +413,15 @@ are touched, so body content is left byte-identical."
 
 (defun mindwtr-reconcile--emit-quarantine (orphans)
   "Append a `* Sync Failures' container holding ORPHANS at point-max.
-ORPHANS is the list of raw subtree strings from `--collect-orphans'.  A no-op
-when ORPHANS is empty, so a clean sync produces no quarantine heading (R4).
-Each orphan is re-rooted to level 2 under the level-1 container and prefixed
-with `mindwtr-reconcile--quarantine-note'."
+ORPHANS is the list of note-prefixed subtree strings from `--collect-orphans'.
+A no-op when ORPHANS is empty, so a clean sync produces no quarantine heading
+\(R4).  Each orphan is re-rooted to level 2 under the level-1 container."
   (when orphans
     (goto-char (point-max))
     (unless (bolp) (insert "\n"))
     (insert (format "* %s\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: %s\n:END:\n"
                     "Sync Failures" mindwtr-reconcile--quarantine-role))
     (dolist (o orphans)
-      (insert mindwtr-reconcile--quarantine-note)
       (let ((s (mindwtr-reconcile--reroot-subtree o 2)))
         (insert s)
         (unless (string-suffix-p "\n" s) (insert "\n"))))))
@@ -464,6 +484,14 @@ staged in a temporary one."
           (with-suppressed-warnings ((obsolete replace-buffer-contents))
             (replace-buffer-contents source 2)))))))
 
+(defun mindwtr-reconcile--merged-ids (merged)
+  "Return a hash of every entity id MERGED carries (what the rebuild renders)."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (key '(:tasks :projects :sections :areas :people))
+      (dolist (e (plist-get merged key))
+        (when (plist-get e :id) (puthash (plist-get e :id) t h))))
+    h))
+
 (defun mindwtr-reconcile-buffer (merged &optional render-fn)
   "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
 RENDER-FN is the (APPDATA &optional ORG-ONLY) -> string renderer, defaulting to
@@ -496,7 +524,8 @@ silently erased."
     (let* ((org-only (mindwtr-reconcile--collect-org-only))
            (at-id (mindwtr-reconcile--id-at-point))
            ;; Collect orphans from the LIVE buffer, before the rebuild below (R7).
-           (orphans (mindwtr-reconcile--collect-orphans))
+           (orphans (mindwtr-reconcile--collect-orphans
+                     (mindwtr-reconcile--merged-ids merged)))
            ;; Render BEFORE replacing: if rendering signals (e.g. an unexpected
            ;; status from the server), the buffer is left intact rather than
            ;; wiped mid-rebuild.
