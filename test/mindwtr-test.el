@@ -565,3 +565,21 @@ callback must not stand auto-sync down forever); a fresh guard holds."
         (mindwtr--sync-started-at (float-time)))
     (should (mindwtr--sync-busy-p))
     (should mindwtr--sync-in-progress)))
+
+(ert-deftest mindwtr-server-error-message-carries-server-detail ()
+  "A non-retryable server error names the server's reason, not just the
+status: a 400 whose body says which validation failed is self-diagnosing."
+  (let ((captured nil)
+        (mindwtr--retry-attempts 0))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq captured (apply #'format fmt args)))))
+      (mindwtr--sync-handle-error
+       (list 'mindwtr-api-error :status 400 :retryable nil
+             :body "{\"error\":\"Invalid data: each task must be an object with string id and title\"}")))
+    (should (string= captured
+                     "mindwtr: server error 400: Invalid data: each task must be an object with string id and title"))
+    ;; No body: the old status-only message.
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq captured (apply #'format fmt args)))))
+      (mindwtr--sync-handle-error (list 'mindwtr-api-error :status 404 :retryable nil)))
+    (should (string= captured "mindwtr: server error 404"))))

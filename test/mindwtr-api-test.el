@@ -110,3 +110,25 @@ status-0 responses arrive as classified ERR values, never as raw signals."
       (mindwtr-api-head-etag-async (lambda (r e) (setq got (list r e))))
       (should (memq 'mindwtr-api-auth-error
                     (get (car (nth 1 got)) 'error-conditions))))))
+
+;; --- server error detail --------------------------------------------------
+
+(ert-deftest mindwtr-api-error-detail-reads-json-error-field ()
+  "A JSON body with an \"error\" field yields that field as the detail."
+  (should (string= (mindwtr-api-error-detail
+                    '(:status 400 :retryable nil
+                      :body "{\n  \"error\": \"Invalid data: each task must be an object with string id and title\"\n}"))
+                   "Invalid data: each task must be an object with string id and title")))
+
+(ert-deftest mindwtr-api-error-detail-falls-back-to-trimmed-body ()
+  "A non-JSON body is returned trimmed; an empty or absent body yields nil."
+  (should (string= (mindwtr-api-error-detail '(:status 400 :body " Bad Request \n"))
+                   "Bad Request"))
+  (should-not (mindwtr-api-error-detail '(:status 400 :body "")))
+  (should-not (mindwtr-api-error-detail '(:status 400))))
+
+(ert-deftest mindwtr-api-error-detail-truncates-long-bodies ()
+  "A long body (an HTML error page) is cut so it fits the echo area."
+  (let ((d (mindwtr-api-error-detail
+            (list :status 502 :body (make-string 1000 ?x)))))
+    (should (<= (length d) 200))))

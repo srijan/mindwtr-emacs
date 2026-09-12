@@ -158,6 +158,30 @@ failure, timeout, dead socket) and classifies as retryable, like 429/5xx."
      (t (signal 'mindwtr-api-error (list :status status :retryable nil
                                          :body (plist-get resp :body)))))))
 
+(defconst mindwtr-api--error-detail-max 200
+  "Longest server error detail worth echoing (an HTML error page is cut here).")
+
+(defun mindwtr-api-error-detail (data)
+  "Return the server's reason from a `mindwtr-api-error' signal DATA, or nil.
+Mindwtr Cloud answers a rejected request with a JSON body whose \=`error'
+field names the failed validation (\"Invalid data: each task must ...\"),
+which is exactly what the user needs to see; a non-JSON body (a proxy's
+error page) is returned trimmed and cut to `mindwtr-api--error-detail-max'
+so it still fits the echo area.  Nil when DATA carries no usable body."
+  (let* ((body (plist-get data :body))
+         (detail
+          (and (stringp body)
+               (or (condition-case nil
+                       (let ((v (plist-get (mindwtr-util-json-decode body) :error)))
+                         (and (stringp v) v))
+                     (error nil))
+                   body)))
+         (detail (and detail (string-trim detail))))
+    (when (and detail (not (string-empty-p detail)))
+      (if (> (length detail) mindwtr-api--error-detail-max)
+          (concat (substring detail 0 (- mindwtr-api--error-detail-max 3)) "...")
+        detail))))
+
 ;;; Async request layer ---------------------------------------------------------
 ;;
 ;; Callback convention: every async entry point takes a CALLBACK called exactly

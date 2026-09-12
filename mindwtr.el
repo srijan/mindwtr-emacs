@@ -262,7 +262,12 @@ are left untouched (the engine only writes them on success)."
       (mindwtr--schedule-retry))
      ((memq 'mindwtr-api-error conds)
       (mindwtr--reset-backoff)
-      (message "mindwtr: server error %s" (plist-get data :status)))
+      ;; A 4xx is the server refusing this payload; its body says why
+      ;; (which validation failed), so a bare status would leave the user
+      ;; guessing.
+      (let ((detail (mindwtr-api-error-detail data)))
+        (message "mindwtr: server error %s%s" (plist-get data :status)
+                 (if detail (concat ": " detail) ""))))
      (t
       (mindwtr--reset-backoff)
       (message "mindwtr: %s" (error-message-string err))))))
