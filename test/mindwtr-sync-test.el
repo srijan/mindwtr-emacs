@@ -2376,6 +2376,141 @@ tombstoned, so the first post-upgrade sync cannot lose server people."
     (should-not (plist-member task :mw-kind))
     (should (string= (plist-get task :title) "x"))))
 
+;;; Project task order (org sibling order -> :order) -------------------------
+
+(defconst mindwtr-sync-test--order-shadow
+  '(:tasks ((:id "t1" :title "a" :status "next" :projectId "p1" :rev 1 :order 0)
+            (:id "t2" :title "b" :status "next" :projectId "p1" :rev 1 :order 5)
+            (:id "t3" :title "c" :status "next" :projectId "p1" :rev 1 :order 9))
+    :projects ((:id "p1" :title "P" :status "active" :rev 1 :order 0))
+    :sections nil :areas nil :people nil :settings nil)
+  "Three project tasks with sparse server orders (as the apps assign them).")
+
+(defun mindwtr-sync-test--order-local (&rest ids)
+  "A parsed-shape local AppData listing project p1's tasks in IDS order."
+  (list :tasks (mapcar (lambda (id) (list :id id :title id :status "next" :projectId "p1"))
+                       ids)
+        :projects '((:id "p1" :title "P" :status "active"))
+        :sections nil :areas nil :people nil))
+
+(ert-deftest mindwtr-sync-order-plan-fixed-point-with-sparse-orders ()
+  "Document order matching the shadow's sort yields no plan, whatever the values."
+  (should-not (mindwtr-sync--order-plan
+               (mindwtr-sync-test--order-local "t1" "t2" "t3")
+               mindwtr-sync-test--order-shadow)))
+
+(ert-deftest mindwtr-sync-order-plan-detects-a-move ()
+  "Moving a heading re-indexes the group; unmoved leading tasks keep their value."
+  (let ((plan (mindwtr-sync--order-plan
+               (mindwtr-sync-test--order-local "t1" "t3" "t2")
+               mindwtr-sync-test--order-shadow)))
+    (should (equal (cdr (assoc "t3" plan)) 1))
+    (should (equal (cdr (assoc "t2" plan)) 2))
+    (should-not (assoc "t1" plan))))
+
+(ert-deftest mindwtr-sync-order-plan-tie-break-follows-shadow-list-order ()
+  "Tasks without :order render in server list order; swapping them still counts."
+  (let ((shadow '(:tasks ((:id "t1" :title "a" :status "next" :projectId "p1" :rev 1)
+                          (:id "t2" :title "b" :status "next" :projectId "p1" :rev 1))
+                  :projects nil :sections nil :areas nil :people nil :settings nil)))
+    (should-not (mindwtr-sync--order-plan
+                 (mindwtr-sync-test--order-local "t1" "t2") shadow))
+    (should (equal (mindwtr-sync--order-plan
+                    (mindwtr-sync-test--order-local "t2" "t1") shadow)
+                   '(("t1" . 1) ("t2" . 0))))))
+
+(ert-deftest mindwtr-sync-order-plan-new-task-tail-vs-insertion ()
+  "A new task appended is not a reorder; one inserted mid-sequence is."
+  (should-not (mindwtr-sync--order-plan
+               (mindwtr-sync-test--order-local "t1" "t2" "t3" "new")
+               mindwtr-sync-test--order-shadow))
+  (let ((plan (mindwtr-sync--order-plan
+               (mindwtr-sync-test--order-local "t1" "new" "t2" "t3")
+               mindwtr-sync-test--order-shadow)))
+    (should (equal (cdr (assoc "new" plan)) 1))
+    (should (equal (cdr (assoc "t2" plan)) 2))
+    (should (equal (cdr (assoc "t3" plan)) 3))))
+
+(ert-deftest mindwtr-sync-order-plan-skips-standalone-and-archived ()
+  "Standalone tasks have no sibling sequence; archived ones live in another file."
+  (let ((shadow '(:tasks ((:id "s1" :title "a" :status "next" :rev 1 :order 0)
+                          (:id "s2" :title "b" :status "next" :rev 1 :order 1)
+                          (:id "t1" :title "c" :status "next" :projectId "p1" :rev 1 :order 0)
+                          (:id "t2" :title "d" :status "archived" :projectId "p1" :rev 1 :order 1))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+        (local '(:tasks ((:id "s2" :title "b" :status "next")
+                         (:id "s1" :title "a" :status "next")
+                         (:id "t2" :title "d" :status "archived" :projectId "p1")
+                         (:id "t1" :title "c" :status "next" :projectId "p1"))
+                 :projects nil :sections nil :areas nil :people nil)))
+    (should-not (mindwtr-sync--order-plan local shadow))))
+
+(ert-deftest mindwtr-sync-order-plan-groups-by-section ()
+  "Tasks under a section form their own sequence, separate from the project's."
+  (let ((shadow '(:tasks ((:id "t1" :title "a" :status "next" :projectId "p1" :rev 1 :order 0)
+                          (:id "t2" :title "b" :status "next" :projectId "p1" :rev 1 :order 1)
+                          (:id "u1" :title "c" :status "next" :sectionId "s1" :rev 1 :order 0)
+                          (:id "u2" :title "d" :status "next" :sectionId "s1" :rev 1 :order 1))
+                  :projects nil :sections nil :areas nil :people nil :settings nil))
+        (local '(:tasks ((:id "u2" :title "d" :status "next" :sectionId "s1")
+                         (:id "u1" :title "c" :status "next" :sectionId "s1")
+                         (:id "t1" :title "a" :status "next" :projectId "p1")
+                         (:id "t2" :title "b" :status "next" :projectId "p1"))
+                 :projects nil :sections nil :areas nil :people nil)))
+    (should (equal (sort (copy-sequence (mindwtr-sync--order-plan local shadow))
+                         (lambda (a b) (string< (car a) (car b))))
+                   '(("u1" . 1) ("u2" . 0))))))
+
+(ert-deftest mindwtr-sync-apply-order-plan-stamps-and-promotes ()
+  "The plan writes :order/:orderNum and bumps an echoed task to an update."
+  (let* ((shadow mindwtr-sync-test--order-shadow)
+         (candidate (list :tasks (mapcar #'copy-sequence (plist-get shadow :tasks))))
+         (tasks (plist-get (mindwtr-sync--apply-order-plan
+                            candidate '(("t3" . 1) ("t2" . 2)) shadow "dev" "NOW")
+                           :tasks)))
+    (should (= (plist-get (nth 0 tasks) :rev) 1))
+    (should (= (plist-get (nth 1 tasks) :order) 2))
+    (should (= (plist-get (nth 1 tasks) :orderNum) 2))
+    (should (= (plist-get (nth 1 tasks) :rev) 2))
+    (should (string= (plist-get (nth 1 tasks) :revBy) "dev"))
+    (should (= (plist-get (nth 2 tasks) :order) 1))))
+
+(ert-deftest mindwtr-sync-full-cycle-pushes-project-task-reorder-then-noops ()
+  "Moving a project task heading in org reaches the server as new :order
+values, the rebuilt buffer keeps the moved order, and the next cycle is a
+HEAD-only noop (no churn)."
+  (let ((shadow mindwtr-sync-test--order-shadow))
+    (mindwtr-test-with-sync-env
+        (:server srv :initial shadow :shadow shadow :etag "v1")
+      (with-temp-buffer
+        (let ((org-inhibit-startup t))
+          ;; Render with t3 ahead of t2: the org buffer as the user left it
+          ;; after moving the heading (the parse never reads :order).
+          (insert (mindwtr-render-appdata
+                   '(:tasks ((:id "t1" :title "a" :status "next" :projectId "p1" :order 0)
+                             (:id "t3" :title "c" :status "next" :projectId "p1" :order 1)
+                             (:id "t2" :title "b" :status "next" :projectId "p1" :order 2))
+                     :projects ((:id "p1" :title "P" :status "active" :order 0))
+                     :sections nil :areas nil :people nil)))
+          (org-mode))
+        (let ((r1 (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")))
+          (should (plist-get r1 :ok))
+          (should-not (plist-get r1 :noop)))
+        (let ((by-id (mindwtr-shadow-index (mindwtr-test-server-state srv) :tasks)))
+          (should (= (plist-get (gethash "t1" by-id) :order) 0))
+          (should (= (plist-get (gethash "t3" by-id) :order) 1))
+          (should (= (plist-get (gethash "t2" by-id) :order) 2))
+          (should (= (plist-get (gethash "t2" by-id) :orderNum) 2))
+          (should (= (plist-get (gethash "t2" by-id) :rev) 2))
+          (should (= (plist-get (gethash "t1" by-id) :rev) 1)))
+        (goto-char (point-min))
+        (should (< (progn (search-forward "NEXT c") (point))
+                   (progn (search-forward "NEXT b") (point))))
+        (setf (mindwtr-test-server-requests srv) nil)
+        (should (plist-get (mindwtr-sync-once (current-buffer) "2026-06-01T00:01:00Z")
+                           :noop))
+        (should (equal (mindwtr-test-server-requests srv) '("HEAD")))))))
+
 ;;; U3: clock-time roll-up reconcile pass ------------------------------------
 
 (ert-deftest mindwtr-sync-clock-new-first-run ()
