@@ -182,12 +182,42 @@ skip then leaves Two in the inbox and ends the session."
                "CLOSED:" (save-excursion (org-end-of-subtree t t) (point)) t)))))
 
 (ert-deftest mindwtr-clarify-delegate-sets-who-checkin-and-waits ()
-  "[d] records the delegate, a check-in DEADLINE, and files the item WAIT."
+  "[d] offers the People roster, accepts a new name, records it with a
+check-in DEADLINE, and files the item WAIT."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :people ((:id "pe1" :name "Alice"))
+        :tasks ((:id "t1" :title "One" :status "inbox"))
+        :settings nil)
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt cands &rest _) (setq offered cands) "Bob"))
+                ((symbol-function 'org-read-date)
+                 #'mindwtr-clarify-test--read-date-stub)
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) nil)))
+        (mindwtr-clarify)
+        (mindwtr-clarify-test--press ?d))
+      (should (member "Alice" offered)))
+    (with-current-buffer src
+      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
+      (should (string= (mindwtr-clarify-test--keyword-of "One") "WAIT"))
+      (goto-char (point-min))
+      (let ((case-fold-search nil)) (re-search-forward "WAIT One"))
+      (org-back-to-heading t)
+      (should (string= (org-entry-get nil "MW_ASSIGNED_TO") "Bob"))
+      (should-not (org-entry-get nil "MW_CONTEXTS"))
+      (should (re-search-forward
+               "DEADLINE: <2026-06-20"
+               (save-excursion (org-end-of-subtree t t) (point)) t)))))
+
+(ert-deftest mindwtr-clarify-delegate-skips-person-on-empty ()
+  "RET at the assignee prompt files the item WAIT with no assignee."
   (mindwtr-clarify-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "t1" :title "One" :status "inbox"))
         :settings nil)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Alice"))
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) ""))
               ((symbol-function 'org-read-date)
                #'mindwtr-clarify-test--read-date-stub)
               ((symbol-function 'completing-read-multiple)
@@ -195,15 +225,10 @@ skip then leaves Two in the inbox and ends the session."
       (mindwtr-clarify)
       (mindwtr-clarify-test--press ?d))
     (with-current-buffer src
-      (should (string= (mindwtr-clarify-test--parent-list-of "One") "single-actions"))
       (should (string= (mindwtr-clarify-test--keyword-of "One") "WAIT"))
       (goto-char (point-min))
       (let ((case-fold-search nil)) (re-search-forward "WAIT One"))
-      (org-back-to-heading t)
-      (should (string= (org-entry-get nil "MW_ASSIGNED_TO") "Alice"))
-      (should (re-search-forward
-               "DEADLINE: <2026-06-20"
-               (save-excursion (org-end-of-subtree t t) (point)) t)))))
+      (should-not (org-entry-get nil "MW_ASSIGNED_TO")))))
 
 (ert-deftest mindwtr-clarify-tickler-schedules-next ()
   "[t] files the item NEXT with the chosen SCHEDULED date (this one outcome
