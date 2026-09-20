@@ -343,6 +343,45 @@ task keeps its id; the project is a fresh entity)."
         (should (string= (plist-get task :status) "next"))
         (should (string= (plist-get task :projectId) (plist-get proj :id)))))))
 
+(ert-deftest mindwtr-clarify-project-outcome-asks-project-area ()
+  "[p] asks for the NEW project's area (its tasks inherit it), not the task's."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects nil :sections nil
+        :tasks ((:id "t1" :title "Plan party" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &optional init &rest _) (or init "")))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "Personal")))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?p))
+    (with-current-buffer src
+      (let* ((ad (mindwtr-parse-buffer))
+             (proj (car (plist-get ad :projects)))
+             (task (car (plist-get ad :tasks))))
+        (should (string= (plist-get proj :areaId) "a1"))
+        (should (string= (plist-get task :projectId) (plist-get proj :id)))
+        (should-not (plist-get task :areaId))))))
+
+(ert-deftest mindwtr-clarify-project-outcome-skips-area-when-project-has-one ()
+  "[p] onto an existing same-titled project that already has an area asks nothing."
+  (mindwtr-clarify-test--with-appdata
+      '(:areas ((:id "a1" :name "Personal" :order 0))
+        :projects ((:id "p1" :title "Plan party" :status "active" :areaId "a1"))
+        :sections nil
+        :tasks ((:id "t1" :title "Plan party" :status "inbox"))
+        :settings nil)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (_prompt &optional init &rest _) (or init "")))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) (error "unexpected area prompt"))))
+      (mindwtr-clarify)
+      (mindwtr-clarify-test--press ?p))
+    (with-current-buffer src
+      (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
+        (should (string= (plist-get task :projectId) "p1"))))))
+
 (ert-deftest mindwtr-clarify-failed-outcome-keeps-wip-alive ()
   "An outcome that errors (promote with no `* Projects' container) keeps
 the WIP buffer open for a re-decision instead of advancing."
