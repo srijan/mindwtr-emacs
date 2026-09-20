@@ -200,9 +200,19 @@ failure being handled."
                delay mindwtr--retry-attempts mindwtr-backoff-max-attempts))))
 
 (defun mindwtr--retry-sync ()
-  "Timer entry for a backoff retry: run one attempt, preserving the count."
+  "Timer entry for a backoff retry: run one attempt, preserving the count.
+Re-arms at the same delay when a guard stands the attempt down (a cycle
+already in flight, or a live capture).  The timer has already been cleared
+by then and the completion callback that would re-arm it never runs, so
+without this the retry is consumed and the backoff chain ends silently --
+an armed timer is the promise of a deferred retry.  The attempt counter is
+untouched: an attempt that never left is not a failure, so the backoff does
+not advance and sync never gives up over a stand-down."
   (setq mindwtr--retry-timer nil)
-  (mindwtr--sync-attempt))
+  (unless (mindwtr--sync-attempt)
+    (setq mindwtr--retry-timer
+          (run-with-timer (mindwtr--backoff-delay (max 1 mindwtr--retry-attempts))
+                          nil #'mindwtr--retry-sync))))
 
 (defun mindwtr--sync-busy-p ()
   "Non-nil while a launched sync cycle is still legitimately in flight.
@@ -275,7 +285,10 @@ are left untouched (the engine only writes them on success)."
       (message "mindwtr: %s" (error-message-string err))))))
 
 (defun mindwtr--sync-attempt ()
-  "Launch one sync cycle; backoff and reporting run in its completion callback.
+  "Launch one sync cycle; return non-nil when one was launched.
+A guard that stands the cycle down returns nil, which is what lets
+`mindwtr--retry-sync' tell a deferred attempt from a completed one and
+re-arm.
 With plz available the cycle's network legs are asynchronous: this returns as
 soon as the cycle is launched and Emacs stays responsive for the round trips.
 With a synchronous transport (tests, the url.el fallback) the whole cycle --
@@ -289,14 +302,18 @@ signals synchronously, before the in-flight guard is taken."
       (setq mindwtr--sync-in-progress t
             mindwtr--sync-started-at (float-time))
       (condition-case err
-          (mindwtr-sync-once-async
-           buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
-           (lambda (res cb-err)
-             (setq mindwtr--sync-in-progress nil
-                   mindwtr--sync-started-at nil)
-             (if cb-err
-                 (mindwtr--sync-handle-error cb-err)
-               (mindwtr--sync-handle-result res))))
+          (progn
+            (mindwtr-sync-once-async
+             buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+             (lambda (res cb-err)
+               (setq mindwtr--sync-in-progress nil
+                     mindwtr--sync-started-at nil)
+               (if cb-err
+                   (mindwtr--sync-handle-error cb-err)
+                 (mindwtr--sync-handle-result res))))
+            ;; Launched.  The async entry's own return value is transport
+            ;; detail, so say so explicitly.
+            t)
         ;; The async entry routes cycle errors through the callback and cannot
         ;; itself signal -- except a `quit' (C-g mid-launch) or a signal from
         ;; the handlers above.  Release the guard rather than wedging it, then
@@ -337,7 +354,11 @@ mid-capture -- `auto-save-visited-mode', `super-save', `buffer-guardian'
 \(which resolves an indirect buffer to its base and saves on every window or
 buffer switch), a plain `C-x C-s' -- clears the modified flag while the
 capture is still live, and its `after-save-hook' arms the sync debounce at
-the same time."
+the same time.
+
+The gate has no staleness reclaim (unlike `mindwtr--sync-busy-p'): while a
+capture buffer lives, automatic sync stands down and `mindwtr-sync' refuses.
+Killing that buffer is the recovery step, and the manual refusal names it."
   (and (boundp 'org-capture-mode)
        (let ((targets (delq nil (mapcar #'find-buffer-visiting
                                         (delq nil (list mindwtr-file
@@ -354,7 +375,9 @@ A no-op while a cycle is in progress, while a backoff retry is armed, after
 sync has given up, or while the synced buffer has unsaved edits -- so a
 background rebuild never erases the user's in-progress work, backoff fully
 owns the retry cadence, and overlapping triggers never pile on.  A manual
-`mindwtr-sync' is the escape hatch that resets this state and saves first."
+`mindwtr-sync' is the escape hatch that resets this state and saves first --
+except during a capture, which refuses both paths (see
+`mindwtr--capture-in-progress-p')."
   (unless (or (mindwtr--sync-busy-p)
               (timerp mindwtr--retry-timer)
               mindwtr--error-state
@@ -367,11 +390,19 @@ owns the retry cadence, and overlapping triggers never pile on.  A manual
 A manual sync clears any pending backoff, saves the synced buffer first when
 it has unsaved edits, then starts a fresh attempt.  An explicit sync never
 refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
-\"save = commit point\" means a manual sync always leaves the buffer clean."
+\"save = commit point\" means a manual sync always leaves the buffer clean.
+
+It does refuse, loudly, while an `org-capture' into a synced file is live:
+the rebuild would invalidate that capture's region markers, so there is
+nothing safe to bypass to.  This is the one exception to the escape-hatch
+rule.  Finish the capture (`C-c C-c'), abort it (`C-c C-k'), or -- for a
+capture buffer that is abandoned or stuck -- kill the buffer the error
+names.  Killing it is the recovery step: automatic sync stands down for as
+long as that buffer lives."
   (interactive)
   (let ((cap (mindwtr--capture-in-progress-p)))
     (when cap
-      (user-error "mindwtr: capture in progress (%s); finish or abort it first"
+      (user-error "mindwtr: capture in progress (%s); finish, abort, or kill it first"
                   (buffer-name cap))))
   (mindwtr--reset-backoff)
   ;; Save-then-sync.  Echo-suppressed (the cycle is about to run, so the
