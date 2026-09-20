@@ -30,7 +30,8 @@
 ;; A decision writes the WIP edits back to the source item (matched by
 ;; MW_ID), runs the outcome's own prompts, then the shared post-decision
 ;; prompts (contexts always; area when the item has none), sets the keyword,
-;; and relocates the item to its status bucket.  The WIP buffer then loads
+;; and relocates the item to its status bucket.  A new project is asked for
+;; its area instead (its tasks inherit it).  The WIP buffer then loads
 ;; the next inbox item.  `C-c C-n' skips an item (WIP edits discarded);
 ;; `C-c C-k' stops the pass.  `mindwtr-clarify-this-item' runs the same flow
 ;; for just the inbox item at point.
@@ -282,14 +283,21 @@ project."
   (condition-case err
       (mindwtr-set-context)
     (user-error (message "%s" (error-message-string err)) (sit-for 1)))
-  (unless (or contexts-only
-              ;; Area lives in `:CATEGORY:' now; the legacy `:MW_AREA:' fallback
-              ;; keeps a pre-upgrade item from being re-prompted before its
-              ;; buffer rebuilds (mirrors the parser's read, KTD3).
-              (mindwtr-heading-prop "CATEGORY")
-              (mindwtr-heading-prop "MW_AREA")
-              (mindwtr-commands--in-project-p)
-              (null (mindwtr-set-area--names)))
+  (unless contexts-only
+    (mindwtr-clarify--maybe-set-area)))
+
+(defun mindwtr-clarify--maybe-set-area ()
+  "Ask for the area of the task or project at point when it has none yet.
+Skipped when the heading already carries one, sits under a project (a task
+takes its area from the project), or the buffer defines no areas."
+  (unless (or
+           ;; Area lives in `:CATEGORY:' now; the legacy `:MW_AREA:' fallback
+           ;; keeps a pre-upgrade item from being re-prompted before its
+           ;; buffer rebuilds (mirrors the parser's read, KTD3).
+           (mindwtr-heading-prop "CATEGORY")
+           (mindwtr-heading-prop "MW_AREA")
+           (mindwtr-commands--in-project-p)
+           (null (mindwtr-set-area--names)))
     (mindwtr-set-area)))
 
 (defun mindwtr-clarify--apply-outcome (ch)
@@ -315,7 +323,13 @@ at point in the source buffer.  Point is on the freshly written-back item."
     (?t (org-schedule nil)
         (mindwtr-clarify--post-prompts)
         (mindwtr-clarify--finalize "NEXT"))
-    (?p (mindwtr-promote-to-project))
+    ;; The task now sits directly under its project, and a project task takes
+    ;; its area from the project -- so the area question goes to the project
+    ;; heading (skipped when an existing same-titled project already has one).
+    (?p (mindwtr-promote-to-project)
+        (save-excursion
+          (when (org-up-heading-safe)
+            (mindwtr-clarify--maybe-set-area))))
     ;; Contexts-only post prompts: a task under a project takes its area
     ;; from the project, so the area question would be noise here.  NEXT is
     ;; the resting state for a project task (mirrors
@@ -404,7 +418,8 @@ what the item is:
   x  trash                            -> ARCH
 
 Actionable outcomes are followed by the shared prompts: contexts, and an
-area when the item has none.  The decided item relocates to its status
+area when the item has none (a new project is asked for its own area
+instead).  The decided item relocates to its status
 bucket and the next inbox item loads.  `\\[mindwtr-clarify-skip]' skips an
 item; `\\[mindwtr-clarify-stop]' stops the pass.  To triage a single item,
 use `mindwtr-clarify-this-item'."
