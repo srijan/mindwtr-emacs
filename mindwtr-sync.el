@@ -547,23 +547,16 @@ ids whose value actually changes are returned.  Nil when nothing moved."
     (maphash
      (lambda (_k rles)
        (let* ((les (reverse rles))
-              (known (make-hash-table :test 'equal))
-              doc-ids seen-new new-before-known)
-         (dolist (le les)
-           (let ((id (plist-get le :id)))
-             (cond ((gethash id sidx)
-                    (push id doc-ids) (puthash id t known)
-                    ;; A new task followed by a known one is an insertion,
-                    ;; not an append.
-                    (when seen-new (setq new-before-known t)))
-                   (t (setq seen-new t)))))
-         (setq doc-ids (nreverse doc-ids))
-         (unless (and (not new-before-known)
-                      (equal doc-ids
-                             (mapcar (lambda (se) (plist-get se :id))
-                                     (mindwtr-render--sorted
-                                      (seq-filter (lambda (se) (gethash (plist-get se :id) known))
-                                                  (plist-get shadow :tasks))))))
+              (ids (mapcar (lambda (le) (plist-get le :id)) les))
+              (new (seq-remove (lambda (id) (gethash id sidx)) ids))
+              ;; What render laid out, plus new tasks appended: anything else
+              ;; (a move, or a new task inserted mid-sequence) is a reorder.
+              (expected (append (mapcar (lambda (se) (plist-get se :id))
+                                        (mindwtr-render--sorted
+                                         (seq-filter (lambda (se) (member (plist-get se :id) ids))
+                                                     (plist-get shadow :tasks))))
+                                new)))
+         (unless (equal ids expected)
            (let ((i 0))
              (dolist (le les)
                (let ((se (gethash (plist-get le :id) sidx)))
@@ -579,19 +572,18 @@ Writes both `:order' and its legacy alias `:orderNum', as the apps'
 reorder does.  A task echoed unchanged gets the same rev bump the clock
 reconcile applies, so the server accepts the write.  Mutates and returns
 CANDIDATE."
-  (when plan
-    (let ((sidx (mindwtr-shadow-index shadow :tasks)))
-      (dolist (te (plist-get candidate :tasks))
-        (let* ((id (plist-get te :id))
-               (o (cdr (assoc id plan))))
-          (when (and o (not (plist-get te :deletedAt)))
-            (plist-put te :order o)
-            (plist-put te :orderNum o)
-            (let ((se (gethash id sidx)))
-              (when (and se (equal (plist-get te :rev) (plist-get se :rev)))
-                (plist-put te :rev (1+ (or (plist-get se :rev) 0)))
-                (plist-put te :updatedAt now)
-                (plist-put te :revBy device-id))))))))
+  (let ((sidx (mindwtr-shadow-index shadow :tasks)))
+    (dolist (te (plist-get candidate :tasks))
+      (let* ((id (plist-get te :id))
+             (o (cdr (assoc id plan))))
+        (when (and o (not (plist-get te :deletedAt)))
+          (plist-put te :order o)
+          (plist-put te :orderNum o)
+          (let ((se (gethash id sidx)))
+            (when (and se (equal (plist-get te :rev) (plist-get se :rev)))
+              (plist-put te :rev (1+ (or (plist-get se :rev) 0)))
+              (plist-put te :updatedAt now)
+              (plist-put te :revBy device-id)))))))
   candidate)
 
 (defun mindwtr-sync--key->kind (key)

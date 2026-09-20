@@ -308,11 +308,8 @@ at point in the source buffer.  Point is on the freshly written-back item."
     (?q (mindwtr-clarify--finalize "DONE"))
     (?n (mindwtr-clarify--post-prompts)
         (mindwtr-clarify--finalize "NEXT"))
-    ;; Who: completion over the People roster and the names already in use,
-    ;; a new name accepted verbatim (the app backfills a Person), RET skips.
-    ;; No context is stamped: waiting-for is its own list keyed by person and
-    ;; check-in date; `@agendas' (raise with this person) is a different
-    ;; action, left to the optional contexts prompt below.
+    ;; People roster or a new name, RET skips; no context stamped
+    ;; (waiting-for is not `@agendas').
     (?d (mindwtr-set-assignee)
         ;; The check-in date rides on DEADLINE (dueDate): "when do I chase
         ;; this up" is the one date a waiting-for item needs.
