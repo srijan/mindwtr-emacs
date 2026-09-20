@@ -19,7 +19,7 @@
 ;;
 ;;   q  quick action: already done (the two-minute rule) -> DONE
 ;;   n  next action -> NEXT, into Single Actions
-;;   d  delegate -> who + check-in date -> WAIT
+;;   d  delegate -> who (People roster, new name, or skip) + check-in date -> WAIT
 ;;   t  tickler: defer to a date (incl. calendar items) -> NEXT + SCHEDULED
 ;;   p  new project (`mindwtr-promote-to-project'; the task keeps its MW_ID)
 ;;   a  add to an existing project (native `org-refile', project targets)
@@ -308,9 +308,12 @@ at point in the source buffer.  Point is on the freshly written-back item."
     (?q (mindwtr-clarify--finalize "DONE"))
     (?n (mindwtr-clarify--post-prompts)
         (mindwtr-clarify--finalize "NEXT"))
-    (?d (let ((who (string-trim (read-string "Delegate to: "))))
-          (unless (string-empty-p who)
-            (org-set-property "MW_ASSIGNED_TO" who)))
+    ;; Who: completion over the People roster and the names already in use,
+    ;; a new name accepted verbatim (the app backfills a Person), RET skips.
+    ;; No context is stamped: waiting-for is its own list keyed by person and
+    ;; check-in date; `@agendas' (raise with this person) is a different
+    ;; action, left to the optional contexts prompt below.
+    (?d (mindwtr-set-assignee)
         ;; The check-in date rides on DEADLINE (dueDate): "when do I chase
         ;; this up" is the one date a waiting-for item needs.
         (org-deadline nil)
@@ -409,7 +412,7 @@ what the item is:
 
   q  quick action, already done       -> DONE
   n  next action                      -> NEXT
-  d  delegate (who, check-in date)    -> WAIT
+  d  delegate (who from People or new, check-in date) -> WAIT
   t  tickler (defer to a date)        -> NEXT + SCHEDULED
   p  new project (`mindwtr-promote-to-project')
   a  add to an existing project (refile)
