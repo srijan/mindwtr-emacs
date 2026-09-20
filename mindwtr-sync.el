@@ -19,6 +19,7 @@
 (require 'mindwtr-shadow)
 (require 'mindwtr-clock)
 (require 'mindwtr-heading)
+(require 'mindwtr-render)
 
 (defconst mindwtr-sync--entity-keys '(:tasks :projects :sections :areas :people))
 
@@ -38,11 +39,13 @@ surface took part; STRICT is the resolved strict-absence flag for the cycle
 \(re-bound onto `mindwtr-sync--archive-strict' by `mindwtr-sync--with-cycle'
 around every stage, so stats, change detection and candidate construction
 agree on what an absent archived entity means).  CHANGED, STATS and
-LOCAL-CHANGES come from prepare's single diff pass; LOCAL-DIRTY, CLOCK-DIRTY
+LOCAL-CHANGES come from prepare's single diff pass; LOCAL-DIRTY, CLOCK-DIRTY,
+ORDER-PLAN (the `mindwtr-sync--order-plan' of project tasks the user moved)
 and FORCE-BACKFILL decide whether the HEAD short-circuit may apply.  NOW is
 the cycle's timestamp.  WIRE is the candidate as PUT, filled in by stage C."
   buffer baseline surfaces local parse-warnings archive-active strict
-  changed stats local-changes local-dirty clock-dirty force-backfill now wire)
+  changed stats local-changes local-dirty clock-dirty order-plan
+  force-backfill now wire)
 
 (defun mindwtr-sync-cycle-shadow (cycle)
   "CYCLE's Shadow (the baseline AppData)."
@@ -517,6 +520,80 @@ from LOCAL keeps whatever the server sent.  Mutates and returns MERGED."
                 (plist-get merged :tasks))))
   merged)
 
+;; --- Project task order (org sibling order -> :order) ------------------------
+;; `:order' is shadow-only and unsigned: render lays a project's tasks out by
+;; it, but the parse never reads it back, so moving a heading in org changed
+;; nothing on the wire and the next reconcile put it back.  Same shape as the
+;; clock roll-up above: derive the change from org against the shadow, force a
+;; full cycle, and stamp it onto the candidate with a rev bump.
+
+(defun mindwtr-sync--order-plan (local shadow)
+  "Return an alist (ID . ORDER) for project tasks whose org position moved.
+Tasks in LOCAL are grouped by container (section, else project; standalone
+tasks are skipped -- their org lists are per status, not one sibling
+sequence).  A group is left alone when its shadow-known ids in document order
+equal those same ids sorted the way render laid them out
+\(`mindwtr-render--sorted' over SHADOW's list) and every new task sits at the
+tail.  Otherwise every task in the group takes its document index, and the
+ids whose value actually changes are returned.  Nil when nothing moved."
+  (let ((sidx (mindwtr-shadow-index shadow :tasks))
+        (groups (make-hash-table :test 'equal))
+        plan)
+    (dolist (le (plist-get local :tasks))
+      (let ((k (or (plist-get le :sectionId) (plist-get le :projectId))))
+        (when (and k (plist-get le :id)
+                   (not (equal (plist-get le :status) "archived")))
+          (puthash k (cons le (gethash k groups)) groups))))
+    (maphash
+     (lambda (_k rles)
+       (let* ((les (reverse rles))
+              (known (make-hash-table :test 'equal))
+              doc-ids seen-new new-before-known)
+         (dolist (le les)
+           (let ((id (plist-get le :id)))
+             (cond ((gethash id sidx)
+                    (push id doc-ids) (puthash id t known)
+                    ;; A new task followed by a known one is an insertion,
+                    ;; not an append.
+                    (when seen-new (setq new-before-known t)))
+                   (t (setq seen-new t)))))
+         (setq doc-ids (nreverse doc-ids))
+         (unless (and (not new-before-known)
+                      (equal doc-ids
+                             (mapcar (lambda (se) (plist-get se :id))
+                                     (mindwtr-render--sorted
+                                      (seq-filter (lambda (se) (gethash (plist-get se :id) known))
+                                                  (plist-get shadow :tasks))))))
+           (let ((i 0))
+             (dolist (le les)
+               (let ((se (gethash (plist-get le :id) sidx)))
+                 (unless (and se (eql (plist-get se :order) i))
+                   (push (cons (plist-get le :id) i) plan)))
+               (setq i (1+ i)))))))
+     groups)
+    plan))
+
+(defun mindwtr-sync--apply-order-plan (candidate plan shadow device-id now)
+  "Stamp PLAN's (ID . ORDER) onto CANDIDATE's tasks, promoting echoes to updates.
+Writes both `:order' and its legacy alias `:orderNum', as the apps'
+reorder does.  A task echoed unchanged gets the same rev bump the clock
+reconcile applies, so the server accepts the write.  Mutates and returns
+CANDIDATE."
+  (when plan
+    (let ((sidx (mindwtr-shadow-index shadow :tasks)))
+      (dolist (te (plist-get candidate :tasks))
+        (let* ((id (plist-get te :id))
+               (o (cdr (assoc id plan))))
+          (when (and o (not (plist-get te :deletedAt)))
+            (plist-put te :order o)
+            (plist-put te :orderNum o)
+            (let ((se (gethash id sidx)))
+              (when (and se (equal (plist-get te :rev) (plist-get se :rev)))
+                (plist-put te :rev (1+ (or (plist-get se :rev) 0)))
+                (plist-put te :updatedAt now)
+                (plist-put te :revBy device-id))))))))
+  candidate)
+
 (defun mindwtr-sync--key->kind (key)
   "Map an entity-list KEY like `:tasks' to its singular kind symbol `task'.
 `:people' is irregular -- stripping a trailing `s' would yield `peopl' -- so it
@@ -925,7 +1002,9 @@ Pure CPU plus local state reads -- no network.  Returns the
                ;; A clock-only change (LOGBOOK edited) signs nothing and marks
                ;; nothing dirty, so it must force a full cycle rather than be
                ;; skipped by the HEAD-ETag noop gate (R8/KTD9).
-               (clock-dirty (mindwtr-sync--clock-dirty-p local shadow)))
+               (clock-dirty (mindwtr-sync--clock-dirty-p local shadow))
+               ;; Likewise a moved project task: :order is unsigned.
+               (order-plan (mindwtr-sync--order-plan local shadow)))
           (mindwtr-sync-cycle--make
            :buffer buffer :baseline baseline
            :surfaces surfaces :local local :parse-warnings parse-warnings
@@ -933,7 +1012,8 @@ Pure CPU plus local state reads -- no network.  Returns the
            :changed (plist-get diff :ids) :stats stats
            :local-changes (plist-get diff :changes)
            :local-dirty local-dirty
-           :clock-dirty clock-dirty :force-backfill force-backfill))))))
+           :clock-dirty clock-dirty :order-plan order-plan
+           :force-backfill force-backfill))))))
 
 (defun mindwtr-sync--check-ticks (surfaces what)
   "Signal unless every surface in SURFACES is unchanged since its post-parse tick.
@@ -990,6 +1070,9 @@ aborts with the server already updated."
               ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
               (candidate (mindwtr-sync--apply-clock-reconcile
                           candidate local shadow device now))
+              (candidate (mindwtr-sync--apply-order-plan
+                          candidate (mindwtr-sync-cycle-order-plan cycle)
+                          shadow device now))
               (wire (mindwtr-sync--strip-internal-keys candidate)))
          (mindwtr-model-validate-appdata wire)
          (setf (mindwtr-sync-cycle-wire cycle) wire)
@@ -1125,6 +1208,7 @@ travel through ERR -- nothing signals out of a sentinel."
        (if (and (not (mindwtr-sync-cycle-local-dirty cycle))
                 (not (mindwtr-sync-cycle-force-backfill cycle))
                 (not (mindwtr-sync-cycle-clock-dirty cycle))
+                (null (mindwtr-sync-cycle-order-plan cycle))
                 shadow-etag (not (string-empty-p shadow-etag)))
            (mindwtr-api-head-etag-async
             (lambda (etag err)
