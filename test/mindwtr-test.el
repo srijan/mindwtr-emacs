@@ -255,21 +255,31 @@ replacement."
 (ert-deftest mindwtr-sync-stands-down-during-org-capture ()
   "A live org-capture buffer on the synced file blocks every launch path,
 even though the base buffer is clean -- something else may have saved it
-mid-capture, and a rebuild would erase the half-typed entry."
+mid-capture, and a rebuild would erase the half-typed entry.  A capture on
+any OTHER file must not block anything."
   (require 'org-capture)
   (let* ((f (make-temp-file "mw-capture" nil ".org"))
+         (other (make-temp-file "mw-other" nil ".org"))
          (mindwtr-file f)
          (mindwtr--sync-in-progress nil)
          (mindwtr--retry-timer nil)
          (mindwtr--error-state nil)
          (called nil)
          (base (find-file-noselect f))
-         (capture (make-indirect-buffer base "CAPTURE-mw" t)))
+         (other-base (find-file-noselect other))
+         (capture (make-indirect-buffer base "CAPTURE-mw" t))
+         (other-capture (make-indirect-buffer other-base "CAPTURE-other" t)))
     (unwind-protect
         (cl-letf (((symbol-function 'mindwtr--prepare)
                    (lambda () (setq called t) base)))
           (should-not (buffer-modified-p base))
           (should-not (mindwtr--capture-in-progress-p))
+          ;; A capture on an unrelated file is none of our business.
+          (with-current-buffer other-capture (setq-local org-capture-mode t))
+          (should-not (mindwtr--capture-in-progress-p))
+          (mindwtr--sync-attempt)
+          (should called)
+          (setq called nil)
           (with-current-buffer capture (setq-local org-capture-mode t))
           (should (mindwtr--capture-in-progress-p))
           (mindwtr--sync-attempt)               ; timer/retry/auto path
@@ -279,6 +289,38 @@ mid-capture, and a rebuild would erase the half-typed entry."
           ;; capture finished: the gate lifts
           (with-current-buffer capture (setq-local org-capture-mode nil))
           (should-not (mindwtr--capture-in-progress-p)))
+      (kill-buffer other-capture)
+      (kill-buffer capture)
+      (mindwtr-test--kill-file-buffer f)
+      (mindwtr-test--kill-file-buffer other)
+      (delete-file f)
+      (delete-file other))))
+
+(ert-deftest mindwtr-retry-rearms-when-a-capture-stands-it-down ()
+  "A backoff retry that fires during a capture is deferred, not consumed.
+`mindwtr--retry-sync' clears the timer before attempting, so a gated attempt
+must re-arm it -- otherwise the retry chain ends silently -- and must not
+advance the attempt counter, since nothing was actually tried."
+  (require 'org-capture)
+  (let* ((f (make-temp-file "mw-retry" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (mindwtr--retry-attempts 2)
+         (mindwtr--error-state nil)
+         (called nil)
+         (base (find-file-noselect f))
+         (capture (make-indirect-buffer base "CAPTURE-mw" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mindwtr--prepare)
+                   (lambda () (setq called t) base)))
+          (with-current-buffer capture (setq-local org-capture-mode t))
+          (mindwtr--retry-sync)
+          (should-not called)
+          (should (timerp mindwtr--retry-timer))     ; retry still promised
+          (should (= mindwtr--retry-attempts 2))     ; not counted as a failure
+          (should-not mindwtr--error-state))
+      (when (timerp mindwtr--retry-timer) (cancel-timer mindwtr--retry-timer))
       (kill-buffer capture)
       (mindwtr-test--kill-file-buffer f)
       (delete-file f))))
