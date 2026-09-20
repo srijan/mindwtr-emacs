@@ -77,6 +77,8 @@
   "Give up retrying after this many consecutive retryable failures."
   :type 'integer :group 'mindwtr)
 
+(defvar org-capture-mode)            ; org-capture minor mode, loaded on demand
+
 (defvar mindwtr--timer nil)
 (defvar mindwtr--debounce-timer nil)
 (defvar mindwtr--retry-timer nil
@@ -282,7 +284,7 @@ old blocking semantics.  Triggers while a cycle is in flight are ignored so
 two cycles never run concurrently (`mindwtr--sync-busy-p', which also
 reclaims a wedged guard).  A config error from `mindwtr--prepare' still
 signals synchronously, before the in-flight guard is taken."
-  (unless (mindwtr--sync-busy-p)
+  (unless (or (mindwtr--sync-busy-p) (mindwtr--capture-in-progress-p))
     (let ((buf (mindwtr--prepare)))
       (setq mindwtr--sync-in-progress t
             mindwtr--sync-started-at (float-time))
@@ -320,6 +322,25 @@ in-progress edits, so an automatic sync is free to run and rebuild)."
   (or (mindwtr--file-buffer-dirty-p mindwtr-file)
       (mindwtr--file-buffer-dirty-p (mindwtr-archive-path))))
 
+(defun mindwtr--capture-in-progress-p ()
+  "Non-nil while an `org-capture' buffer is open on a synced file.
+Capture inserts its template into the target buffer immediately and the user
+edits it through an indirect buffer, so a cycle that fires meanwhile pushes
+the half-typed entry and then erases it in reconcile's rebuild.  The
+unsaved-edits gate does not cover this: anything that saves the file
+mid-capture (`auto-save-visited-mode', `super-save') makes the buffer look
+clean while the capture is still live."
+  (and (boundp 'org-capture-mode)
+       (let ((targets (delq nil (mapcar #'find-buffer-visiting
+                                        (delq nil (list mindwtr-file
+                                                        (mindwtr-archive-path)))))))
+         (and targets
+              (seq-some (lambda (b)
+                          (and (buffer-local-value 'org-capture-mode b)
+                               (memq (or (buffer-base-buffer b) b) targets)))
+                        (buffer-list))
+              t))))
+
 (defun mindwtr--auto-sync ()
   "Entry point for automatic triggers (save/focus/periodic).
 A no-op while a cycle is in progress, while a backoff retry is armed, after
@@ -341,6 +362,8 @@ it has unsaved edits, then starts a fresh attempt.  An explicit sync never
 refuses on a dirty buffer (it bypasses the unsaved-edits gate), and making
 \"save = commit point\" means a manual sync always leaves the buffer clean."
   (interactive)
+  (when (mindwtr--capture-in-progress-p)
+    (user-error "mindwtr: org-capture in progress; finish or abort it first"))
   (mindwtr--reset-backoff)
   ;; Save-then-sync.  Echo-suppressed (the cycle is about to run, so the
   ;; pre-save must not separately arm the debounce) but WITHOUT content

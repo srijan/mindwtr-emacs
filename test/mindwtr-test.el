@@ -252,6 +252,37 @@ replacement."
       (mindwtr-test--kill-file-buffer f)
       (delete-file f))))
 
+(ert-deftest mindwtr-sync-stands-down-during-org-capture ()
+  "A live org-capture buffer on the synced file blocks every launch path,
+even though the base buffer is clean -- something else may have saved it
+mid-capture, and a rebuild would erase the half-typed entry."
+  (require 'org-capture)
+  (let* ((f (make-temp-file "mw-capture" nil ".org"))
+         (mindwtr-file f)
+         (mindwtr--sync-in-progress nil)
+         (mindwtr--retry-timer nil)
+         (mindwtr--error-state nil)
+         (called nil)
+         (base (find-file-noselect f))
+         (capture (make-indirect-buffer base "CAPTURE-mw" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mindwtr--prepare)
+                   (lambda () (setq called t) base)))
+          (should-not (buffer-modified-p base))
+          (should-not (mindwtr--capture-in-progress-p))
+          (with-current-buffer capture (setq-local org-capture-mode t))
+          (should (mindwtr--capture-in-progress-p))
+          (mindwtr--sync-attempt)               ; timer/retry/auto path
+          (should-not called)
+          (should-error (mindwtr-sync) :type 'user-error)
+          (should-not called)
+          ;; capture finished: the gate lifts
+          (with-current-buffer capture (setq-local org-capture-mode nil))
+          (should-not (mindwtr--capture-in-progress-p)))
+      (kill-buffer capture)
+      (mindwtr-test--kill-file-buffer f)
+      (delete-file f))))
+
 (ert-deftest mindwtr-buffer-has-unsaved-edits-truth-table ()
   "nil when mindwtr-file unset; nil when not open; nil when open+clean; t when
 open+modified."
