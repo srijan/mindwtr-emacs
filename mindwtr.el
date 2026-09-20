@@ -211,7 +211,7 @@ not advance and sync never gives up over a stand-down."
   (setq mindwtr--retry-timer nil)
   (unless (mindwtr--sync-attempt)
     (setq mindwtr--retry-timer
-          (run-with-timer (mindwtr--backoff-delay (max 1 mindwtr--retry-attempts))
+          (run-with-timer (mindwtr--backoff-delay mindwtr--retry-attempts)
                           nil #'mindwtr--retry-sync))))
 
 (defun mindwtr--sync-busy-p ()
@@ -302,7 +302,7 @@ signals synchronously, before the in-flight guard is taken."
       (setq mindwtr--sync-in-progress t
             mindwtr--sync-started-at (float-time))
       (condition-case err
-          (progn
+          (prog1 t
             (mindwtr-sync-once-async
              buf (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
              (lambda (res cb-err)
@@ -310,10 +310,7 @@ signals synchronously, before the in-flight guard is taken."
                      mindwtr--sync-started-at nil)
                (if cb-err
                    (mindwtr--sync-handle-error cb-err)
-                 (mindwtr--sync-handle-result res))))
-            ;; Launched.  The async entry's own return value is transport
-            ;; detail, so say so explicitly.
-            t)
+                 (mindwtr--sync-handle-result res)))))
         ;; The async entry routes cycle errors through the callback and cannot
         ;; itself signal -- except a `quit' (C-g mid-launch) or a signal from
         ;; the handlers above.  Release the guard rather than wedging it, then
@@ -349,12 +346,11 @@ at unrelated text: `C-c C-c' then re-inserts a stale region (it lands under
 * Sync Failures as an untyped orphan) and `C-c C-k' DELETES whatever the
 stale region now covers.
 
-The unsaved-edits gate does not cover this.  Anything that saves the file
-mid-capture -- `auto-save-visited-mode', `super-save', `buffer-guardian'
-\(which resolves an indirect buffer to its base and saves on every window or
-buffer switch), a plain `C-x C-s' -- clears the modified flag while the
-capture is still live, and its `after-save-hook' arms the sync debounce at
-the same time.
+The unsaved-edits gate does not cover this.  Any external auto-saver that
+writes the file mid-capture (several resolve an indirect buffer to its base
+and save on every window or buffer switch), or a plain `C-x C-s', clears the
+modified flag while the capture is still live -- and the same save arms the
+sync debounce.
 
 The gate has no staleness reclaim (unlike `mindwtr--sync-busy-p'): while a
 capture buffer lives, automatic sync stands down and `mindwtr-sync' refuses.
@@ -363,11 +359,10 @@ Killing that buffer is the recovery step, and the manual refusal names it."
        (let ((targets (delq nil (mapcar #'find-buffer-visiting
                                         (delq nil (list mindwtr-file
                                                         (mindwtr-archive-path)))))))
-         (and targets
-              (seq-find (lambda (b)
-                          (and (buffer-local-value 'org-capture-mode b)
-                               (memq (or (buffer-base-buffer b) b) targets)))
-                        (buffer-list))))))
+         (seq-find (lambda (b)
+                     (and (buffer-local-value 'org-capture-mode b)
+                          (memq (or (buffer-base-buffer b) b) targets)))
+                   (buffer-list)))))
 
 (defun mindwtr--auto-sync ()
   "Entry point for automatic triggers (save/focus/periodic).
@@ -400,10 +395,9 @@ capture buffer that is abandoned or stuck -- kill the buffer the error
 names.  Killing it is the recovery step: automatic sync stands down for as
 long as that buffer lives."
   (interactive)
-  (let ((cap (mindwtr--capture-in-progress-p)))
-    (when cap
-      (user-error "mindwtr: capture in progress (%s); finish, abort, or kill it first"
-                  (buffer-name cap))))
+  (when-let* ((cap (mindwtr--capture-in-progress-p)))
+    (user-error "mindwtr: capture in progress (%s); finish, abort, or kill it first"
+                (buffer-name cap)))
   (mindwtr--reset-backoff)
   ;; Save-then-sync.  Echo-suppressed (the cycle is about to run, so the
   ;; pre-save must not separately arm the debounce) but WITHOUT content
