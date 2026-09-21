@@ -590,6 +590,672 @@ with an ellipsis."
         (should (= (string-width pfx) 10))
         (should (string-suffix-p mindwtr-agenda-prefix-ellipsis pfx))))))
 
+;;; U6 -- sequential projects: blocked steps ------------------------------------
+
+(defmacro mindwtr-agenda-test--with-org (text &rest body)
+  "Put TEXT in an org buffer with the Mindwtr TODO keywords registered, run BODY.
+The appdata fixture renders only canonical layouts; these cases are about what
+a HAND-EDITED buffer does, so they are written as raw org."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (let ((org-todo-keywords mindwtr-model-todo-keywords)
+           (org-inhibit-startup t))
+       (insert (mindwtr-model-todo-keyword-line) "\n" ,text)
+       (org-mode))
+     (goto-char (point-min))
+     ,@body))
+
+(defun mindwtr-agenda-test--blocked-at (title)
+  "Move to the task heading named TITLE and return its blocked-step result."
+  (goto-char (point-min))
+  (re-search-forward (concat "^\\*+ [A-Z]+ " (regexp-quote title) "$"))
+  (mindwtr-agenda--blocked-step-p))
+
+(defconst mindwtr-agenda-test--seq-appdata
+  '(:areas nil
+    :projects ((:id "p1" :title "Seq" :status "active" :order 1
+                :isSequential t)
+               (:id "p2" :title "Par" :status "active" :order 2))
+    :sections nil
+    :tasks ((:id "t1" :title "Step one" :status "next" :projectId "p1" :order 1)
+            (:id "t2" :title "Step two" :status "next" :projectId "p1" :order 2)
+            (:id "u1" :title "Free one" :status "next" :projectId "p2" :order 1)
+            (:id "u2" :title "Free two" :status "next" :projectId "p2" :order 2))
+    :settings nil)
+  "Two projects with two NEXT steps each; only the first is sequential.")
+
+(ert-deftest mindwtr-agenda-sequential-first-step-holds-the-slot ()
+  "Step 1 of a sequential project is actionable; step 2 is blocked."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--seq-appdata
+    (should-not (mindwtr-agenda-test--blocked-at "Step one"))
+    (should (mindwtr-agenda-test--blocked-at "Step two"))))
+
+(ert-deftest mindwtr-agenda-non-sequential-project-blocks-nothing ()
+  "A project without MW_SEQUENTIAL keeps every step actionable."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--seq-appdata
+    (should-not (mindwtr-agenda-test--blocked-at "Free one"))
+    (should-not (mindwtr-agenda-test--blocked-at "Free two"))))
+
+(ert-deftest mindwtr-agenda-standalone-task-blocks-nothing ()
+  "A task with no owning project is never a blocked step."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "s1" :title "Loose end" :status "next"))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--blocked-at "Loose end"))))
+
+(ert-deftest mindwtr-agenda-sequential-done-step-passes-the-slot-on ()
+  "A DONE step is complete, so the slot moves to the next incomplete one."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+        :sections nil
+        :tasks ((:id "t1" :title "Step one" :status "done" :projectId "p1" :order 1)
+                (:id "t2" :title "Step two" :status "next" :projectId "p1" :order 2)
+                (:id "t3" :title "Step three" :status "next" :projectId "p1" :order 3))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--blocked-at "Step two"))
+    (should (mindwtr-agenda-test--blocked-at "Step three"))))
+
+(ert-deftest mindwtr-agenda-sequential-waiting-step-still-holds-the-slot ()
+  "WAIT is incomplete, so it holds the slot and blocks the steps behind it."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+        :sections nil
+        :tasks ((:id "t1" :title "Step one" :status "waiting" :projectId "p1" :order 1)
+                (:id "t2" :title "Step two" :status "next" :projectId "p1" :order 2))
+        :settings nil)
+    (should (mindwtr-agenda-test--blocked-at "Step two"))))
+
+(ert-deftest mindwtr-agenda-sequential-parked-step-does-not-hold-the-slot ()
+  "SOMEDAY/REF/INBOX steps are not committed actions, so they never freeze the
+steps behind them -- only NEXT and WAIT are in the sequence."
+  (dolist (parked '("someday" "reference" "inbox"))
+    (mindwtr-agenda-test--with-appdata
+        `(:areas nil
+          :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+          :sections nil
+          :tasks ((:id "t1" :title "Parked step" :status ,parked
+                   :projectId "p1" :order 1)
+                  (:id "t2" :title "Real step" :status "next"
+                   :projectId "p1" :order 2))
+          :settings nil)
+      (should-not (mindwtr-agenda-test--blocked-at "Real step")))))
+
+(ert-deftest mindwtr-agenda-sequential-no-section-tasks-sort-after-sections ()
+  "Upstream's walk is sections first, then No Section -- not document-naive
+\"tasks before sections\".  The section's step holds the slot even though the
+section-less task carries a lower `:order'."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+        :sections ((:id "s1" :title "Phase one" :projectId "p1" :order 5))
+        :tasks ((:id "t1" :title "Sectioned step" :status "next"
+                 :projectId "p1" :sectionId "s1" :order 9)
+                (:id "t2" :title "Loose step" :status "next"
+                 :projectId "p1" :order 1))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--blocked-at "Sectioned step"))
+    (should (mindwtr-agenda-test--blocked-at "Loose step"))))
+
+(ert-deftest mindwtr-agenda-sequential-due-step-takes-the-slot ()
+  "A later step that is due today takes the project's slot from step 1."
+  (let ((today (format-time-string "%Y-%m-%d")))
+    (mindwtr-agenda-test--with-appdata
+        `(:areas nil
+          :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+          :sections nil
+          :tasks ((:id "t1" :title "Step one" :status "next"
+                   :projectId "p1" :order 1)
+                  (:id "t2" :title "Step two" :status "next"
+                   :projectId "p1" :order 2 :dueDate ,today))
+          :settings nil)
+      (should (mindwtr-agenda-test--blocked-at "Step one"))
+      (should-not (mindwtr-agenda-test--blocked-at "Step two")))))
+
+(ert-deftest mindwtr-agenda-sequential-review-due-step-takes-the-slot ()
+  "MW_REVIEW_AT in the past also pulls the slot to a later step."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+        :sections nil
+        :tasks ((:id "t1" :title "Step one" :status "next"
+                 :projectId "p1" :order 1)
+                (:id "t2" :title "Step two" :status "next"
+                 :projectId "p1" :order 2 :reviewAt "2020-01-01T00:00:00.000Z"))
+        :settings nil)
+    (should (mindwtr-agenda-test--blocked-at "Step one"))
+    (should-not (mindwtr-agenda-test--blocked-at "Step two"))))
+
+(ert-deftest mindwtr-agenda-sequential-future-due-step-leaves-the-slot ()
+  "A later step due in the future does not take the slot."
+  (let ((later (format-time-string "%Y-%m-%d" (time-add nil (* 30 86400)))))
+    (mindwtr-agenda-test--with-appdata
+        `(:areas nil
+          :projects ((:id "p1" :title "Seq" :status "active" :isSequential t))
+          :sections nil
+          :tasks ((:id "t1" :title "Step one" :status "next"
+                   :projectId "p1" :order 1)
+                  (:id "t2" :title "Step two" :status "next"
+                   :projectId "p1" :order 2 :dueDate ,later))
+          :settings nil)
+      (should-not (mindwtr-agenda-test--blocked-at "Step one"))
+      (should (mindwtr-agenda-test--blocked-at "Step two")))))
+
+(ert-deftest mindwtr-agenda-sequential-untyped-step-still-holds-the-slot ()
+  "A hand-typed action under a project has no `:MW_TYPE:' until the next sync
+stamps one.  It must still count as a step -- and with it the project's only
+step, nothing may be blocked."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Hand typed action
+** NEXT Typed action
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+"
+    ;; A second, competing step: without it the assertion would also pass
+    ;; through the empty-slot fail-open branch and prove nothing.
+    (should-not (mindwtr-agenda-test--blocked-at "Hand typed action"))
+    (should (mindwtr-agenda-test--blocked-at "Typed action"))))
+
+(ert-deftest mindwtr-agenda-sequential-finished-step-cannot-hold-the-slot ()
+  "DONE/ARCH/REF are outside the eligibility pool upstream filters on, so a
+finished step carrying a stale MW_REVIEW_AT or MW_FOCUS_TODAY must not take the
+slot -- doing so froze the project permanently."
+  (dolist (kw '("DONE" "ARCH" "REF"))
+    (mindwtr-agenda-test--with-org (format "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** %s Finished
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:MW_REVIEW_AT: 2020-01-01T00:00:00.000Z
+:MW_FOCUS_TODAY: t
+:END:
+** NEXT Real work
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+" kw)
+      (should-not (mindwtr-agenda-test--blocked-at "Real work")))))
+
+(ert-deftest mindwtr-agenda-sequential-all-day-deadline-is-end-of-day ()
+  "An all-day deadline is less urgent than a timed one on the same day, not
+more: org parses it as midnight, upstream reads it as 23:59:59."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT All day
+DEADLINE: <2020-01-01 Wed>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT At nine
+DEADLINE: <2020-01-01 Wed 09:00>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (should (mindwtr-agenda-test--blocked-at "All day"))
+    (should-not (mindwtr-agenda-test--blocked-at "At nine"))))
+
+(ert-deftest mindwtr-agenda-sequential-nested-project-owns-its-own-sequence ()
+  "A project demoted under a sequential one keeps its own chain: its steps must
+not take the outer project's slot, and the outer project's own step keeps it."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Outer
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** ACTIVE Inner
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p2
+:END:
+*** NEXT Inner work
+DEADLINE: <2020-01-01 Wed>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Outer work
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (should-not (mindwtr-agenda-test--blocked-at "Outer work"))))
+
+(ert-deftest mindwtr-agenda-sequential-impossible-review-date-is-ignored ()
+  "`iso8601-parse' normalizes Feb 30 into March rather than signalling, so a
+hand-typo must be rejected explicitly or it becomes a real overdue review."
+  (dolist (bad '("2026-02-30T00:00:00.000Z" "2026-13-01T00:00:00.000Z"))
+    (mindwtr-agenda-test--with-org (format "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Step one
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:MW_REVIEW_AT: %s
+:END:
+" bad)
+      (should-not (mindwtr-agenda-test--blocked-at "Step one")))))
+
+(ert-deftest mindwtr-agenda-sequential-keyword-titled-section-is-not-a-step ()
+  "A section titled \"WAIT Vendor\" renders as `*** WAIT Vendor', which Org reads
+as a WAIT heading.  The keyword alone cannot decide what is a step: the section
+must not take the slot from the task inside it."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** WAIT Vendor
+:PROPERTIES:
+:MW_TYPE:  section
+:MW_ID:    s1
+:END:
+*** NEXT Real step
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+"
+    (should-not (mindwtr-agenda-test--blocked-at "Real step"))))
+
+(defmacro mindwtr-agenda-test--in-timezone (tz &rest body)
+  "Run BODY with the process timezone actually set to TZ, restoring it after.
+`process-environment' must NOT be let-bound for this: Emacs reads TZ through
+`setenv', so a binding leaves the already-initialized zone in place and a
+timezone test silently exercises whatever zone the test runner started in."
+  (declare (indent 1))
+  `(let ((saved (getenv "TZ")))
+     (unwind-protect (progn (setenv "TZ" ,tz) ,@body)
+       (setenv "TZ" saved))))
+
+(ert-deftest mindwtr-agenda-all-day-deadline-ranks-at-end-of-day-across-dst ()
+  "End of day must resolve in local time.  Carrying midnight's own UTC offset
+lands 00:59:59 the NEXT day on a spring-forward date."
+  (mindwtr-agenda-test--in-timezone "America/Los_Angeles"
+    (mindwtr-agenda-test--with-org "\
+* NEXT Spring forward
+DEADLINE: <2026-03-08 Sun>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+"
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ NEXT Spring forward$")
+      (should (equal "2026-03-08 23:59:59"
+                     (format-time-string
+                      "%Y-%m-%d %H:%M:%S"
+                      (mindwtr-agenda--deadline-rank-time
+                       (org-get-deadline-time (point)))))))))
+
+(ert-deftest mindwtr-agenda-midnight-dst-jump-keeps-the-deadline-due-today ()
+  "Where a day has no 23:59 at all (America/Nuuk jumps at local midnight) the
+end-of-day instant lands on the NEXT day.  Due-today is therefore decided on
+the RAW date, or the deadline reads as future for the whole of its own day."
+  (mindwtr-agenda-test--in-timezone "America/Nuuk"
+    (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Undated
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Due that day
+DEADLINE: <2026-03-28 Sat>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ NEXT Due that day$")
+      ;; TODAY is the deadline's own day: scored on that date it must rank 1
+      ;; (due), not 2 (undated), or the undated step keeps the slot.
+      (let ((today (time-to-days (org-get-deadline-time (point)))))
+        (should (= 1 (car (mindwtr-agenda--slot-score (float-time) today))))))))
+
+(ert-deftest mindwtr-agenda-review-rejects-an-impossible-clock-time ()
+  "Validating only the calendar date let hour 25 through, and `encode-time'
+normalized it into a real -- overdue -- review that took the slot.  Each later
+review round found the next leak of the same shape, which is why the shape is
+now an allow-list (`mindwtr-agenda--iso-re') rather than a field-by-field test:
+an out-of-range offset minute, a fraction on the end-of-day form, a fractional
+hour that `iso8601-parse' silently reads as the whole hour."
+  (dolist (bad '("2020-03-01T25:00:00Z" "2020-03-01T24:01:00Z" "2020-03-01T23:61:00Z"
+                 "2020-03-01T00:00:00+01:99" "2020-03-01T00:00:00+19:00"
+                 "2020-03-01T24:00:00.5Z" "2020-03-01T09.5Z"
+                 "2020-W54-1" "2020-W05-1" "2020-060"))
+    (mindwtr-agenda-test--with-org (format "\
+* SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:MW_REVIEW_AT: %s
+:END:
+" bad)
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ SOMEDAY Parked$")
+      (should-not (mindwtr-agenda--review-time)))))
+
+(ert-deftest mindwtr-agenda-review-accepts-what-the-server-writes ()
+  "The allow-list must not have narrowed past the forms actually in play: the
+server's own `YYYY-MM-DDTHH:MM:SS.mmmZ', a bare date, and the offset and
+minute-precision forms a human plausibly hand-types."
+  (dolist (good '("2020-03-01T09:15:00.000Z" "2020-03-01" "2020-03-01T09:15Z"
+                  "2020-03-01T22:00:00-05:00" "2020-03-01T09:15:00+05:30"
+                  "2020-03-01T24:00:00Z"))
+    (mindwtr-agenda-test--with-org (format "\
+* SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:MW_REVIEW_AT: %s
+:END:
+" good)
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ SOMEDAY Parked$")
+      (should (mindwtr-agenda--review-time)))))
+
+(ert-deftest mindwtr-agenda-review-accepts-reduced-precision ()
+  "A month- or year-only review date is valid ISO 8601 and resolves to the
+first instant of that period; rejecting it silently dropped the review."
+  (dolist (case '(("2026-02" . "2026-02-01") ("2026" . "2026-01-01")))
+    (mindwtr-agenda-test--with-org (format "\
+* SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:MW_REVIEW_AT: %s
+:END:
+" (car case))
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ SOMEDAY Parked$")
+      (should (equal (cdr case)
+                     (format-time-string "%Y-%m-%d" (mindwtr-agenda--review-time)))))))
+
+(ert-deftest mindwtr-agenda-review-accepts-end-of-day-iso-form ()
+  "`T24:00:00' is a valid ISO 8601 end-of-day and normalizes to 00:00 the next
+day.  Validating the whole timestamp rejected it; only the DATE is checked."
+  (mindwtr-agenda-test--with-org "\
+* SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:MW_REVIEW_AT: 2020-03-01T24:00:00Z
+:END:
+"
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ SOMEDAY Parked$")
+    (should (equal "2020-03-02"
+                   (format-time-string "%Y-%m-%d" (mindwtr-agenda--review-time) t)))))
+
+(ert-deftest mindwtr-agenda-sequential-blocking-survives-a-narrowed-buffer ()
+  "An agenda restriction narrows the source buffer before the skip function
+runs.  The project ancestor must still be found, or every step inside a
+restriction reads as standalone and a restricted view shows what a full one
+hides."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT First
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** Phase
+:PROPERTIES:
+:MW_TYPE:  section
+:MW_ID:    s1
+:END:
+*** NEXT Second
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ Phase$")
+    (org-narrow-to-subtree)
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ NEXT Second$")
+    (should (mindwtr-agenda--blocked-step-p))))
+
+(ert-deftest mindwtr-agenda-sequential-empty-slot-fails-open ()
+  "A sequential project the walk finds no candidate in blocks nothing.
+Failing closed hid every action of the project with no way to clear it."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+"
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ SOMEDAY Parked$")
+    (should-not (mindwtr-agenda--blocked-step-p))))
+
+(ert-deftest mindwtr-agenda-skip-does-not-swallow-a-nested-slot-holder ()
+  "Skipping a blocked step must not skip past a step nested under it -- that
+step is its own candidate and here it is the one holding the slot."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Parent step
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+*** NEXT Child step
+DEADLINE: <2020-01-01 Wed>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (let ((child (progn (goto-char (point-min))
+                        (re-search-forward "^\\*+ NEXT Child step$")
+                        (line-beginning-position))))
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ NEXT Parent step$")
+      (should (mindwtr-agenda--blocked-step-p))
+      (should (<= (mindwtr-agenda--skip-blocked-step) child)))))
+
+(ert-deftest mindwtr-agenda-sequential-waiting-deadline-does-not-take-the-slot ()
+  "A WAIT step's deadline earns nothing: it is not actionable, so letting it
+outrank an earlier NEXT step would hide real work.  It holds by order alone."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Step one
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** WAIT Step two
+DEADLINE: <2020-01-01 Wed>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (should-not (mindwtr-agenda-test--blocked-at "Step one"))
+    (should (mindwtr-agenda-test--blocked-at "Step two"))))
+
+(ert-deftest mindwtr-agenda-sequential-most-urgent-due-step-takes-the-slot ()
+  "Between two overdue steps the slot goes to the MORE overdue one, not the
+earlier one in the buffer -- upstream scores by time, order only breaks ties."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Due yesterday
+DEADLINE: <2020-06-02 Tue>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Due last week
+DEADLINE: <2020-01-01 Wed>
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:END:
+"
+    (should (mindwtr-agenda-test--blocked-at "Due yesterday"))
+    (should-not (mindwtr-agenda-test--blocked-at "Due last week"))))
+
+(ert-deftest mindwtr-agenda-sequential-review-later-today-waits-for-its-instant ()
+  "MW_REVIEW_AT is compared as an INSTANT, not a day: a review due at 23:59
+must not pull the slot this morning."
+  (let ((soon (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                  (time-add nil 3600) t))
+        (past (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                  (time-add nil -3600) t)))
+    (mindwtr-agenda-test--with-org (format "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Step one
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Review soon
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:MW_REVIEW_AT: %s
+:END:
+" soon)
+      (should-not (mindwtr-agenda-test--blocked-at "Step one"))
+      (should (mindwtr-agenda-test--blocked-at "Review soon")))
+    (mindwtr-agenda-test--with-org (format "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Step one
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Review passed
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:MW_REVIEW_AT: %s
+:END:
+" past)
+      (should (mindwtr-agenda-test--blocked-at "Step one"))
+      (should-not (mindwtr-agenda-test--blocked-at "Review passed")))))
+
+(ert-deftest mindwtr-agenda-sequential-focused-step-takes-the-slot ()
+  "A step the user put in Today's Focus outranks everything (upstream rank 0),
+so the steps behind it stay blocked."
+  (mindwtr-agenda-test--with-org "\
+* ACTIVE Seq
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:MW_SEQUENTIAL: t
+:END:
+** NEXT Step one
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+** NEXT Step two
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t2
+:MW_FOCUS_TODAY: t
+:END:
+"
+    (should (mindwtr-agenda-test--blocked-at "Step one"))
+    (should-not (mindwtr-agenda-test--blocked-at "Step two"))))
+
+(ert-deftest mindwtr-agenda-skip-function-returns-entry-end-or-nil ()
+  "The skip function keeps the slot holder (nil) and skips past a blocked step."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--seq-appdata
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ NEXT Step one$")
+    (should-not (mindwtr-agenda--skip-blocked-step))
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ NEXT Step two$")
+    (let ((end (mindwtr-agenda--skip-blocked-step)))
+      (should (integerp end))
+      (should (> end (point))))))
+
 ;;; U5 -- setup / keybindings ---------------------------------------------------
 
 (defmacro mindwtr-agenda-test--with-sandbox-global-map (&rest body)
