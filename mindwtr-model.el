@@ -252,7 +252,7 @@ a blank one is a payload it will reject, never a value to send."
                 :suppressMindwtrReminders :repeatReminderMinutes
                 :projectId :sectionId :viewSectionIds :areaId :isFocusedToday
                 :reviewAt
-                :completedAt :statusBeforeProjectArchive
+                :completedAt :cancelledAt :statusBeforeProjectArchive
                 :completedAtBeforeProjectArchive
                 :isFocusedTodayBeforeProjectArchive :projectArchivedAt
                 :order :orderNum :boardOrder :focusOrder
@@ -261,7 +261,7 @@ a blank one is a payload it will reject, never a value to send."
     (project . (:id :title :status :color :order :tagIds :isSequential
                 :sequentialScope :taskSortBy :isFocused :supportNotes
                 :attachments :startDate :dueDate :reviewAt :areaId :areaTitle
-                :rev :revBy
+                :cancelledAt :rev :revBy
                 :createdAt :updatedAt :deletedAt :purgedAt))
     (section . (:id :projectId :title :description :order :isCollapsed
                 :rev :revBy :createdAt :updatedAt :deletedAt
