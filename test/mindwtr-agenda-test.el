@@ -1384,6 +1384,27 @@ reachable through `mindwtr-projects'."
     (should (string-match-p "ChaseLive" text))
     (should-not (string-match-p "ChaseParked" text))))
 
+(ert-deftest mindwtr-agenda-engage-waiting-keeps-an-active-sequential-delegation ()
+  "Behavioral, and the case where the two Engage skip rules come closest to
+overlapping: a WAIT step inside an ACTIVE sequential project is listed under
+Waiting For even while the sequential rule blocks it in Next Actions.  The
+parked rule keys on project STATUS (the project is active, so nothing is
+parked) and the sequential rule is bound on the Next Actions block alone.
+Upstream agrees -- its Waiting list filters on project status, not on the
+chain."
+  (let ((text (mindwtr-agenda-test--engage-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Seq" :status "active" :order 1
+                             :isSequential t))
+                 :sections nil
+                 :tasks ((:id "t1" :title "SeqStepOne" :status "next"
+                          :projectId "p1" :order 1)
+                         (:id "t2" :title "SeqDelegated" :status "waiting"
+                          :projectId "p1" :order 2))
+                 :settings nil))))
+    (should (string-match-p "Waiting For\n *Seq +WAIT SeqDelegated" text))
+    (should (string-match-p "SeqStepOne" text))))
+
 (ert-deftest mindwtr-agenda-engage-calendar-drops-a-parked-project-date ()
   "Behavioral: the parked-project rule reaches the CALENDAR block too, not just
 the tags-todo ones -- a view-wide skip function covers every block.  Upstream

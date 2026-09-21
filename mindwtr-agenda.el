@@ -458,6 +458,19 @@ Upgrade path: render it as a drawer property, or read it from the shadow."
 ;; So a parked project's task is NOT upstream's "deferred" -- that word is
 ;; taken by the tickler rule -- and this filter is deliberately not named for
 ;; it.
+;;
+;; The three are listed together but they are NOT scoped alike, and the
+;; difference is deliberate.  `deferred' and `sequential' are bound on the Next
+;; Actions BLOCK: Today's Focus is an explicit user pick and must not be
+;; filtered by either.  The parked rule is VIEW-WIDE, because upstream applies
+;; it as base visibility for every list, Focus and Inbox included -- a project
+;; the user filed under Someday is parked no matter which list is asking.  That
+;; is why only this one rides `org-agenda-skip-function-global'.
+;;
+;; One consequence worth knowing: the sequential rule never reaches Waiting For,
+;; so a WAIT step inside an ACTIVE sequential project is listed there even while
+;; it is blocked in Next Actions.  That matches upstream, whose Waiting list
+;; filters on project STATUS and not on the chain.
 
 (defun mindwtr-agenda--parked-project-p ()
   "Non-nil when the task at point belongs to a project the user has parked.
