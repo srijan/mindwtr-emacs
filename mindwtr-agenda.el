@@ -439,13 +439,51 @@ Upgrade path: render it as a drawer property, or read it from the shadow."
              (and slot
                   (not (eq slot (save-excursion (org-back-to-heading t) (point))))))))))
 
-(defun mindwtr-agenda--skip-blocked-step ()
-  "`org-agenda-skip-function' dropping blocked steps of sequential projects.
+
+;;; Deferred projects: the parked-project filter -------------------------------
+
+(defun mindwtr-agenda--deferred-project-p ()
+  "Non-nil when the task at point belongs to a project the user has parked.
+Upstream `isTaskInActiveProject' (core `project-utils.ts'), which every list
+the apps build passes through -- `isTaskVisibleInArea' calls it \"base
+visibility for a task in any list\", and the Inbox variant keeps it too.  A
+project is actionable only while it is ACTIVE, or while it carries the
+server's `project.isFocused' pin (`:MW_FOCUSED: t'), which is how the apps say
+\"surface this parked project anyway\".  SOMEDAY and WAIT projects are parked:
+filing a project under Someday is how the user says its steps are not for now,
+and a NEXT step left inside one kept nagging from the Engage view.
+
+Nil for a standalone task, and nil on a project heading itself (self does not
+count), so a SOMEDAY project still lists in the Projects view and keeps its own
+dates on the calendar.  The NEAREST project ancestor decides, matching
+upstream's single `task.projectId': an active project demoted under a parked
+one keeps its own steps actionable.
+
+Fails OPEN on a hand-typed project heading that carries no `:MW_TYPE:' drawer
+yet -- the ancestry lookup cannot see it, so its tasks stay visible rather than
+vanishing until the next sync stamps the drawer."
+  (let ((ppos (mindwtr-heading-ancestor-pos 'project)))
+    (and ppos
+         (org-with-point-at ppos
+           (and (not (equal (org-get-todo-state) "ACTIVE"))
+                (not (equal "t" (mindwtr-heading-prop "MW_FOCUSED"))))))))
+
+(defun mindwtr-agenda--skip-deferred-project ()
+  "`org-agenda-skip-function' dropping tasks owned by a parked project.
 Returns the end of THIS ENTRY (org's signal to skip it) or nil to keep it.
-Deliberately not the end of the subtree: a step nested under another step is
-its own candidate and may be the very one holding the slot, so skipping the
-parent must not skip past it."
-  (when (mindwtr-agenda--blocked-step-p)
+Deliberately not the end of the subtree: the Engage blocks match individual
+tasks, and a subtree jump would swallow sibling matches nested under the
+skipped one."
+  (when (mindwtr-agenda--deferred-project-p)
+    (org-entry-end-position)))
+
+(defun mindwtr-agenda--skip-unavailable ()
+  "`org-agenda-skip-function' for Next Actions: parked project OR blocked step.
+A block-level `org-agenda-skip-function' REPLACES the view-wide one rather
+than composing with it, so this re-applies
+`mindwtr-agenda--deferred-project-p' on top of the sequential rule."
+  (when (or (mindwtr-agenda--deferred-project-p)
+            (mindwtr-agenda--blocked-step-p))
     (org-entry-end-position)))
 
 ;;; Engage view ----------------------------------------------------------------
@@ -469,10 +507,16 @@ tags-todo search by `org-agenda-tags-todo-honor-ignore-options').  Today's and
 overdue scheduled tasks stay; deadlines are not ignored.
 
 It also drops blocked steps of sequential projects
-(`mindwtr-agenda--skip-blocked-step'): such a project grants one slot at a
+(`mindwtr-agenda--skip-unavailable'): such a project grants one slot at a
 time, so listing steps 2..N here made the desk disagree with the apps about
-what is actionable.  Today's Focus is deliberately NOT filtered -- it is an
-explicit user pick.
+what is actionable.  Today's Focus is deliberately NOT filtered by that rule
+-- it is an explicit user pick.
+
+EVERY block, the calendar included, drops tasks owned by a project the user has
+parked (`mindwtr-agenda--skip-deferred-project'), via the view-wide settings
+slot rather than five per-block bindings.  Upstream applies that rule as base
+visibility for any list, Focus and Inbox included, so it is view-wide here too:
+filing a project under Someday is how the user says its steps are not for now.
 
 The Waiting For block is scoped `+MW_TYPE=\"task\"': a project in the waiting
 state shares the WAIT keyword (`mindwtr-model--project-status-keywords'), but a
@@ -518,15 +562,18 @@ information is preserved."
                    (org-agenda-todo-ignore-scheduled 'future)
                    ;; A later step of a sequential project is blocked until the
                    ;; steps before it are done -- the apps hide it, so the desk
-                   ;; must too (see `mindwtr-agenda--skip-blocked-step').
+                   ;; must too.  This binding REPLACES the view-wide skip
+                   ;; function, so it re-applies the parked-project rule too
+                   ;; (see `mindwtr-agenda--skip-unavailable').
                    (org-agenda-skip-function
-                    'mindwtr-agenda--skip-blocked-step)))
+                    'mindwtr-agenda--skip-unavailable)))
        (tags-todo "TODO=\"WAIT\"+MW_TYPE=\"task\""
                   ((org-agenda-overriding-header "Waiting For")
                    (org-agenda-prefix-format ',pf)))
        (tags-todo "TODO=\"INBOX\""
                   ((org-agenda-overriding-header "Inbox")
-                   (org-agenda-prefix-format ',pf)))))))
+                   (org-agenda-prefix-format ',pf))))
+      ((org-agenda-skip-function 'mindwtr-agenda--skip-deferred-project)))))
 
 ;;;###autoload
 (defun mindwtr-engage ()

@@ -1116,7 +1116,7 @@ DEADLINE: <2020-01-01 Wed>
       (goto-char (point-min))
       (re-search-forward "^\\*+ NEXT Parent step$")
       (should (mindwtr-agenda--blocked-step-p))
-      (should (<= (mindwtr-agenda--skip-blocked-step) child)))))
+      (should (<= (mindwtr-agenda--skip-unavailable) child)))))
 
 (ert-deftest mindwtr-agenda-sequential-waiting-deadline-does-not-take-the-slot ()
   "A WAIT step's deadline earns nothing: it is not actionable, so letting it
@@ -1249,12 +1249,124 @@ so the steps behind it stay blocked."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--seq-appdata
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Step one$")
-    (should-not (mindwtr-agenda--skip-blocked-step))
+    (should-not (mindwtr-agenda--skip-unavailable))
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Step two$")
-    (let ((end (mindwtr-agenda--skip-blocked-step)))
+    (let ((end (mindwtr-agenda--skip-unavailable)))
       (should (integerp end))
       (should (> end (point))))))
+
+;;; U7 -- parked projects: the deferred-project filter --------------------------
+
+(defun mindwtr-agenda-test--deferred-at (title)
+  "Move to the task heading named TITLE and return its deferred-project result."
+  (goto-char (point-min))
+  (re-search-forward (concat "^\\*+ [A-Z]+ " (regexp-quote title) "$"))
+  (mindwtr-agenda--deferred-project-p))
+
+(defconst mindwtr-agenda-test--parked-appdata
+  '(:areas nil
+    :projects ((:id "p1" :title "Parked" :status "someday" :order 1)
+               (:id "p2" :title "Live" :status "active" :order 2)
+               (:id "p3" :title "Pinned" :status "someday" :order 3 :isFocused t)
+               (:id "p4" :title "Blocked" :status "waiting" :order 4))
+    :sections nil
+    :tasks ((:id "t1" :title "Later step" :status "next" :projectId "p1")
+            (:id "t2" :title "Now step" :status "next" :projectId "p2")
+            (:id "t3" :title "Pinned step" :status "next" :projectId "p3")
+            (:id "t4" :title "Held step" :status "next" :projectId "p4"))
+    :settings nil)
+  "One NEXT step under each project status: someday, active, someday+focused,
+waiting.")
+
+(ert-deftest mindwtr-agenda-someday-project-defers-its-steps ()
+  "A NEXT step inside a project filed under Someday is not available."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
+    (should (mindwtr-agenda-test--deferred-at "Later step"))))
+
+(ert-deftest mindwtr-agenda-active-project-steps-stay-available ()
+  "A step of an ACTIVE project is never deferred by the project rule."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
+    (should-not (mindwtr-agenda-test--deferred-at "Now step"))))
+
+(ert-deftest mindwtr-agenda-focused-parked-project-keeps-its-steps ()
+  "MW_FOCUSED (the server's `project.isFocused' pin) un-parks a someday project."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
+    (should-not (mindwtr-agenda-test--deferred-at "Pinned step"))))
+
+(ert-deftest mindwtr-agenda-waiting-project-defers-its-steps ()
+  "A waiting project is parked too -- only ACTIVE (or focused) is available."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
+    (should (mindwtr-agenda-test--deferred-at "Held step"))))
+
+(ert-deftest mindwtr-agenda-standalone-task-is-never-deferred ()
+  "A task with no owning project has no project status to be parked by."
+  (mindwtr-agenda-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "s1" :title "Loose end" :status "next"))
+        :settings nil)
+    (should-not (mindwtr-agenda-test--deferred-at "Loose end"))))
+
+(ert-deftest mindwtr-agenda-nearest-project-decides-deferral ()
+  "An ACTIVE project demoted under a parked one keeps its own steps available,
+matching upstream's single `task.projectId' lookup."
+  (mindwtr-agenda-test--with-org
+      "* SOMEDAY Parked
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p1
+:END:
+** ACTIVE Live
+:PROPERTIES:
+:MW_TYPE:  project
+:MW_ID:    p2
+:END:
+*** NEXT Inner step
+:PROPERTIES:
+:MW_TYPE:  task
+:MW_ID:    t1
+:END:
+"
+    (should-not (mindwtr-agenda-test--deferred-at "Inner step"))))
+
+(ert-deftest mindwtr-agenda-untyped-project-heading-fails-open ()
+  "A hand-typed project with no MW_TYPE drawer yet must not hide its tasks."
+  (mindwtr-agenda-test--with-org
+      "* SOMEDAY Parked
+** NEXT Typed by hand
+"
+    (should-not (mindwtr-agenda-test--deferred-at "Typed by hand"))))
+
+(ert-deftest mindwtr-agenda-skip-unavailable-covers-both-rules ()
+  "Next Actions\=' skip function drops a parked project's step as well as a
+blocked one: a block-level binding replaces the view-wide skip function, so it
+has to re-apply that rule itself."
+  (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ NEXT Now step$")
+    (should-not (mindwtr-agenda--skip-unavailable))
+    (goto-char (point-min))
+    (re-search-forward "^\\*+ NEXT Later step$")
+    (let ((end (mindwtr-agenda--skip-unavailable)))
+      (should (integerp end))
+      (should (> end (point))))))
+
+(ert-deftest mindwtr-agenda-engage-spec-defers-parked-projects-view-wide ()
+  "The parked-project skip is a view-wide setting, so it reaches the calendar,
+Focus, Waiting and Inbox blocks -- not just Next Actions."
+  (let ((gprops (nth 3 (mindwtr-agenda--engage-spec))))
+    (should (equal (cadr (assq 'org-agenda-skip-function gprops))
+                   ''mindwtr-agenda--skip-deferred-project))))
+
+(ert-deftest mindwtr-agenda-engage-hides-parked-project-next-actions ()
+  "Behavioral: a NEXT step of a someday project is absent from the whole Engage
+view, while the active project's step and the pinned project's step remain."
+  (let ((text (mindwtr-agenda-test--engage-text
+               mindwtr-agenda-test--parked-appdata)))
+    (should (string-match-p "Now step" text))
+    (should (string-match-p "Pinned step" text))
+    (should-not (string-match-p "Later step" text))
+    (should-not (string-match-p "Held step" text))))
 
 ;;; U5 -- setup / keybindings ---------------------------------------------------
 
