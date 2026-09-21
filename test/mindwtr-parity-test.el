@@ -18,7 +18,10 @@
       (let ((fx (mindwtr-parity-fixture entity dir)))
         (should (file-readable-p (plist-get fx :file)))
         (should (plist-get fx :wire))
-        (should (memq (plist-get fx :version) '(1 2)))))))
+        ;; Any integer: the fixture's schemaVersion is reported, never gated
+        ;; on (see `mindwtr-parity-fixture'), so pinning an allow-list here
+        ;; only turns every upstream schema bump into a false failure.
+        (should (integerp (plist-get fx :version)))))))
 
 (ert-deftest mindwtr-parity-covers-every-known-entity-type ()
   "Every type in the model registry is checked -- notably `person'.
