@@ -209,14 +209,20 @@ today's calendar block; one beyond it does not."
 (ert-deftest mindwtr-agenda-engage-waiting-excludes-projects ()
   "The Waiting For block lists waiting tasks only.  A project in the waiting
 state shares the WAIT keyword but is not an action -- it must not appear here
-(AE: projects belong to the Projects view)."
+(AE: projects belong to the Projects view).
+
+The delegated task is filed under an ACTIVE project on purpose.  Parking it
+under the waiting project would make this fixture lie: the match string would
+still find it, but the built view drops it (see
+`mindwtr-agenda-engage-hides-a-waiting-project-delegation')."
   (let* ((blocks (nth 2 (mindwtr-agenda--engage-spec)))
          (wait-match (nth 1 (nth 3 blocks))))
     (mindwtr-agenda-test--with-appdata
         '(:areas nil
-          :projects ((:id "p1" :title "Blocked proj" :status "waiting"))
+          :projects ((:id "p1" :title "Blocked proj" :status "waiting" :order 1)
+                     (:id "p2" :title "Live proj" :status "active" :order 2))
           :sections nil
-          :tasks ((:id "t1" :title "Awaiting reply" :status "waiting" :projectId "p1"))
+          :tasks ((:id "t1" :title "Awaiting reply" :status "waiting" :projectId "p2"))
           :settings nil)
       (let ((hits (org-map-entries (lambda () (org-get-heading t t t t)) wait-match)))
         (should (member "Awaiting reply" hits))
@@ -1116,7 +1122,7 @@ DEADLINE: <2020-01-01 Wed>
       (goto-char (point-min))
       (re-search-forward "^\\*+ NEXT Parent step$")
       (should (mindwtr-agenda--blocked-step-p))
-      (should (<= (mindwtr-agenda--skip-unavailable) child)))))
+      (should (<= (mindwtr-agenda--skip-blocked-step) child)))))
 
 (ert-deftest mindwtr-agenda-sequential-waiting-deadline-does-not-take-the-slot ()
   "A WAIT step's deadline earns nothing: it is not actionable, so letting it
@@ -1249,20 +1255,20 @@ so the steps behind it stay blocked."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--seq-appdata
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Step one$")
-    (should-not (mindwtr-agenda--skip-unavailable))
+    (should-not (mindwtr-agenda--skip-blocked-step))
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Step two$")
-    (let ((end (mindwtr-agenda--skip-unavailable)))
+    (let ((end (mindwtr-agenda--skip-blocked-step)))
       (should (integerp end))
       (should (> end (point))))))
 
-;;; U7 -- parked projects: the deferred-project filter --------------------------
+;;; U7 -- parked projects: the project-status filter ---------------------------
 
-(defun mindwtr-agenda-test--deferred-at (title)
-  "Move to the task heading named TITLE and return its deferred-project result."
+(defun mindwtr-agenda-test--parked-at (title)
+  "Move to the task heading named TITLE and return its parked-project result."
   (goto-char (point-min))
   (re-search-forward (concat "^\\*+ [A-Z]+ " (regexp-quote title) "$"))
-  (mindwtr-agenda--deferred-project-p))
+  (mindwtr-agenda--parked-project-p))
 
 (defconst mindwtr-agenda-test--parked-appdata
   '(:areas nil
@@ -1279,35 +1285,35 @@ so the steps behind it stay blocked."
   "One NEXT step under each project status: someday, active, someday+focused,
 waiting.")
 
-(ert-deftest mindwtr-agenda-someday-project-defers-its-steps ()
+(ert-deftest mindwtr-agenda-someday-project-parks-its-steps ()
   "A NEXT step inside a project filed under Someday is not available."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
-    (should (mindwtr-agenda-test--deferred-at "Later step"))))
+    (should (mindwtr-agenda-test--parked-at "Later step"))))
 
 (ert-deftest mindwtr-agenda-active-project-steps-stay-available ()
-  "A step of an ACTIVE project is never deferred by the project rule."
+  "A step of an ACTIVE project is never parked by the project rule."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
-    (should-not (mindwtr-agenda-test--deferred-at "Now step"))))
+    (should-not (mindwtr-agenda-test--parked-at "Now step"))))
 
 (ert-deftest mindwtr-agenda-focused-parked-project-keeps-its-steps ()
   "MW_FOCUSED (the server's `project.isFocused' pin) un-parks a someday project."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
-    (should-not (mindwtr-agenda-test--deferred-at "Pinned step"))))
+    (should-not (mindwtr-agenda-test--parked-at "Pinned step"))))
 
-(ert-deftest mindwtr-agenda-waiting-project-defers-its-steps ()
+(ert-deftest mindwtr-agenda-waiting-project-parks-its-steps ()
   "A waiting project is parked too -- only ACTIVE (or focused) is available."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
-    (should (mindwtr-agenda-test--deferred-at "Held step"))))
+    (should (mindwtr-agenda-test--parked-at "Held step"))))
 
-(ert-deftest mindwtr-agenda-standalone-task-is-never-deferred ()
+(ert-deftest mindwtr-agenda-standalone-task-is-never-parked ()
   "A task with no owning project has no project status to be parked by."
   (mindwtr-agenda-test--with-appdata
       '(:areas nil :projects nil :sections nil
         :tasks ((:id "s1" :title "Loose end" :status "next"))
         :settings nil)
-    (should-not (mindwtr-agenda-test--deferred-at "Loose end"))))
+    (should-not (mindwtr-agenda-test--parked-at "Loose end"))))
 
-(ert-deftest mindwtr-agenda-nearest-project-decides-deferral ()
+(ert-deftest mindwtr-agenda-nearest-project-decides-parking ()
   "An ACTIVE project demoted under a parked one keeps its own steps available,
 matching upstream's single `task.projectId' lookup."
   (mindwtr-agenda-test--with-org
@@ -1327,7 +1333,7 @@ matching upstream's single `task.projectId' lookup."
 :MW_ID:    t1
 :END:
 "
-    (should-not (mindwtr-agenda-test--deferred-at "Inner step"))))
+    (should-not (mindwtr-agenda-test--parked-at "Inner step"))))
 
 (ert-deftest mindwtr-agenda-untyped-project-heading-fails-open ()
   "A hand-typed project with no MW_TYPE drawer yet must not hide its tasks."
@@ -1335,28 +1341,90 @@ matching upstream's single `task.projectId' lookup."
       "* SOMEDAY Parked
 ** NEXT Typed by hand
 "
-    (should-not (mindwtr-agenda-test--deferred-at "Typed by hand"))))
+    (should-not (mindwtr-agenda-test--parked-at "Typed by hand"))))
 
-(ert-deftest mindwtr-agenda-skip-unavailable-covers-both-rules ()
-  "Next Actions\=' skip function drops a parked project's step as well as a
-blocked one: a block-level binding replaces the view-wide skip function, so it
-has to re-apply that rule itself."
+(ert-deftest mindwtr-agenda-skip-parked-project-returns-entry-end-or-nil ()
+  "The parked-project skip keeps an active project's step (nil) and skips past
+a parked one."
   (mindwtr-agenda-test--with-appdata mindwtr-agenda-test--parked-appdata
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Now step$")
-    (should-not (mindwtr-agenda--skip-unavailable))
+    (should-not (mindwtr-agenda--skip-parked-project))
     (goto-char (point-min))
     (re-search-forward "^\\*+ NEXT Later step$")
-    (let ((end (mindwtr-agenda--skip-unavailable)))
+    (let ((end (mindwtr-agenda--skip-parked-project)))
       (should (integerp end))
       (should (> end (point))))))
-
-(ert-deftest mindwtr-agenda-engage-spec-defers-parked-projects-view-wide ()
+(ert-deftest mindwtr-agenda-engage-spec-parks-projects-view-wide ()
   "The parked-project skip is a view-wide setting, so it reaches the calendar,
 Focus, Waiting and Inbox blocks -- not just Next Actions."
   (let ((gprops (nth 3 (mindwtr-agenda--engage-spec))))
-    (should (equal (cadr (assq 'org-agenda-skip-function gprops))
-                   ''mindwtr-agenda--skip-deferred-project))))
+    ;; The GLOBAL hook, not `org-agenda-skip-function': `org-agenda-skip' ORs
+    ;; the two, so a block that installs its own skip function (Next Actions
+    ;; does) still gets this rule.  Binding the non-global one instead would be
+    ;; silently cancelled there.
+    (should (equal (cadr (assq 'org-agenda-skip-function-global gprops))
+                   ''mindwtr-agenda--skip-parked-project))))
+
+(ert-deftest mindwtr-agenda-engage-hides-a-waiting-project-delegation ()
+  "Behavioral, and a deliberate divergence from the naive reading: a delegated
+step inside a WAITING project is absent from Waiting For.  Upstream parks
+waiting projects exactly like someday ones -- `isTaskInActiveProject' is
+active-or-pinned -- and the desktop Waiting list, the mobile task list and the
+weekly review's waiting step all drop it too.  The project itself stays
+reachable through `mindwtr-projects'."
+  (let ((text (mindwtr-agenda-test--engage-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Blocked proj" :status "waiting" :order 1)
+                            (:id "p2" :title "Live proj" :status "active" :order 2))
+                 :sections nil
+                 :tasks ((:id "t1" :title "ChaseParked" :status "waiting" :projectId "p1")
+                         (:id "t2" :title "ChaseLive" :status "waiting" :projectId "p2"))
+                 :settings nil))))
+    (should (string-match-p "ChaseLive" text))
+    (should-not (string-match-p "ChaseParked" text))))
+
+(ert-deftest mindwtr-agenda-engage-calendar-drops-a-parked-project-date ()
+  "Behavioral: the parked-project rule reaches the CALENDAR block too, not just
+the tags-todo ones -- a view-wide skip function covers every block.  Upstream
+applies the same rule before bucketing a task into a day (`isCalendarFeedTask',
+\"the same visibility rule the Calendar view applies\")."
+  (let ((text (mindwtr-agenda-test--engage-text
+               `(:areas nil
+                 :projects ((:id "p1" :title "Parked" :status "someday" :order 1)
+                            (:id "p2" :title "Live" :status "active" :order 2))
+                 :sections nil
+                 :tasks ((:id "t1" :title "ParkedDated" :status "next" :projectId "p1"
+                          :dueDate ,(mindwtr-agenda-test--iso-days 0))
+                         (:id "t2" :title "LiveDated" :status "next" :projectId "p2"
+                          :dueDate ,(mindwtr-agenda-test--iso-days 0)))
+                 :settings nil))))
+    ;; "Deadline:" only ever appears in the calendar block, so matching it --
+    ;; not bare presence -- proves the calendar itself dropped the parked one.
+    (should (string-match-p "Deadline: +NEXT LiveDated" text))
+    (should-not (string-match-p "Deadline: +NEXT ParkedDated" text))))
+
+(ert-deftest mindwtr-agenda-engage-next-actions-keeps-both-skip-rules ()
+  "Behavioral: the Next Actions block installs its own
+`org-agenda-skip-function', which REPLACES a view-wide one of the same name --
+so the parked rule rides `org-agenda-skip-function-global', which
+`org-agenda-skip' ORs with it.  This asserts both rules still fire in that
+block at once: the sequential project's second step is blocked, and the parked
+project's step is gone.  Binding the non-global hook view-wide would silently
+lose the sequential filter here."
+  (let ((text (mindwtr-agenda-test--engage-text
+               '(:areas nil
+                 :projects ((:id "p1" :title "Seq" :status "active" :order 1
+                             :isSequential t)
+                            (:id "p2" :title "Parked" :status "someday" :order 2))
+                 :sections nil
+                 :tasks ((:id "t1" :title "SeqStepOne" :status "next" :projectId "p1" :order 1)
+                         (:id "t2" :title "SeqStepTwo" :status "next" :projectId "p1" :order 2)
+                         (:id "t3" :title "ParkedStep" :status "next" :projectId "p2"))
+                 :settings nil))))
+    (should (string-match-p "SeqStepOne" text))
+    (should-not (string-match-p "SeqStepTwo" text))
+    (should-not (string-match-p "ParkedStep" text))))
 
 (ert-deftest mindwtr-agenda-engage-hides-parked-project-next-actions ()
   "Behavioral: a NEXT step of a someday project is absent from the whole Engage
