@@ -86,6 +86,28 @@ the mode on, an archived entity's render surface is the archive file, so its
 absence there IS a user deletion and falls through to the ordinary tombstone
 branch of `mindwtr-sync-build-candidate'.")
 
+;; No push without a local edit (STRATEGY.md key metric).  A sync that proposes
+;; changes while no synced buffer has been edited since the last completed
+;; cycle is pushing something the user did not do -- the shape of the
+;; archived-area loss (PR #67).  Flagged in the report, never blocked: a
+;; migration backfill legitimately pushes with no edit.
+(defvar-local mindwtr-sync--synced-tick nil
+  "`buffer-chars-modified-tick' when the last completed cycle left this buffer.
+Nil until a cycle completes in this Emacs session.")
+
+(defun mindwtr-sync--mark-synced (surfaces)
+  "Record every surface in SURFACES as matching what the last cycle left."
+  (dolist (s surfaces)
+    (with-current-buffer (plist-get s :buffer)
+      (setq mindwtr-sync--synced-tick (buffer-chars-modified-tick)))))
+
+(defun mindwtr-sync--unedited-p (surfaces)
+  "Non-nil when no surface in SURFACES was edited since the last cycle."
+  (seq-every-p (lambda (s)
+                 (with-current-buffer (plist-get s :buffer)
+                   (eql mindwtr-sync--synced-tick (buffer-chars-modified-tick))))
+               surfaces))
+
 (defvar mindwtr--inhibit-save-sync nil
   "Non-nil while the engine writes the synced buffer itself.
 Dynamically `let'-bound `t' (never `setq'-reset, so it auto-unwinds on any
@@ -1000,7 +1022,14 @@ Pure CPU plus local state reads -- no network.  Returns the
                ;; skipped by the HEAD-ETag noop gate (R8/KTD9).
                (clock-dirty (mindwtr-sync--clock-dirty-p local shadow))
                ;; Likewise a moved project task: :order is unsigned.
-               (order-plan (mindwtr-sync--order-plan local shadow)))
+               (order-plan (mindwtr-sync--order-plan local shadow))
+               (parse-warnings
+                (if (and local-dirty (mindwtr-sync--unedited-p surfaces))
+                    (append parse-warnings
+                            (list (list :no-local-edit
+                                        (mapcar (lambda (c) (plist-get c :id))
+                                                (plist-get diff :changes)))))
+                  parse-warnings)))
           (mindwtr-sync-cycle--make
            :buffer buffer :baseline baseline
            :surfaces surfaces :local local :parse-warnings parse-warnings
@@ -1033,6 +1062,7 @@ WHAT names the guarded window in the error message."
       ;; reconcile, so the buffers still hold their old render.  Migration
       ;; protection must stay on until a full cycle actually rewrites them
       ;; (the latches are set post-save in `mindwtr-sync--finish').
+      (mindwtr-sync--mark-synced (mindwtr-sync-cycle-surfaces cycle))
       ;; A HEAD-match means the server is unchanged, so nothing is incoming.
       (list :ok t :noop t :conflicts nil :stats stats :skew nil
             :warnings parse-warnings :incoming nil))))
@@ -1153,6 +1183,7 @@ a process sentinel on the async path)."
       (dolist (s surfaces)
         (with-current-buffer (plist-get s :buffer)
           (mindwtr-reconcile-buffer merged (plist-get s :render))))
+      (mindwtr-sync--mark-synced surfaces)
       (let ((save-failed (mindwtr-sync--save-surfaces surfaces)))
         ;; Commit shadow + etag, and flip the migration latches ONLY once
         ;; every surface is durably on disk.  The buffers now carry the new

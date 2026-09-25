@@ -300,9 +300,15 @@ restore live only on this newest entry (R8)."
   (when parse-warnings
     (let ((dupes (seq-filter (lambda (w) (plist-get w :duplicate)) parse-warnings))
           (blank (seq-filter (lambda (w) (plist-get w :blank-title)) parse-warnings))
+          (unedited (seq-find (lambda (w) (plist-member w :no-local-edit)) parse-warnings))
           (kw (seq-remove (lambda (w) (or (plist-get w :duplicate)
-                                          (plist-get w :blank-title)))
+                                          (plist-get w :blank-title)
+                                          (plist-member w :no-local-edit)))
                           parse-warnings)))
+      (when unedited
+        (let ((ids (plist-get unedited :no-local-edit)))
+          (insert (format "  ⚠ %d change(s) proposed with no edit since the last sync -- likely a sync bug, not your change: %s\n"
+                          (length ids) (mapconcat #'identity ids ", ")))))
       (when blank
         (insert (format "  ⚠ %d heading(s) with no title (the server rejects untitled entities):\n"
                         (length blank)))
