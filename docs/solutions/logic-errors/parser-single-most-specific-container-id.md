@@ -1,5 +1,6 @@
 ---
-title: Parser must store only the single most-specific container ID
+title: "Parser containment must match upstream's canonical form: no area on a project task, and a section carries its project"
+last_updated: 2026-09-25
 date: 2026-06-03
 category: logic-errors
 module: mindwtr-parse
@@ -16,11 +17,13 @@ severity: high
 tags: [parser, containment, area-id, project-id, drift, signature, round-trip]
 ---
 
-# Parser must store only the single most-specific container ID
+# Parser containment must match upstream's canonical form
 
 ## Problem
-The Mindwtr server model stores exactly **one** container reference per task — section overrides
-project overrides area, whichever is innermost. The initial parser stamped *every* non-nil
+Upstream's canonical containment for a task (`resolveTaskContainerHierarchy`, Mindwtr core
+`task-container-rules.ts`) is: a task in a project has **no** `areaId`, and a task in a section
+carries the section **and** that section's `projectId`.  (This doc originally said section and
+project were mutually exclusive too; that was wrong -- see "Second drift" below.) The initial parser stamped *every* non-nil
 ancestor ID onto a task simultaneously, so a task under `* Projects / My Project` received both
 `:projectId` and a spurious `:areaId` (from the grandparent area). That made the parsed entity
 structurally different from the server's canonical form on every cycle — a phantom-drift loop.
@@ -62,13 +65,19 @@ Task branch now (`mindwtr-parse.el:403-416`):
                 (mindwtr-heading-ancestor-id 'section)))
        (pid (or (mindwtr-heading-prop "MW_PROJECT_ID")
                 (mindwtr-heading-ancestor-id 'project))))
-   (cond (sid (setq e (plist-put e :sectionId sid)))
-         (pid (setq e (plist-put e :projectId pid)))))   ; exclusive; no areaId from outline
+   (when sid (setq e (plist-put e :sectionId sid)))
+   (when pid (setq e (plist-put e :projectId pid))))   ; section carries its project; no areaId from outline
  (push (mindwtr-parse--strip-internal e) tasks))
 ```
 
 The explicit `MW_SECTION_ID`/`MW_PROJECT_ID` props are the archive surface's cross-file
-carrier and win over ancestry per axis; the section-over-project exclusivity is unchanged.
+carrier and win over ancestry per axis.
+
+**Second drift (2026-09-25).** The first fix made section and project exclusive as well, so a
+sectioned task created in the app (which carries both) parsed as `sectionId` only and every sync
+pushed `projectId -> (empty)`; the server's repair restores it, so it churned forever.  Found by
+`mindwtr-invariant-fixture-is-in-step` (`test/mindwtr-invariant-test.el`), the first check whose
+fixture held a sectioned task with a project.  The parser now sets both.
 
 `:areaId` is no longer derived from outline nesting for tasks. It comes only from an explicit
 `:CATEGORY:` property (legacy `:MW_AREA:` fallback), resolved post-loop for every kind through
@@ -85,14 +94,15 @@ a `name->id` hash (`mindwtr-parse.el:339-342`):
 which is why a spurious `:areaId` always surfaced as signature drift.
 
 ## Why This Works
-The server's single-reference model and the parser's `cond` gate now agree: a task carries
-exactly one of `{sectionId, projectId}` (or neither, if standalone), never both. The `:CATEGORY:`
+The parser now emits exactly upstream's canonical form: `{projectId}` or `{sectionId, projectId}`
+for a project task, never an `areaId` alongside a project. The `:CATEGORY:`
 property is written by the renderer *iff* `:areaId` is set and resolvable
 (`mindwtr-render.el:188-191`), and read back through `mindwtr-parse--area-id` — closing the
 round-trip. A task without an area has no `:CATEGORY:` property and so no spurious `areaId`.
 
 ## Prevention
-- State the containment rule (section > project > area, mutually exclusive for tasks) **once**,
+- Take the containment rule from upstream's `resolveTaskContainerHierarchy`, not from memory, and
+  state it **once**,
   near `mindwtr-model-content-fields`, so parser and reconcile share one source of truth instead
   of encoding it independently — the contradiction here came from two independent encodings.
 - Covered by the areaId/CATEGORY parse test `mindwtr-parse-area-from-property` in

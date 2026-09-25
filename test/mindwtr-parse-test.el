@@ -210,12 +210,12 @@ into :mw-extra-props (KTD4 -- it is non-MW_-prefixed but known)."
         (should (= (length (plist-get ad :areas)) 1))
         (should (string= (plist-get proj :areaId) "a1"))
         (should (string= (plist-get sec :projectId) "p1"))
-        ;; A task stores ONLY its nearest container (section here).  The
-        ;; project and area are derived structurally on render, never
-        ;; stamped onto the task -- mirroring the server's single
-        ;; container-id-per-task model.
+        ;; A sectioned task carries its section AND that section's project,
+        ;; upstream's canonical form (`resolveTaskContainerHierarchy').  The
+        ;; area is never stamped from the outline: a task in a project has no
+        ;; area of its own.
         (should (string= (plist-get task :sectionId) "s1"))
-        (should (null (plist-get task :projectId)))
+        (should (string= (plist-get task :projectId) "p1"))
         (should (null (plist-get task :areaId)))
         ;; mw internal keys stripped from output entities:
         (should (null (plist-member task :mw-kind)))))))
@@ -373,7 +373,8 @@ Captures the org-capture-inbox case: an INBOX heading with only an org :ID:."
       (should (string= (plist-get task :status) "next")))))
 
 (ert-deftest mindwtr-parse-infers-task-under-section ()
-  "A heading lacking MW_TYPE under a section is a task with that sectionId."
+  "A heading lacking MW_TYPE under a section is a task in that section and
+its project."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Projects\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: projects\n:END:\n"
@@ -385,7 +386,7 @@ Captures the org-capture-inbox case: an INBOX heading with only an org :ID:."
            (task (car (plist-get ad :tasks))))
       (should (= (length (plist-get ad :tasks)) 1))
       (should (string= (plist-get task :sectionId) "s1"))
-      (should (null (plist-get task :projectId))))))
+      (should (string= (plist-get task :projectId) "p1")))))
 
 (ert-deftest mindwtr-parse-infers-area-under-areas ()
   "A heading lacking MW_TYPE under Areas of Focus is an area."
@@ -787,7 +788,8 @@ leak into :mw-extra-props (KTD4)."
         (should (null (plist-get task :mw-extra-props)))))))
 
 (ert-deftest mindwtr-parse-archive-explicit-section-id ()
-  "MW_SECTION_ID sets :sectionId and takes precedence over MW_PROJECT_ID."
+  "MW_SECTION_ID and MW_PROJECT_ID set both containment ids, as upstream
+carries them for a sectioned task."
   (with-temp-buffer
     (let ((org-inhibit-startup t))
       (insert "* Archive
@@ -806,7 +808,7 @@ leak into :mw-extra-props (KTD4)."
       (org-mode)
       (let ((task (car (plist-get (mindwtr-parse-buffer) :tasks))))
         (should (string= (plist-get task :sectionId) "s7"))
-        (should (null (plist-get task :projectId)))))))
+        (should (string= (plist-get task :projectId) "p9"))))))
 
 (ert-deftest mindwtr-parse-archive-ancestry-when-no-explicit-props ()
   "An archived task nested under an archived project subtree (no explicit

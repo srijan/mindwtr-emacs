@@ -403,16 +403,19 @@ sync passes the main file's map so the archive surface resolves `:CATEGORY:'."
                ('task
                 ;; Containment: an explicit MW_SECTION_ID/MW_PROJECT_ID drawer
                 ;; prop (the archive file's cross-split carrier, KTD4) wins over
-                ;; outline ancestry per axis; section then takes precedence over
-                ;; project, exactly as the ancestry-only cond did.  In the main
-                ;; file the props are never emitted, so this is identical to
-                ;; the prior ancestry walk there.
+                ;; outline ancestry per axis.  In the main file the props are
+                ;; never emitted, so there it is the ancestry walk.  A
+                ;; sectioned task carries its project too: upstream's canonical
+                ;; form is the section plus its project
+                ;; (`resolveTaskContainerHierarchy'), and the server's repair
+                ;; restores a dropped projectId, so parsing the section alone
+                ;; pushed `projectId -> (empty)' on every sync.
                 (let ((sid (or (mindwtr-heading-prop "MW_SECTION_ID")
                                (mindwtr-heading-ancestor-id 'section)))
                       (pid (or (mindwtr-heading-prop "MW_PROJECT_ID")
                                (mindwtr-heading-ancestor-id 'project))))
-                  (cond (sid (setq e (plist-put e :sectionId sid)))
-                        (pid (setq e (plist-put e :projectId pid)))))
+                  (when sid (setq e (plist-put e :sectionId sid)))
+                  (when pid (setq e (plist-put e :projectId pid))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)
           :sections (nreverse sections) :areas (nreverse areas)
