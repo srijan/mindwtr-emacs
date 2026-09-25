@@ -409,13 +409,17 @@ sync passes the main file's map so the archive surface resolves `:CATEGORY:'."
                 ;; form is the section plus its project
                 ;; (`resolveTaskContainerHierarchy'), and the server's repair
                 ;; restores a dropped projectId, so parsing the section alone
-                ;; pushed `projectId -> (empty)' on every sync.
+                ;; pushed `projectId -> (empty)' on every sync.  By the same
+                ;; rule a task in a project has no area: one refiled into a
+                ;; project keeps its old `:CATEGORY:' until the next render,
+                ;; and pushing that area drew a sync-repair.
                 (let ((sid (or (mindwtr-heading-prop "MW_SECTION_ID")
                                (mindwtr-heading-ancestor-id 'section)))
                       (pid (or (mindwtr-heading-prop "MW_PROJECT_ID")
                                (mindwtr-heading-ancestor-id 'project))))
                   (when sid (setq e (plist-put e :sectionId sid)))
-                  (when pid (setq e (plist-put e :projectId pid))))
+                  (when pid (setq e (mindwtr-util-plist-omit
+                                     (plist-put e :projectId pid) '(:areaId)))))
                 (push (mindwtr-parse--strip-internal e) tasks))))))))
     (list :tasks (nreverse tasks) :projects (nreverse projects)
           :sections (nreverse sections) :areas (nreverse areas)

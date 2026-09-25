@@ -250,9 +250,8 @@ the edit the archived-area loss (PR #67) turned into an area wipe."
                    '(("t2" :status))))))
 
 (ert-deftest mindwtr-invariant-refile-pushes-only-containment ()
-  "Refiling a standalone task into a project pushes the new project and
-nothing else.  (Its `:CATEGORY:' rides along, so the area is not cleared
-here; the server's repair drops it, since a task in a project has no area.)"
+  "Refiling a standalone task into a project pushes the new project and the
+cleared area (a task in a project has no area), nothing else."
   (mindwtr-invariant-test--with-synced (srv)
     (should (equal (mindwtr-invariant-test--edit
                     srv "Fix tap"
@@ -262,7 +261,7 @@ here; the server's repair drops it, since a task in a project has no area.)"
                                       (re-search-forward "^\\*+ ACTIVE Launch$")
                                       (line-beginning-position))))
                         (org-refile nil nil (list "Launch" mindwtr-file nil target)))))
-                   '(("t2" :projectId))))))
+                   '(("t2" :areaId :projectId))))))
 
 (ert-deftest mindwtr-invariant-clarify-outcome-pushes-only-its-fields ()
   "A clarify outcome (the two-minute quick action) pushes the done status and
