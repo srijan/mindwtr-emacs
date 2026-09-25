@@ -93,8 +93,9 @@ exit) around an internal `save-buffer' so the `after-save-hook' debounce
 \(`mindwtr--maybe-debounced-sync') does not re-arm a stray HEAD-only sync
 ~5s later for a save the engine performed.  Declared here -- the lower
 layer that `mindwtr.el' requires -- so both files see it and `make compile'
-stays clean under `error-on-warn'.  Mirrors the `mindwtr--sync-in-progress'
-guard discipline.")
+stays clean under `error-on-warn'.  Always `let'-bound around the save,
+never `setq'd: the save is synchronous, so a dynamic binding covers it
+exactly.")
 
 (defun mindwtr-sync--save-buffer-quietly (&optional protect-content)
   "Save the current buffer to disk without re-arming the auto-sync debounce.
@@ -302,10 +303,11 @@ parsed completely.  This gate withholds strict mode -- falling back to echo for
 the cycle, exactly like the missing-file fallback (KTD5) -- in two cases where
 absence is more likely a parse/IO fault than a deletion:
 
-- ARCHIVE-WARNED: the archive buffer parsed with warnings.  A quarantined or
-  malformed heading (KTD9) means an archived entity may be missing from LOCAL
-  for a parse reason; tombstoning it would delete live server data on a bad
-  edit, not a deletion.
+- ARCHIVE-WARNED: the archive buffer holds an `MW_ID' heading that did not
+  parse into an entity (`mindwtr-sync--surface-has-unparsed-entity-p'), e.g. a
+  hand-edit that removed its `MW_TYPE'.  That archived entity is missing from
+  LOCAL for a parse reason; tombstoning it would delete live server data on a
+  bad edit, not a deletion.  Ordinary parse warnings do not set it.
 
 - Empty-shortfall: SHADOW holds archived entities but LOCAL parsed none.  An
   empty or truncated archive file (an `rm'+recreate, a save that lost its

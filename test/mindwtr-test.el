@@ -80,8 +80,8 @@ does NOT arm another timer."
       (delete-directory dir t))))
 
 (ert-deftest mindwtr-auto-sync-defers-while-in-progress ()
-  "A trigger that fires re-entrantly (e.g. a timer inside a blocked HTTP
-call) must not launch a second sync cycle."
+  "A trigger that fires while a cycle is in flight (a timer during the async
+HEAD/PUT gap, or inside a blocked url.el call) must not launch a second cycle."
   (let ((mindwtr--sync-in-progress t)
         (mindwtr--retry-timer nil)
         (mindwtr--error-state nil)

@@ -41,7 +41,8 @@ JSON snapshot lets changes be detected without re-fetching.
   file too:** `mindwtr-render-archive-appdata` is a second render surface and must round-trip
   byte-stably exactly like the main render (its injected `MW_PROJECT_ID`/`MW_SECTION_ID`
   containment props land at a fixed drawer position for that reason).
-- **Safe-by-default on reconcile.** Reconcile does a full `erase-buffer`+rebuild; it must never
+- **Safe-by-default on reconcile.** Reconcile replaces the whole buffer with a fresh render
+  (a `replace-buffer-contents` diff, but anything not re-rendered is still removed); it must never
   silently destroy user content. Anything the parser can't place is quarantined under
   `* Sync Failures`, not dropped.
 - **Post-PUT path must never throw.** Reconcile runs *after* the server write commits, so
