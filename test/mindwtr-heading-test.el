@@ -1,5 +1,6 @@
 ;;; mindwtr-heading-test.el --- -*- lexical-binding: t; -*-
 (require 'ert)
+(require 'cl-lib)
 (require 'org)
 (require 'mindwtr-heading)
 
@@ -272,6 +273,22 @@ scan, so its value inside the callback is not observable.)"
       (should (equal (nreverse seen) '(nil "p1" "s1" "t1" nil nil "t2" nil))))
     (should (equal buffer-file-name "/nonexistent/dir/x.org"))
     (setq buffer-file-name nil)))
+
+(ert-deftest mindwtr-heading-map-binds-scan-off-element-cache ()
+  "`org-map-entries' is entered with `org-element-use-cache' nil, keeping the
+auto-sync scan off the long-lived cache that has wedged Emacs (see
+docs/solutions/runtime-errors/org-element-cache-wedges-auto-sync-scan.md).
+Observed at the hand-off because Org 9.7+ re-binds it inside the scan, which
+is why `mindwtr-heading-map-hides-file-name' cannot see it."
+  (let ((org-element-use-cache t)
+        (buffer-file-name "/nonexistent/dir/x.org")
+        seen)
+    (cl-letf (((symbol-function 'org-map-entries)
+               (lambda (&rest _)
+                 (setq seen (list org-element-use-cache buffer-file-name)))))
+      (mindwtr-heading-map #'ignore))
+    (should (equal seen '(nil nil)))
+    (should (eq org-element-use-cache t))))
 
 (ert-deftest mindwtr-heading-map-passes-args ()
   (mindwtr-heading-test--with mindwtr-heading-test--tree

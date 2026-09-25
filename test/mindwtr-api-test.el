@@ -76,6 +76,105 @@ with `wrong-type-argument stringp nil'."
       (condition-case err (mindwtr-api--default-http req)
         (mindwtr-api-error (should (plist-get (cdr err) :retryable)))))))
 
+;;; plz transport --------------------------------------------------------------
+;;
+;; plz is not on the load path under `make test', so these run the plz branch
+;; of `mindwtr-api--default-http' against a fake: `features' is `dlet'-bound so
+;; `(require 'plz nil t)' succeeds for the test body only, and the plz calls
+;; the transport makes are stubbed.  A fake response is a plist and a fake
+;; plz-error is (fake-plz-error RESPONSE-OR-NIL).  See
+;; docs/solutions/integration-issues/plz-sync-mode-ignores-else-double-send.md.
+
+(dolist (e '(plz-error plz-curl-error plz-http-error))
+  (unless (get e 'error-conditions)
+    (define-error e (format "Fake %s" e))))
+
+(defmacro mindwtr-api-test--with-fake-plz (plz-fn &rest body)
+  "Run BODY with the plz branch active and `plz' bound to PLZ-FN."
+  (declare (indent 1))
+  `(dlet ((features (cons 'plz features)))
+     (cl-letf (((symbol-function 'plz) ,plz-fn)
+               ((symbol-function 'plz-error-p)
+                (lambda (x) (eq (car-safe x) 'fake-plz-error)))
+               ((symbol-function 'plz-error-response) #'cadr)
+               ((symbol-function 'plz-response-status)
+                (lambda (r) (plist-get r :status)))
+               ((symbol-function 'plz-response-headers)
+                (lambda (r) (plist-get r :headers)))
+               ((symbol-function 'plz-response-body)
+                (lambda (r) (plist-get r :body))))
+       ,@body)))
+
+(defconst mindwtr-api-test--req
+  '(:method "PUT" :url "https://mw.example/v1/data" :headers nil :body "{}"))
+
+(ert-deftest mindwtr-api-plz-sync-success-sends-once ()
+  "A successful sync request reaches plz exactly once, bounded by the
+timeout.  The old code discarded plz's return value and re-sent the request,
+PUT included."
+  (let ((calls 0) args)
+    (mindwtr-api-test--with-fake-plz
+        (lambda (&rest a)
+          (cl-incf calls) (setq args a)
+          '(:status 200 :headers (("ETag" . "v2")) :body "ok"))
+      (should (equal (mindwtr-api--default-http mindwtr-api-test--req)
+                     '(:status 200 :headers (("ETag" . "v2")) :body "ok"))))
+    (should (= calls 1))
+    (should (eq (car args) 'put))
+    (should (eq (plist-get (cddr args) :then) 'sync))
+    (should (eql (plist-get (cddr args) :timeout) mindwtr-api-timeout))))
+
+(ert-deftest mindwtr-api-plz-sync-http-error-is-classified ()
+  "plz signals on non-2xx in sync mode (it ignores :else).  The transport
+must return the real response so `mindwtr-api--check' classifies it: a 401 is
+an auth error, a 503 is retryable.  The error struct is found wherever it sits
+in the signal data."
+  (dolist (case '((401 . mindwtr-api-auth-error) (503 . mindwtr-api-error)))
+    (let ((resp (list :status (car case) :headers nil :body "no")))
+      (mindwtr-api-test--with-fake-plz
+          (lambda (&rest _)
+            (signal 'plz-http-error
+                    (list "HTTP error" 'extra (list 'fake-plz-error resp))))
+        (let ((got (mindwtr-api--default-http mindwtr-api-test--req)))
+          (should (equal got resp))
+          (condition-case err (progn (mindwtr-api--check got) (should nil))
+            (error
+             (should (eq (car err) (cdr case)))
+             (when (= (car case) 503)
+               (should (plist-get (cdr err) :retryable))))))))))
+
+(ert-deftest mindwtr-api-plz-sync-curl-error-is-retryable ()
+  "A curl-level failure (network down, timeout) has no HTTP response; it
+maps to status 0, which `mindwtr-api--check' treats as retryable."
+  (mindwtr-api-test--with-fake-plz
+      (lambda (&rest _)
+        (signal 'plz-curl-error (list "Curl error" (list 'fake-plz-error nil))))
+    (let ((got (mindwtr-api--default-http mindwtr-api-test--req)))
+      (should (equal got '(:status 0 :headers nil :body nil)))
+      (condition-case err (progn (mindwtr-api--check got) (should nil))
+        (mindwtr-api-error (should (plist-get (cdr err) :retryable)))))))
+
+(ert-deftest mindwtr-api-plz-async-delivers-success-and-errors ()
+  "The async branch passes :then and :else, and both deliver a response
+plist through the callback instead of signaling."
+  (let (then else got)
+    (mindwtr-api-test--with-fake-plz
+        (lambda (&rest a)
+          (setq then (plist-get (cddr a) :then)
+                else (plist-get (cddr a) :else))
+          nil)
+      (mindwtr-api--default-http mindwtr-api-test--req
+                                 (lambda (r) (push r got)))
+      (should (functionp then))
+      (should (functionp else))
+      (funcall then '(:status 200 :headers nil :body "ok"))
+      (funcall else (list 'fake-plz-error '(:status 401 :headers nil :body "x")))
+      (funcall else (list 'fake-plz-error nil)))
+    (should (equal (nreverse got)
+                   '((:status 200 :headers nil :body "ok")
+                     (:status 401 :headers nil :body "x")
+                     (:status 0 :headers nil :body nil))))))
+
 ;;; Async request layer --------------------------------------------------------
 
 (ert-deftest mindwtr-api-request-async-inline-stub-and-classification ()
