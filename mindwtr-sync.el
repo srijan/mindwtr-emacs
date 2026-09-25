@@ -864,10 +864,12 @@ heading cannot read as a deletion.  Parse warnings are accumulated across
 buffers because `mindwtr-parse--warnings' is per-run state, reset by each parse."
   (let ((merged (list :tasks nil :projects nil :sections nil :areas nil :people nil))
         (seen (make-hash-table :test 'equal))
+        (area-names (with-current-buffer (plist-get (car surfaces) :buffer)
+                      (mindwtr-parse--build-area-names)))
         out-surfaces warnings archive-warned duplicates)
     (dolist (surface surfaces)
       (with-current-buffer (plist-get surface :buffer)
-        (let ((ad (mindwtr-parse-buffer))
+        (let ((ad (mindwtr-parse-buffer area-names))
               (w (mindwtr-parse-warnings)))
           (push (plist-put (copy-sequence surface)
                            :tick (buffer-chars-modified-tick))
