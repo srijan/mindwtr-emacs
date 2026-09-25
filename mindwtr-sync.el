@@ -1194,8 +1194,12 @@ a process sentinel on the async path)."
         ;; flips only when the archive surface participated (KTD5): strict
         ;; absence semantics must not activate until the file is provably
         ;; on disk.
+        ;; Mindwtr Cloud tags only HEAD and the PUT body, never the GET, so
+        ;; fall back to the PUT's tag.  A foreign write between PUT and GET
+        ;; leaves that tag older than MERGED: the next HEAD misses and runs a
+        ;; full cycle, never a wrong noop.
         (mindwtr-shadow-commit
-         merged (plist-get got :etag)
+         merged (or (plist-get got :etag) (plist-get put-resp :etag))
          (unless save-failed
            (append '(notes fields)
                    (and (mindwtr-sync-cycle-archive-active cycle) '(archive)))))

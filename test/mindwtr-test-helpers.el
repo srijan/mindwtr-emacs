@@ -60,15 +60,15 @@ also compares timestamps and repairs references; this is the part a test of
 (defun mindwtr-test-server-http (server)
   "Return the `mindwtr-api-http-function' adapter for SERVER.
 A PUT merges into the state by revision (`mindwtr-test-server--merge') and
-advances the tag; HEAD and GET report the current tag."
+advances the tag.  Like Mindwtr Cloud, HEAD and the PUT body report the tag
+and GET carries none."
   (lambda (req)
     (push (plist-get req :method) (mindwtr-test-server-requests server))
     (pcase (plist-get req :method)
       ("HEAD" (list :status 200
                     :headers (list (cons "ETag" (mindwtr-test-server-etag server)))
                     :body ""))
-      ("GET" (list :status 200
-                   :headers (list (cons "ETag" (mindwtr-test-server-etag server)))
+      ("GET" (list :status 200 :headers nil
                    :body (mindwtr-util-json-ascii (mindwtr-test-server-state server))))
       ("PUT" (let ((body (plist-get req :body)))
                (setf (mindwtr-test-server-last-put server) body
@@ -78,7 +78,9 @@ advances the tag; HEAD and GET report the current tag."
                      (mindwtr-test-server-etag server)
                      (format "v%d" (1+ (string-to-number
                                         (substring (mindwtr-test-server-etag server) 1)))))
-               (list :status 200 :headers nil :body "{\"ok\":true,\"stats\":{}}"))))))
+               (list :status 200 :headers nil
+                     :body (format "{\"ok\":true,\"stats\":{},\"etag\":%S}"
+                                   (mindwtr-test-server-etag server))))))))
 
 ;;; One-form sync environment
 

@@ -534,8 +534,8 @@ EDIT takes and returns an AppData plist."
 
 (defun mindwtr-smoke--idle-sync (label)
   "Run a sync that follows no local edit; PASS when it changes nothing.
-Nothing proposed by this device, and no entity's revision moved on the
-server.  (A full cycle's PUT echoes the snapshot; an echo bumps no rev.)"
+The cycle is a HEAD-only noop (the tag kept from the last cycle still
+matches), nothing is proposed, and no entity's revision moved on the server."
   (let* ((before (mindwtr-smoke--revs))
          (r (mindwtr-sync-once (current-buffer) (mindwtr-smoke--now)))
          (after (mindwtr-smoke--revs))
@@ -543,9 +543,10 @@ server.  (A full cycle's PUT echoes the snapshot; an echo bumps no rev.)"
          bumped)
     (maphash (lambda (id rev) (unless (equal rev (gethash id before)) (push id bumped)))
              after)
-    (if (and (plist-get r :ok) (null proposed) (null bumped))
+    (if (and (plist-get r :noop) (null proposed) (null bumped))
         (mindwtr-smoke-pass label)
-      (mindwtr-smoke-fail label (format "proposed %S; revs moved on %S" proposed bumped)))))
+      (mindwtr-smoke-fail label (format "noop %S; proposed %S; revs moved on %S"
+                                        (plist-get r :noop) proposed bumped)))))
 
 (defun mindwtr-smoke-phase-idle-after-foreign-change ()
   "Pull another client's change, then check the next sync pushes nothing.

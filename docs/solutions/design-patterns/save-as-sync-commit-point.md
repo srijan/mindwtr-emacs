@@ -81,7 +81,7 @@ and so must never save:
 ;; the rebuild marks modified whenever the render changed text (an unchanged
 ;; buffer is a save-buffer no-op) -- never runs on :noop.  Closes the loop that keeps the gate from wedging.
 (let ((save-failed (mindwtr-sync--save-surfaces surfaces)))   ; quiet-save t per surface
-  (mindwtr-shadow-commit merged (plist-get got :etag)
+  (mindwtr-shadow-commit merged (or (plist-get got :etag) (plist-get put-resp :etag))
                          (unless save-failed <latches>))
   ... :save-failed save-failed)
 ```

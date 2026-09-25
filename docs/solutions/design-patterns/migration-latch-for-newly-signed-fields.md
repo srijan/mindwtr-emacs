@@ -95,7 +95,7 @@ and after `mindwtr-sync--finish` reconciles and saves every surface, `mindwtr-sh
 ```elisp
 (let ((save-failed (mindwtr-sync--save-surfaces surfaces)))
   (mindwtr-shadow-commit
-   merged (plist-get got :etag)
+   merged (or (plist-get got :etag) (plist-get put-resp :etag))
    (unless save-failed
      (append '(notes fields)
              (and (mindwtr-sync-cycle-archive-active cycle) '(archive))))))
