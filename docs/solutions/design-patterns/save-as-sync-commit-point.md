@@ -24,7 +24,8 @@ tags: [emacs, org-mode, auto-sync, buffer-modified-p, auto-save, echo-suppressio
 
 ## Context
 `mindwtr--auto-sync` fires on save, focus, and a 600s periodic timer. Every full cycle ends in
-`mindwtr-reconcile-buffer`, which does an `erase-buffer` + `insert` full rebuild
+`mindwtr-reconcile-buffer`, which rebuilds the whole buffer from a fresh render (originally
+`erase-buffer` + `insert`; since `353b301` a `replace-buffer-contents` diff)
 (see [[preserving-buffer-view-state-across-reconcile]]). If a background sync fires while the
 user has *stable, unsaved* edits, it yanks the buffer out from under them — discarding
 in-progress typing and reflowing the buffer mid-edit. The companion fix (an earlier PR) hardened
@@ -33,7 +34,8 @@ the disruptive rebuild largely stops firing mid-edit at all.
 
 The natural fix is to gate auto-sync on `buffer-modified-p`: stand down whenever the synced
 buffer has unsaved edits. But that gate, **alone, self-wedges.** The reconcile rebuild itself
-(`erase` + `insert`) always marks the buffer modified. So the first successful sync leaves the
+marks the buffer modified whenever the render changed any text (with the original
+`erase` + `insert`, on every cycle). So the first successful sync leaves the
 buffer dirty, the gate then reads `buffer-modified-p` as true on every subsequent tick, and
 auto-sync never runs again. The gate is only correct when paired with an auto-save *after* the
 content-changing reconcile — establishing a clean **"save = commit point"** contract.
@@ -76,8 +78,8 @@ and so must never save:
 (dolist (s surfaces)
   (with-current-buffer (plist-get s :buffer)
     (mindwtr-reconcile-buffer merged (plist-get s :render))))
-;; erase+insert always marks modified, so this always writes on a full cycle --
-;; never on :noop.  Closes the loop that keeps the gate from wedging.
+;; the rebuild marks modified whenever the render changed text (an unchanged
+;; buffer is a save-buffer no-op) -- never runs on :noop.  Closes the loop that keeps the gate from wedging.
 (let ((save-failed (mindwtr-sync--save-surfaces surfaces)))   ; quiet-save t per surface
   (mindwtr-shadow-commit merged (plist-get got :etag)
                          (unless save-failed <latches>))
@@ -210,7 +212,7 @@ The steady-state loop the contract produces:
 ```
 edit  -> buffer dirty -> auto-sync stands down (gate)      [in-progress work is safe]
 save  (C-x C-s) -> after-save-hook -> debounce -> auto-sync
-sync cycle -> reconcile rebuild (erase+insert -> dirty)
+sync cycle -> reconcile rebuild (render changed text -> dirty)
            -> engine quiet-save (content-protected, echo-suppressed) -> clean
 next tick -> gate sees clean buffer -> free to run
 ```
@@ -236,7 +238,7 @@ Before/after of the trigger contract:
 - The rebuild-side counterpart that makes the rebuild less jarring when it *does* fire is
   [[preserving-buffer-view-state-across-reconcile]] (trigger-side vs. rebuild-side defenses).
 - Full signature-diffed incremental reconciliation (issue #3) would eliminate the full
-  `erase`/rebuild this contract works around. Pre-sync buffer backup verification is issue #4.
+  rebuild this contract works around. Pre-sync buffer backup verification is issue #4.
 - `test/mindwtr-sync-test.el`, `test/mindwtr-test.el` — quiet-save happy/skip/error paths,
   debounce suppression, the gate truth table and all guard interactions, `:noop`-never-writes,
   save-failure isolation + error-state signalling, manual save-then-sync, bootstrap echo

@@ -341,10 +341,11 @@ in-progress edits, so an automatic sync is free to run and rebuild)."
 Capture inserts its template into the target buffer immediately and the user
 edits it through an indirect buffer whose region markers point into that
 text.  A cycle firing meanwhile PUTs the half-typed entry and then rebuilds
-the buffer (`erase-buffer' + re-render), which leaves those markers pointing
-at unrelated text: `C-c C-c' then re-inserts a stale region (it lands under
-* Sync Failures as an untyped orphan) and `C-c C-k' DELETES whatever the
-stale region now covers.
+the buffer from a fresh render, which leaves those markers pointing at
+unrelated text -- still so with the `replace-buffer-contents' diff, since the
+half-typed entry is exactly the text the render rewrites: `C-c C-c' then
+re-inserts a stale region (it lands under * Sync Failures as an untyped
+orphan) and `C-c C-k' DELETES whatever the stale region now covers.
 
 The unsaved-edits gate does not cover this.  Any external auto-saver that
 writes the file mid-capture (several resolve an indirect buffer to its base

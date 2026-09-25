@@ -1147,8 +1147,9 @@ a process sentinel on the async path)."
       ;; each live task's LOGBOOK sum as :mw-clock-synced first (KTD12).
       (mindwtr-sync--overlay-clock-baseline merged local)
       ;; Per-surface reconcile, each with its own render function, then
-      ;; return each buffer to clean on disk (an erase+insert always marks it
-      ;; modified, so this always writes on a full cycle).
+      ;; return each buffer to clean on disk (the rebuild marks it modified
+      ;; whenever the render changed its text; an unchanged buffer is a
+      ;; `save-buffer' no-op).
       (dolist (s surfaces)
         (with-current-buffer (plist-get s :buffer)
           (mindwtr-reconcile-buffer merged (plist-get s :render))))

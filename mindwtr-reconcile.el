@@ -429,7 +429,7 @@ A no-op when ORPHANS is empty, so a clean sync produces no quarantine heading
 (defun mindwtr-reconcile--running-clock-id ()
   "Return the MW_ID of the entry holding the running clock in this buffer.
 Org tracks the active clock with `org-clock-hd-marker'/`org-clock-marker'.  A
-full buffer rebuild (`erase-buffer') detaches those markers -- the CLOCK text is
+full buffer rebuild can move those markers off their entry -- the CLOCK text is
 preserved as org-only body, but the in-memory clock state collapses to
 `point-min', so a later clock-out lands on the wrong line.  Returns the id so
 the markers can be re-pointed after the rebuild; nil when no clock runs here."
@@ -517,7 +517,7 @@ silently erased."
   ;; "restore nothing", strictly safer than aborting (R4).
   (let ((view (condition-case nil (mindwtr-reconcile--snapshot-view)
                 (error nil)))
-        ;; Capture the running clock's entry id before `erase-buffer' detaches
+        ;; Capture the running clock's entry id before the rebuild can move
         ;; org's clock markers, so they can be re-pointed at the rebuilt entry.
         (clock-id (mindwtr-reconcile--running-clock-id)))
     (mindwtr-parse-ensure-keywords)
