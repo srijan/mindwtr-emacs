@@ -88,6 +88,8 @@ Only the `WAIT` state needed the guard because it is the only keyword that colli
   (should-not (member "Blocked proj" hits)))   ; project excluded
 ```
 
+  This match-string test pins only the block's `+MW_TYPE="task"` query. It cannot see skip functions or block-level settings, so it once kept passing while asserting behaviour the built view no longer had. For any rule that is not part of the match string, build the view and assert on its lines; see [Agenda skip rules: the global hook composes, the block hook replaces](../design-patterns/agenda-skip-rules-global-hook-composes-block-hook-replaces.md).
+
 ## Related Issues
 
 - [A new in-project task should default to NEXT, not INBOX](new-in-project-task-defaults-to-next.md) -- sibling learning rooted in the same GTD rule that project status and task status are distinct dimensions; that doc handles the sync-default angle, this one the agenda-query angle.
