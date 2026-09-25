@@ -155,15 +155,18 @@ equivalents for Mindwtr headings:
 
 Tasks and projects have **disjoint** valid keyword sets:
 
-- **Task statuses**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `DONE` `ARCH`
-- **Project statuses**: `ACTIVE` `WAIT` `SOMEDAY` `ARCH`
+- **Task statuses**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `DONE` `ARCH` `CANCELLED`
+- **Project statuses**: `ACTIVE` `WAIT` `SOMEDAY` `ARCH` `CANCELLED`
+
+`CANCELLED` is Mindwtr's cancel: archived, with the cancellation time on the
+`CLOSED:` line (stamped at sync if `org-log-done` is off).
 
 This means you can never accidentally apply a task-only keyword (`INBOX`, `NEXT`,
 `REF`, `DONE`) to a project, or a project-only keyword (`ACTIVE`) to a task.
 
 **Immediate relocation.** After a status change, a standalone task or a project
 is moved to the bucket matching its new status right away — no need to wait for
-the next sync. Setting `ARCH` (with the archive surface active) refiles the
+the next sync. Setting `ARCH` or `CANCELLED` (with the archive surface active) refiles the
 heading into the archive file immediately instead (see "The archive file"); a
 task inside a project and a section heading are left in place (they have no
 independent bucket to relocate to).
@@ -309,6 +312,7 @@ GTD flowchart's outcomes as the answers:
 | `a` | Add to existing project | Native `org-refile`, project headings as the only targets |
 | `s` | Someday/Maybe | `SOMEDAY`, into the Someday bucket |
 | `r` | Reference | `REF`, into Reference |
+| `c` | Cancel | `CANCELLED` with a `CLOSED` stamp; refiles into the archive file like trash |
 | `x` | Trash | `ARCH`; refiles into the archive file immediately (or, with the surface inactive, keeps its place until the next sync) |
 
 A decision first writes the WIP edits back onto the source item (matched by
@@ -468,10 +472,10 @@ Field mapping:
 | `- [ ]` / `- [X]` lines | `checklist` items |
 | `SCHEDULED:` | `startTime` |
 | `DEADLINE:` | `dueDate` |
-| `CLOSED:` | `completedAt` |
+| `CLOSED:` | `completedAt` (`cancelledAt` on a `CANCELLED` heading) |
 
 **TODO keywords**: `INBOX` `NEXT` `WAIT` `SOMEDAY` `REF` `ACTIVE` (active
-states) and `DONE` `ARCH` (done states). Not all keywords are valid for every
+states) and `DONE` `ARCH` `CANCELLED` (done states). Not all keywords are valid for every
 entity type — see "Working the file" above for the per-type breakdown.
 
 Additional task properties with no native org form are stored in the drawer.

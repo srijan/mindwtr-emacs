@@ -253,12 +253,13 @@ covers calendar items too -- same NEXT + startTime shape in the model)."
                (save-excursion (org-end-of-subtree t t) (point)) t)))))
 
 (ert-deftest mindwtr-clarify-someday-reference-trash ()
-  "[s] -> someday bucket, [r] -> reference bucket, [x] -> ARCH in place
-(archived has no bucket on purpose; the next sync drops it)."
+  "[s] -> someday bucket, [r] -> reference bucket, [x] -> ARCH and [c] ->
+CANCELLED in place (archived has no bucket on purpose; the next sync drops it)."
   (pcase-dolist (`(,key ,list ,kw)
                  '((?s "someday-single-actions" "SOMEDAY")
                    (?r "reference" "REF")
-                   (?x "inbox" "ARCH")))
+                   (?x "inbox" "ARCH")
+                   (?c "inbox" "CANCELLED")))
     (mindwtr-clarify-test--with-appdata
         '(:areas nil :projects nil :sections nil
           :tasks ((:id "t1" :title "One" :status "inbox"))
@@ -640,9 +641,9 @@ clarified to single-actions, One is neither loaded nor moved."
     (should-error (mindwtr-clarify-this-item) :type 'user-error)))
 
 (ert-deftest mindwtr-clarify-trash-refiles-to-archive-when-active ()
-  "Covers R5.  With the archive surface active, clarify trash refiles the item
-into the archive file (it leaves the source buffer) and the session advances to
-the next inbox item -- the id-based queue skips the vanished heading."
+  "Covers R5.  With the archive surface active, clarify trash and cancel refile
+the item into the archive file (it leaves the source buffer) and the session
+advances to the next inbox item -- the id-based queue skips the vanished heading."
   (let* ((root (make-temp-file "mw-clar-arch" t))
          (apath (expand-file-name "arch.org" root))
          (mindwtr-archive-file apath)
@@ -655,19 +656,21 @@ the next inbox item -- the id-based queue skips the vanished heading."
               :settings nil)
           (mindwtr-clarify)
           (mindwtr-clarify-test--press ?x)
-          ;; the session advanced to the next inbox item
-          (with-current-buffer (mindwtr-clarify-test--wip)
-            (should (string= mindwtr-clarify--source-id "t2")))
+          (mindwtr-clarify-test--press ?c)
+          ;; the session advanced past both items
+          (should-not (get-buffer mindwtr-clarify--wip-buffer-name))
           ;; the trashed item left the source buffer ... (case-sensitive: the
           ;; #+TODO keyword line contains "DONE", which case-folds to match "One")
           (with-current-buffer src
             (goto-char (point-min))
             (let ((case-fold-search nil))
               (should-not (search-forward "One" nil t))))
-          ;; ... and landed under * Archive with ARCH
+          ;; ... and landed under * Archive with ARCH; the cancelled one as
+          ;; CANCELLED with its CLOSED stamp, whatever `org-log-done' says
           (with-current-buffer (mindwtr-archive-buffer)
             (goto-char (point-min))
-            (should (re-search-forward "ARCH One" nil t))))
+            (should (re-search-forward "ARCH One" nil t))
+            (should (re-search-forward "CANCELLED Two\nCLOSED: \\[" nil t))))
       (let ((b (find-buffer-visiting apath)))
         (when b (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
       (delete-directory root t))))

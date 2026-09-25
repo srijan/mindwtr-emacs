@@ -217,19 +217,15 @@ Upstream's `isSequentialChainStatus': next or waiting.  WAIT is in because a
 delegated step is committed and genuinely blocks the ones after it.  A step
 outside the chain can still compete, but only by being focused or review-due
 -- which pool it is drawn from is `mindwtr-agenda--eligible-keywords' rule,
-not this one.
-
-Known gap: a task the server cancelled keeps whatever keyword it had, because
-`:cancelledAt' is recognized-only and never rendered, so a cancelled NEXT step
-still holds the slot.  Fixable only by surfacing that field.")
+not this one.")
 
 (defconst mindwtr-agenda--eligible-keywords '("INBOX" "NEXT" "WAIT" "SOMEDAY")
   "TODO keywords a task must carry to compete for a sequential project's slot.
 Upstream `FOCUS_ELIGIBILITY_ACTIVE_STATUSES' (core `task-utils.ts'), which
-filters the candidate pool BEFORE anything is scored.  DONE/ARCH are finished
-and REF is not an action, so none of them can hold a slot -- not even carrying
-a stale MW_REVIEW_AT or MW_FOCUS_TODAY, which would otherwise hand a completed
-step the slot and freeze the project for good.")
+filters the candidate pool BEFORE anything is scored.  DONE/ARCH/CANCELLED
+are finished and REF is not an action, so none of them can hold a slot -- not
+even carrying a stale MW_REVIEW_AT or MW_FOCUS_TODAY, which would otherwise
+hand a completed step the slot and freeze the project for good.")
 
 (defconst mindwtr-agenda--iso-re
   (concat "\\`[0-9]\\{4\\}\\(?:-[0-9]\\{2\\}\\(?:-[0-9]\\{2\\}"

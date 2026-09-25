@@ -135,7 +135,7 @@
       '(:areas nil
         :projects ((:id "p1" :title "PCyc" :status "active")) :sections nil
         :tasks nil :settings nil)
-    (let ((valid '("ACTIVE" "SOMEDAY" "WAIT" "ARCH")))
+    (let ((valid '("ACTIVE" "SOMEDAY" "WAIT" "ARCH" "CANCELLED")))
       (dotimes (_ 6)
         (goto-char (point-min)) (re-search-forward "PCyc") (org-back-to-heading t)
         (mindwtr-cycle-status-forward)

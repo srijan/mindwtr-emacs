@@ -138,7 +138,8 @@ dynamic binding of the directory (as the tests do) takes effect immediately.")
 (defconst mindwtr-shadow-latches
   '((notes . "notes-migrated")
     (fields . "fields-migrated")
-    (archive . "archive-migrated"))
+    (archive . "archive-migrated")
+    (cancel . "cancel-migrated"))
   "The one-way, per-client Migration latches, as (NAME . MARKER-FILE).
 
 Each records \"this client has rendered X at least once\" and guards the
@@ -153,6 +154,9 @@ the server value) rather than \"the user cleared it\" (push the empty value).
            MW_FOCUSED; `mindwtr-model-protected-boolean-fields').  Same false-
            empty seam; `:reviewAt' is deliberately NOT covered, it always
            rendered.
+  cancel   task/project `:cancelledAt' (the CANCELLED keyword).  Older
+           renders showed a cancelled item as a plain ARCH, which parses
+           with no cancellation; that must not clear the server's.
   archive  the Archive surface has been rendered AND saved once.  Before
            that, an archived entity absent from local state is the not-yet-
            rendered backlog and must be echoed, never tombstoned (R8); after,

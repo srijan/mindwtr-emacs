@@ -43,13 +43,13 @@ Return the chosen keyword string, or nil on quit."
 ;;;###autoload
 (defun mindwtr-commands--route-after-keyword (kind keyword)
   "Place the KIND entity at point after its keyword changed to KEYWORD.
-ARCH with the archive surface active refiles the heading into the archive file
-now (R5, best-effort per R7); any other keyword -- or ARCH with the surface
-inactive -- relocates within the main file.  The single home for this routing,
-so every keyword-setting command (`mindwtr-set-status' and
+ARCH or CANCELLED with the archive surface active refiles the heading into the
+archive file now (R5, best-effort per R7); any other keyword -- or either one
+with the surface inactive -- relocates within the main file.  The single home
+for this routing, so every keyword-setting command (`mindwtr-set-status' and
 `mindwtr-commands--cycle') stays in lockstep instead of each re-deciding where
 an ARCH'd heading goes."
-  (if (and (string= keyword "ARCH") (mindwtr-archive-path))
+  (if (and (member keyword '("ARCH" "CANCELLED")) (mindwtr-archive-path))
       (mindwtr-archive-refile-best-effort)
     (mindwtr-commands--relocate kind)))
 

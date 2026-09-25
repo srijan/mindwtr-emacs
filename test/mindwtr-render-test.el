@@ -311,8 +311,14 @@ PROPERTIES :END:, like a task description."
             (:id "t3" :title "Done child" :status "done" :sectionId "s1")
             (:id "t4" :title "Archived child" :status "archived" :projectId "parch")
             (:id "tlive" :title "Still active" :status "next")
-            (:id "ttomb" :title "Gone" :status "archived" :deletedAt "2026-06-01T00:00:00Z"))
+            (:id "ttomb" :title "Gone" :status "archived" :deletedAt "2026-06-01T00:00:00Z")
+            (:id "tcan" :title "Cancelled task" :status "archived"
+             :cancelledAt "2026-05-01T09:30:00Z")
+            (:id "tcanc" :title "Cancelled child" :status "archived" :projectId "pcan"
+             :cancelledAt "2026-05-02T10:00:00Z"))
     :projects ((:id "parch" :title "Archived Project" :status "archived")
+               (:id "pcan" :title "Cancelled Project" :status "archived"
+                :cancelledAt "2026-05-02T10:00:00Z")
                (:id "plive" :title "An Active Project" :status "active"))
     :sections ((:id "s1" :projectId "parch" :title "Phase 1"))
     :areas nil :settings nil)
@@ -336,6 +342,10 @@ archived project subtree with its done child; live + tombstoned absent."
     (should (string-match-p "^\\*\\*\\*\\* DONE Done child" text))
     ;; archived section-less child of the archived project at level 3
     (should (string-match-p "^\\*\\*\\* ARCH Archived child" text))
+    ;; cancelled: the keyword, with cancelledAt on CLOSED (tasks and projects)
+    (should (string-match-p "^\\*\\* CANCELLED Cancelled task\nCLOSED: \\[2026-05-01" text))
+    (should (string-match-p "^\\*\\* CANCELLED Cancelled Project\nCLOSED: \\[2026-05-02" text))
+    (should (string-match-p "^\\*\\*\\* CANCELLED Cancelled child\nCLOSED: " text))
     ;; live and tombstoned entities never appear
     (should-not (string-match-p "Still active" text))
     (should-not (string-match-p "Gone" text))
@@ -357,7 +367,12 @@ archived project subtree with its done child; live + tombstoned absent."
                      (let ((org-inhibit-startup t)) (insert text1) (org-mode))
                      (mindwtr-parse-buffer)))
          (text2 (mindwtr-render-archive-appdata reparsed)))
-    (should (string= text1 text2))))
+    (should (string= text1 text2))
+    ;; CLOSED reads back as cancelledAt, never as a completion time
+    (let ((tc (seq-find (lambda (e) (equal (plist-get e :id) "tcan"))
+                        (plist-get reparsed :tasks))))
+      (should (equal (plist-get tc :cancelledAt) "2026-05-01T09:30:00Z"))
+      (should-not (plist-get tc :completedAt)))))
 
 (ert-deftest mindwtr-render-archive-area-round-trips-with-main-map ()
   "An archived task's area survives render -> parse -> render when the parse

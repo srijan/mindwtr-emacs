@@ -253,7 +253,14 @@ type was inferred from context).  When omitted it is read from the
           ;; so a stray keyword no longer aborts the whole sync.  Record it so
           ;; the sync report can surface it (see `mindwtr-parse-warnings').
           (push (list :id id :title title :keyword todo :kind kind)
-                mindwtr-parse--warnings)))))
+                mindwtr-parse--warnings))))
+      ;; CANCELLED is archived plus `:cancelledAt', carried on CLOSED (render
+      ;; writes it there).  `:mw-cancelled' marks the keyword so sync can stamp
+      ;; a heading cancelled with no CLOSED line (`mindwtr-sync--stamp-cancelled').
+      (when (equal todo "CANCELLED")
+        (let ((c (mindwtr-parse--planning-iso "CLOSED: *\\(\\[[^]]+\\]\\)")))
+          (setq e (plist-put e :mw-cancelled t))
+          (when c (setq e (plist-put e :cancelledAt c))))))
     (when (eq kind 'task)
       (let* ((body (mindwtr-parse--body t))
              (pr (nth 3 (org-heading-components))))
@@ -279,7 +286,8 @@ type was inferred from context).  When omitted it is read from the
               (c (mindwtr-parse--planning-iso "CLOSED: *\\(\\[[^]]+\\]\\)")))
           (when s (setq e (plist-put e :startTime s)))
           (when d (setq e (plist-put e :dueDate d)))
-          (when c (setq e (plist-put e :completedAt c))))
+          (when (and c (not (equal todo "CANCELLED")))
+            (setq e (plist-put e :completedAt c))))
         (dolist (p '(("MW_ENERGY" . :energyLevel) ("MW_TIME_ESTIMATE" . :timeEstimate)
                      ("MW_ASSIGNED_TO" . :assignedTo) ("MW_LOCATION" . :location)
                      ("MW_TASK_MODE" . :taskMode)))

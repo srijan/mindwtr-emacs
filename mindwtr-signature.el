@@ -19,7 +19,7 @@
 (defconst mindwtr-signature--set-fields '(:tags :contexts)
   "Fields whose list value is a set (order-insensitive).")
 
-(defconst mindwtr-signature--datetime-fields '(:startTime :dueDate :completedAt :reviewAt)
+(defconst mindwtr-signature--datetime-fields '(:startTime :dueDate :completedAt :cancelledAt :reviewAt)
   "Content fields holding ISO datetimes.
 Coarsened to minute precision for signing, because org timestamps cannot
 represent sub-minute values and so the seconds never round-trip.")

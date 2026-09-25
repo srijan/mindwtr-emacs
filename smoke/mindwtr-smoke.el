@@ -607,7 +607,20 @@ throwaway server (MINDWTR_SMOKE_THROWAWAY, set by `make smoke-docker')."
                   (if (equal (plist-get tk :areaId) area-id)
                       (mindwtr-smoke-pass "archived task keeps its area on the server")
                     (mindwtr-smoke-fail "archived task keeps its area on the server"
-                                        (format "areaId %S" (plist-get tk :areaId)))))))
+                                        (format "areaId %S" (plist-get tk :areaId)))))
+                ;; The other client turns the archive into a cancel: it renders
+                ;; as CANCELLED and the next sync pushes nothing.
+                (mindwtr-smoke--foreign-put
+                 (lambda (ad) (mindwtr-smoke--edit-entity ad :tasks task-id
+                                                          :completedAt nil
+                                                          :cancelledAt (mindwtr-smoke--now))))
+                (mindwtr-sync-once (current-buffer) (mindwtr-smoke--now))
+                (with-current-buffer (mindwtr-archive-buffer)
+                  (goto-char (point-min))
+                  (if (re-search-forward "^\\*+ CANCELLED \\[mw-smoke\\] idle caf" nil t)
+                      (mindwtr-smoke-pass "a foreign cancel renders as CANCELLED")
+                    (mindwtr-smoke-fail "a foreign cancel renders as CANCELLED" "not found")))
+                (mindwtr-smoke--idle-sync "idle sync after pulling a foreign cancel pushes nothing")))
           (error (mindwtr-smoke-fail "idle-after-foreign-change (error)"
                                      (error-message-string err))))
       ;; Cleanup as the other client: tombstone what this phase created.

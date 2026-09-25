@@ -97,7 +97,7 @@ run of clean syncs."
        (unwind-protect
            (mindwtr-test-with-sync-env
                (:server ,srv :initial state :shadow state :etag "v1"
-                :latches '(notes fields archive))
+                :latches '(notes fields archive cancel))
              (with-temp-file mindwtr-file
                (insert (mindwtr-render-appdata state)))
              (with-temp-file (mindwtr-archive-path)
@@ -150,6 +150,9 @@ HEAD-only noop.  Every other case below builds on this."
     ("rename an area" :areas "a1" :name "Office")
     ("move a project to another area" :projects "p1" :areaId "a2")
     ("park a project" :projects "p1" :status "someday")
+    ("cancel a task" :tasks "t3" :status "archived" :cancelledAt "2026-06-10T00:00:00Z")
+    ("cancel a project" :projects "p1" :status "archived"
+     :cancelledAt "2026-06-10T00:00:00Z")
     ("delete a task" :tasks "t3" :deletedAt "2026-06-10T00:00:00Z")
     ("capture a task with area and contexts" :tasks nil
      :id "t9" :title "Call the bank" :status "inbox" :areaId "a1"
@@ -276,6 +279,61 @@ its completion time, nothing else."
                         (with-current-buffer mindwtr-clarify--wip-buffer-name
                           (mindwtr-clarify-decide)))))
                    '(("t2" :completedAt :status))))))
+
+(ert-deftest mindwtr-invariant-cancel-pushes-only-status-and-time ()
+  "Cancelling a task pushes archived and its cancellation time, nothing else --
+with org stamping CLOSED, and with `org-log-done' off (sync stamps it)."
+  (dolist (log-done '(time nil))
+    (mindwtr-invariant-test--with-synced (srv)
+      (should (equal (mindwtr-invariant-test--edit
+                      srv "Quote from Sam"
+                      (lambda () (let ((org-log-done log-done)) (org-todo "CANCELLED"))))
+                     '(("t3" :cancelledAt :status))))
+      (let ((t3 (seq-find (lambda (e) (equal (plist-get e :id) "t3"))
+                          (plist-get (mindwtr-test-server-state srv) :tasks))))
+        (should (equal (plist-get t3 :status) "archived"))
+        (should (stringp (plist-get t3 :cancelledAt)))))))
+
+(defconst mindwtr-invariant-test--cancelled
+  (mindwtr-invariant-test--remote-edit mindwtr-invariant-test--base :tasks "t4"
+                                       :completedAt nil
+                                       :cancelledAt "2026-02-01T08:00:00Z")
+  "The base state with archived t4 cancelled rather than completed.")
+
+(defun mindwtr-invariant-test--server-task (srv id)
+  (seq-find (lambda (e) (equal (plist-get e :id) id))
+            (plist-get (mindwtr-test-server-state srv) :tasks)))
+
+(ert-deftest mindwtr-invariant-cancelled-without-closed-keeps-its-time ()
+  "Deleting a cancelled item's CLOSED line is not an edit: sync keeps the
+cancellation time it already had and renders the line back."
+  (mindwtr-invariant-test--with-synced (srv mindwtr-invariant-test--cancelled)
+    (with-current-buffer (mindwtr-archive-buffer)
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ CANCELLED Old errand\n")
+      (should (looking-at "CLOSED: .*\n"))
+      (replace-match "")
+      (save-buffer))
+    (let ((r (mindwtr-invariant-test--sync srv)))
+      (should (plist-get (car r) :noop)))))
+
+(ert-deftest mindwtr-invariant-cancel-latch-protects-old-renders ()
+  "Before the cancel latch is set, a cancelled item an older render showed as
+plain ARCH (no cancellation) must not clear the server's cancellation; the
+first full cycle renders CANCELLED and sets the latch."
+  (mindwtr-invariant-test--with-synced (srv mindwtr-invariant-test--cancelled)
+    (mindwtr-shadow--delete "cancel-migrated")
+    (with-temp-file (mindwtr-archive-path)
+      (insert (mindwtr-render-archive-appdata
+               (mindwtr-invariant-test--remote-edit
+                (mindwtr-test-server-state srv) :tasks "t4" :cancelledAt nil))))
+    (should (plist-get (car (mindwtr-invariant-test--sync srv)) :ok))
+    (should (equal (plist-get (mindwtr-invariant-test--server-task srv "t4") :cancelledAt)
+                   "2026-02-01T08:00:00Z"))
+    (should (memq 'cancel (mindwtr-shadow-latched-names)))
+    (with-current-buffer (mindwtr-archive-buffer)
+      (goto-char (point-min))
+      (should (re-search-forward "^\\*+ CANCELLED Old errand$" nil t)))))
 
 (provide 'mindwtr-invariant-test)
 ;;; mindwtr-invariant-test.el ends here

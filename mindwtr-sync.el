@@ -375,7 +375,8 @@ which leaves task status untouched when a project becomes someday."
 
 (defun mindwtr-sync-build-candidate (local shadow device-id now
                                            &optional protect-empty-notes
-                                           protect-empty-fields)
+                                           protect-empty-fields
+                                           protect-empty-cancel)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW.
 PROTECT-EMPTY-NOTES and PROTECT-EMPTY-FIELDS gate the first-post-upgrade
 empty-protection passed to `mindwtr-sync--merge-content'.  PROTECT-EMPTY-NOTES
@@ -384,7 +385,9 @@ so an old renderer's note-less buffer does not clear a server-authored note
 (see `mindwtr-shadow-latched-p' (notes)).  PROTECT-EMPTY-FIELDS guards a kind's
 newly-signed booleans (task `:isFocusedToday'; project `:isSequential'
 /`:isFocused') against the same false-empty seam (see
-`mindwtr-shadow-latched-p' (fields)).  The two latches are independent; the
+`mindwtr-shadow-latched-p' (fields)).  PROTECT-EMPTY-CANCEL guards task and
+project `:cancelledAt', which older renders showed as a plain ARCH (see
+`mindwtr-shadow-latched-p' (cancel)).  The latches are independent; the
 union of their per-kind fields is passed to `merge-content'."
   ;; Guarantee non-null settings up front: a fresh namespace has none in its
   ;; shadow yet, and the server's settings merge 500s on a null blob.
@@ -408,7 +411,10 @@ union of their per-kind fields is passed to `merge-content'."
                     (let ((nf (mindwtr-model-notes-field kind)))
                       (and nf (list nf))))
                (and protect-empty-fields
-                    (mindwtr-model-protected-boolean-fields kind))))
+                    (mindwtr-model-protected-boolean-fields kind))
+               (and protect-empty-cancel
+                    (memq kind '(task project))
+                    '(:cancelledAt))))
              (seen (make-hash-table :test 'equal))
              out)
         (dolist (le (plist-get local key))
@@ -755,7 +761,7 @@ Classification per entity, in this order:
                            (mapcar
                             (lambda (e)
                               (mindwtr-util-plist-omit
-                               e '(:mw-kind :mw-extra-props
+                               e '(:mw-kind :mw-extra-props :mw-cancelled
                                    :mw-logbook-minutes :mw-clock-synced)))
                             (plist-get appdata key)))))
     out))
@@ -962,6 +968,30 @@ quarantines its heading under * Sync Failures instead of erasing it (see
         (setq out (plist-put out key (nreverse kept)))))
     (cons out (nreverse warnings))))
 
+(defun mindwtr-sync--stamp-cancelled (appdata shadow)
+  "Return APPDATA with every CANCELLED heading's `:cancelledAt' filled in.
+A heading set to CANCELLED without a CLOSED line (org-log-done off) parses
+with no timestamp: keep the shadow's cancellation time when it was already
+cancelled, else stamp now, as the app does.  Drops the parser's
+`:mw-cancelled' marker either way."
+  (let ((now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+        (out (copy-sequence appdata)))
+    (dolist (key '(:tasks :projects))
+      (let ((idx (mindwtr-shadow-index shadow key)))
+        (setq out
+              (plist-put
+               out key
+               (mapcar (lambda (e)
+                         (if (not (plist-get e :mw-cancelled)) e
+                           (let ((e (mindwtr-util-plist-omit e '(:mw-cancelled))))
+                             (if (plist-get e :cancelledAt) e
+                               (plist-put e :cancelledAt
+                                          (or (plist-get (gethash (plist-get e :id) idx)
+                                                         :cancelledAt)
+                                              now))))))
+                       (plist-get appdata key))))))
+    out))
+
 (defun mindwtr-sync--prepare (buffer)
   "Parse BUFFER's surfaces and compute this cycle's decision state (stage A).
 Pure CPU plus local state reads -- no network.  Returns the
@@ -982,7 +1012,7 @@ Pure CPU plus local state reads -- no network.  Returns the
            (surfaces (plist-get parsed :surfaces))
            (titled (mindwtr-sync--drop-blank-titles
                     (plist-get parsed :appdata) shadow))
-           (local (car titled))
+           (local (mindwtr-sync--stamp-cancelled (car titled) shadow))
            (parse-warnings (append (plist-get parsed :warnings) (cdr titled)))
            ;; Strict absence semantics (KTD5/KTD6) are eligible only when the
            ;; archive surface is active, its latch is set, AND the archive file
@@ -1095,9 +1125,11 @@ aborts with the server already updated."
               ;; `mindwtr-shadow-latches').
               (protect-empty-notes (not (mindwtr-sync-cycle-latched-p cycle 'notes)))
               (protect-empty-fields (not (mindwtr-sync-cycle-latched-p cycle 'fields)))
+              (protect-empty-cancel (not (mindwtr-sync-cycle-latched-p cycle 'cancel)))
               (candidate (mindwtr-sync-build-candidate local shadow device now
                                                        protect-empty-notes
-                                                       protect-empty-fields))
+                                                       protect-empty-fields
+                                                       protect-empty-cancel))
               ;; Write reconciled `timeSpentMinutes' onto tasks parsed this
               ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
               (candidate (mindwtr-sync--apply-clock-reconcile
@@ -1207,7 +1239,7 @@ a process sentinel on the async path)."
         (mindwtr-shadow-commit
          merged (or (plist-get got :etag) (plist-get put-resp :etag))
          (unless save-failed
-           (append '(notes fields)
+           (append '(notes fields cancel)
                    (and (mindwtr-sync-cycle-archive-active cycle) '(archive)))))
         (let ((result (list :ok t :conflicts conflicts :stats stats :skew skew
                             :warnings parse-warnings :incoming incoming

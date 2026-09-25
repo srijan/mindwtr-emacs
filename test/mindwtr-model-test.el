@@ -15,6 +15,17 @@
     (should (string= (mindwtr-model-status->keyword 'project (car pair)) (cdr pair)))
     (should (string= (mindwtr-model-keyword->status 'project (cdr pair)) (car pair)))))
 
+(ert-deftest mindwtr-model-cancelled-is-archived-plus-cancelledAt ()
+  "CANCELLED parses to archived; archived renders CANCELLED only when cancelled."
+  (dolist (kind '(task project))
+    (should (string= (mindwtr-model-keyword->status kind "CANCELLED") "archived"))
+    (should (string= (mindwtr-model-status->keyword kind "archived") "ARCH"))
+    (should (string= (mindwtr-model-status->keyword kind "archived" "2026-01-01T00:00:00Z")
+                     "CANCELLED")))
+  ;; a stray cancelledAt on a live status never turns it into CANCELLED
+  (should (string= (mindwtr-model-status->keyword 'task "next" "2026-01-01T00:00:00Z")
+                   "NEXT")))
+
 (ert-deftest mindwtr-model-priority-cookie-roundtrip ()
   (dolist (pair '(("urgent" . ?A) ("high" . ?B) ("medium" . ?C) ("low" . ?D)))
     (should (eq (mindwtr-model-priority->cookie (car pair)) (cdr pair)))
@@ -67,12 +78,13 @@
   "The in-buffer `#+TODO:' line carries every Mindwtr keyword, in order,
 with fast-access keys and the done-state separator."
   (should (string= (mindwtr-model-todo-keyword-line)
-                   "#+TODO: INBOX(i) NEXT(n) WAIT(w) SOMEDAY(s) REF(r) ACTIVE(a) | DONE(d) ARCH(x)")))
+                   "#+TODO: INBOX(i) NEXT(n) WAIT(w) SOMEDAY(s) REF(r) ACTIVE(a) | DONE(d) ARCH(x) CANCELLED(c)")))
 
 (ert-deftest mindwtr-model-todo-keyword-names-are-bare ()
   "The bare-name list has no fast-access keys and omits the `|' separator."
   (should (equal mindwtr-model-todo-keyword-names
-                 '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH")))
+                 '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH"
+                   "CANCELLED")))
   (should-not (member "|" mindwtr-model-todo-keyword-names)))
 
 (ert-deftest mindwtr-model-known-fields-covers-entity-types ()
@@ -162,11 +174,13 @@ with fast-access keys and the done-state separator."
 (ert-deftest mindwtr-model-status-choices-are-type-scoped-with-fast-keys ()
   (let ((task (mindwtr-model-status-choices 'task))
         (proj (mindwtr-model-status-choices 'project)))
-    ;; tasks expose i/n/w/s/r + d/x, never ACTIVE
+    ;; tasks expose i/n/w/s/r + d/x/c, never ACTIVE
     (should (equal task '(("INBOX" . ?i) ("NEXT" . ?n) ("WAIT" . ?w)
-                          ("SOMEDAY" . ?s) ("REF" . ?r) ("DONE" . ?d) ("ARCH" . ?x))))
-    ;; projects expose a/s/w + x, never INBOX/NEXT/REF/DONE
-    (should (equal proj '(("ACTIVE" . ?a) ("SOMEDAY" . ?s) ("WAIT" . ?w) ("ARCH" . ?x))))
+                          ("SOMEDAY" . ?s) ("REF" . ?r) ("DONE" . ?d) ("ARCH" . ?x)
+                          ("CANCELLED" . ?c))))
+    ;; projects expose a/s/w + x/c, never INBOX/NEXT/REF/DONE
+    (should (equal proj '(("ACTIVE" . ?a) ("SOMEDAY" . ?s) ("WAIT" . ?w) ("ARCH" . ?x)
+                          ("CANCELLED" . ?c))))
     (should-not (assoc "ACTIVE" task))
     (should-not (assoc "NEXT" proj))))
 

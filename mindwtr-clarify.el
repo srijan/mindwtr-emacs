@@ -25,6 +25,7 @@
 ;;   a  add to an existing project (native `org-refile', project targets)
 ;;   s  someday/maybe -> SOMEDAY
 ;;   r  reference -> REF
+;;   c  cancel: dropped, not done -> CANCELLED
 ;;   x  trash -> ARCH (dropped from the file on the next sync)
 ;;
 ;; A decision writes the WIP edits back to the source item (matched by
@@ -74,12 +75,12 @@ re-opened instead of the real next item.")
 (defvar-local mindwtr-clarify--source-id nil
   "MW_ID of the source item the WIP buffer holds a copy of.")
 
-(defconst mindwtr-clarify--outcome-keys '(?q ?n ?d ?t ?p ?a ?s ?r ?x))
+(defconst mindwtr-clarify--outcome-keys '(?q ?n ?d ?t ?p ?a ?s ?r ?c ?x))
 
 (defconst mindwtr-clarify--outcome-menu
   (concat "What is it?  [q]uick done  [n]ext action  [d]elegate  [t]ickler  "
           "[p]roject  [a]dd to project  |  [s]omeday  [r]eference  "
-          "[x] trash "))
+          "[c]ancel  [x] trash "))
 
 (defun mindwtr-clarify--show-entry ()
   "Reveal the body of the heading at point (cross-version).
@@ -266,9 +267,9 @@ buffer rewrites between items."
 
 (defun mindwtr-clarify--finalize (keyword)
   "Set KEYWORD on the task at point and relocate it to its status bucket.
-DONE gets a CLOSED stamp regardless of the user's `org-log-done' (the app
-records a completion time on done tasks; quick actions should sync one)."
-  (let ((org-log-done (and (string= keyword "DONE") 'time)))
+DONE and CANCELLED get a CLOSED stamp regardless of the user's
+`org-log-done' (the app records when a task was completed or cancelled)."
+  (let ((org-log-done (and (member keyword '("DONE" "CANCELLED")) 'time)))
     (org-todo keyword))
   (mindwtr-commands--relocate 'task))
 
@@ -345,17 +346,23 @@ at point in the source buffer.  Point is on the freshly written-back item."
         (mindwtr-clarify--refile))
     (?s (mindwtr-clarify--finalize "SOMEDAY"))
     (?r (mindwtr-clarify--finalize "REF"))
-    ;; Trash: ARCH.  With the archive surface active the heading refiles into
-    ;; the archive file right now (R5); the id-based session queue skips the
-    ;; vanished heading rather than re-presenting it.  Best-effort (R7): on
-    ;; failure the keyword stays ARCH and the next sync files it.  With the
-    ;; surface inactive, fall back to the legacy in-place finalize -- the
-    ;; heading keeps its place until the next sync drops archived tasks.
-    (?x (if (mindwtr-archive-path)
-            (progn
-              (save-excursion (org-back-to-heading t) (org-todo "ARCH"))
-              (mindwtr-archive-refile-best-effort))
-          (mindwtr-clarify--finalize "ARCH")))))
+    ;; Trash (ARCH) and cancel (CANCELLED).  With the archive surface active
+    ;; the heading refiles into the archive file right now (R5); the id-based
+    ;; session queue skips the vanished heading rather than re-presenting it.
+    ;; Best-effort (R7): on failure the keyword stays and the next sync files
+    ;; it.  With the surface inactive, fall back to the legacy in-place
+    ;; finalize -- the heading keeps its place until the next sync drops
+    ;; archived tasks.  Cancel always gets its CLOSED stamp (the app records
+    ;; when a task was cancelled).
+    ((or ?x ?c)
+     (let ((kw (if (eq ch ?c) "CANCELLED" "ARCH")))
+       (if (mindwtr-archive-path)
+           (progn
+             (save-excursion
+               (org-back-to-heading t)
+               (let ((org-log-done (and (eq ch ?c) 'time))) (org-todo kw)))
+             (mindwtr-archive-refile-best-effort))
+         (mindwtr-clarify--finalize kw))))))
 
 ;;; Commands
 
@@ -415,6 +422,7 @@ what the item is:
   a  add to an existing project (refile)
   s  someday/maybe                    -> SOMEDAY
   r  reference                        -> REF
+  c  cancel                           -> CANCELLED
   x  trash                            -> ARCH
 
 Actionable outcomes are followed by the shared prompts: contexts, and an

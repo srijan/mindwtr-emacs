@@ -22,14 +22,14 @@
 
 (defconst mindwtr-model-todo-keywords
   '((sequence "INBOX(i)" "NEXT(n)" "WAIT(w)" "SOMEDAY(s)" "REF(r)" "ACTIVE(a)"
-              "|" "DONE(d)" "ARCH(x)"))
+              "|" "DONE(d)" "ARCH(x)" "CANCELLED(c)"))
   "Canonical `org-todo-keywords' sequence for Mindwtr buffers.
 The single source of truth: `mindwtr-mode' and the parser both bind this,
 and `mindwtr-model-todo-keyword-line' renders it as the in-buffer header so
 the keywords are registered regardless of the user's global config.")
 
 (defconst mindwtr-model-todo-keyword-names
-  '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH")
+  '("INBOX" "NEXT" "WAIT" "SOMEDAY" "REF" "ACTIVE" "DONE" "ARCH" "CANCELLED")
   "Bare Mindwtr TODO keyword names (no fast-access keys, no `|').
 Used to test whether a buffer already has the full sequence registered.")
 
@@ -43,11 +43,11 @@ defines."
 (defconst mindwtr-model--task-status-keywords
   '(("inbox" . "INBOX") ("next" . "NEXT") ("waiting" . "WAIT")
     ("someday" . "SOMEDAY") ("reference" . "REF")
-    ("done" . "DONE") ("archived" . "ARCH")))
+    ("done" . "DONE") ("archived" . "ARCH") ("archived" . "CANCELLED")))
 
 (defconst mindwtr-model--project-status-keywords
   '(("active" . "ACTIVE") ("someday" . "SOMEDAY")
-    ("waiting" . "WAIT") ("archived" . "ARCH")))
+    ("waiting" . "WAIT") ("archived" . "ARCH") ("archived" . "CANCELLED")))
 
 (defconst mindwtr-model-list-roles
   '("inbox" "single-actions" "projects"
@@ -96,7 +96,7 @@ when it must not be rendered (e.g. `archived')."
 when it must not be rendered (e.g. `archived')."
   (cdr (assoc status mindwtr-model--project-status->list)))
 
-(defconst mindwtr-model-done-keywords '("DONE" "ARCH")
+(defconst mindwtr-model-done-keywords '("DONE" "ARCH" "CANCELLED")
   "TODO keywords that count as org `done' states.")
 
 (defun mindwtr-model--status-alist (kind)
@@ -105,10 +105,14 @@ when it must not be rendered (e.g. `archived')."
     ('project mindwtr-model--project-status-keywords)
     (_ (error "Unknown entity kind: %s" kind))))
 
-(defun mindwtr-model-status->keyword (kind status)
-  "Map STATUS string to its org TODO keyword for entity KIND."
-  (or (cdr (assoc status (mindwtr-model--status-alist kind)))
-      (error "Invalid %s status: %s" kind status)))
+(defun mindwtr-model-status->keyword (kind status &optional cancelled)
+  "Map STATUS string to its org TODO keyword for entity KIND.
+Cancelled is upstream's archived status plus a `:cancelledAt'; CANCELLED
+non-nil picks CANCELLED over ARCH for that status."
+  (if (and cancelled (equal status "archived"))
+      "CANCELLED"
+    (or (cdr (assoc status (mindwtr-model--status-alist kind)))
+        (error "Invalid %s status: %s" kind status))))
 
 (defun mindwtr-model-keyword->status (kind keyword)
   "Map org TODO KEYWORD back to a STATUS string for entity KIND."
@@ -164,7 +168,7 @@ each keyword is paired with its fast-access char from the shared sequence."
 
 (defconst mindwtr-model-content-fields
   '(:name :title :status :priority :contexts :tags :description :supportNotes
-    :checklist :startTime :dueDate :completedAt
+    :checklist :startTime :dueDate :completedAt :cancelledAt
     :areaId :projectId :sectionId
     :energyLevel :timeEstimate :assignedTo :location :taskMode
     :isFocusedToday :isSequential :isFocused :reviewAt
@@ -182,7 +186,8 @@ allow-listed; so is person `:note' (body prose) and `:referenceLink'
 allow-listed too: they render to the MW_FOCUS_TODAY/MW_SEQUENTIAL/MW_FOCUSED/
 MW_REVIEW_AT drawer properties and round-trip (the booleans normalize so
 `:false'/nil/absent sign identically; `:reviewAt' coarsens to minute
-precision).  This list is kind-agnostic -- it is iterated for every
+precision).  `:cancelledAt' rides on the CANCELLED keyword's CLOSED line.
+This list is kind-agnostic -- it is iterated for every
 entity regardless of kind -- so a field only affects an entity's signature
 when that entity actually carries the key (e.g. `:supportNotes' is inert on
 areas, which never carry it).  Excludes

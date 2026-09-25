@@ -488,5 +488,25 @@ directly under a `MW_LIST: people' heading to round-trip."
                   (plist-put (copy-sequence parsed) :mw-kind 'person) 2 nil)))
         (should (string= t1 t2))))))
 
-(provide 'mindwtr-roundtrip-test)
+
+
+(ert-deftest mindwtr-roundtrip-cancelled-task-and-project-stable ()
+  "A cancelled task and project (archived + cancelledAt) keep their signature
+through render -> parse, and ARCH vs CANCELLED sign differently."
+  (dolist (kind '(task project))
+    (let* ((e (list :id "x1" :mw-kind kind :title "Dropped" :status "archived"
+                    :cancelledAt "2026-05-01T09:30:00Z" :mw-extra-props nil))
+           (heading (mindwtr-render-heading e 2 nil))
+           (text (if (eq kind 'task) (mindwtr-roundtrip--render-wrapped e)
+                   (mindwtr-roundtrip--wrap-project heading))))
+      (should (string-match-p "^\\*\\* CANCELLED Dropped\nCLOSED: " heading))
+      (with-temp-buffer
+        (let ((org-inhibit-startup t)) (insert text) (org-mode))
+        (let ((got (car (plist-get (mindwtr-parse-buffer)
+                                   (if (eq kind 'task) :tasks :projects)))))
+          (should (string= (mindwtr-signature got) (mindwtr-signature e)))
+          (should-not (string= (mindwtr-signature got)
+                               (mindwtr-signature
+                                (mindwtr-util-plist-omit e '(:cancelledAt))))))))))
+
 ;;; mindwtr-roundtrip-test.el ends here

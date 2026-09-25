@@ -148,7 +148,9 @@ Returns a string ending with a newline."
          (stars (make-string level ?*))
          (todo (when (memq kind '(task project))
                  (let ((st (plist-get entity :status)))
-                   (when st (concat (mindwtr-model-status->keyword kind st) " ")))))
+                   (when st (concat (mindwtr-model-status->keyword
+                                     kind st (plist-get entity :cancelledAt))
+                                    " ")))))
          (cookie (when (eq kind 'task)
                    (let ((c (mindwtr-model-priority->cookie
                              (plist-get entity :priority))))
@@ -163,23 +165,27 @@ Returns a string ending with a newline."
          ;; not recognize it on re-parse (it would absorb the keyword into
          ;; the title).  Emit todo before cookie so render is parse-inverse.
          (lines (list (concat stars " " (or todo "") (or cookie "") title tags))))
-    ;; planning line (tasks)
-    (when (eq kind 'task)
+    ;; planning line (tasks; a cancelled project carries only CLOSED)
+    (when (memq kind '(task project))
       (let (parts)
-        (when (plist-get entity :startTime)
+        (when (and (eq kind 'task) (plist-get entity :startTime))
           (push (format "SCHEDULED: %s"
                         (mindwtr-render--active-ts (plist-get entity :startTime)))
                 parts))
-        (when (plist-get entity :dueDate)
+        (when (and (eq kind 'task) (plist-get entity :dueDate))
           (push (format "DEADLINE: %s"
                         (mindwtr-render--active-ts (plist-get entity :dueDate)))
                 parts))
         ;; CLOSED uses an INACTIVE timestamp (org convention); render the
-        ;; completedAt directly without flipping to `<...>'.
-        (when (plist-get entity :completedAt)
-          (push (format "CLOSED: %s"
-                        (mindwtr-util-iso->org (plist-get entity :completedAt)))
-                parts))
+        ;; completedAt directly without flipping to `<...>'.  On a CANCELLED
+        ;; heading it holds cancelledAt (upstream clears completedAt on
+        ;; cancel, so the two never compete); the parser reads it back by
+        ;; the keyword.
+        (let ((closed (if (equal todo "CANCELLED ")
+                          (plist-get entity :cancelledAt)
+                        (and (eq kind 'task) (plist-get entity :completedAt)))))
+          (when closed
+            (push (format "CLOSED: %s" (mindwtr-util-iso->org closed)) parts)))
         (when parts (push (mapconcat #'identity (nreverse parts) " ") lines))))
     ;; properties drawer
     (push ":PROPERTIES:" lines)
