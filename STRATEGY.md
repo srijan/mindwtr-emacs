@@ -26,8 +26,8 @@ _Resist a change when:_ it makes Emacs decide something upstream Mindwtr already
 
 ## Key metrics
 
-- **No push without a local edit** - a sync that follows no local edits proposes zero changes. Checked by `make smoke-docker` (a change pulled from another client, then an idle sync) and flagged in the sync report when a real cycle does it; both to be added.
-- **Every pushed change traces to a local edit** - the pushed diff for an edit carries only the fields that edit touches. Checked per kind of edit (archive, refile, clarify outcome, status change) in the test suite; to be added.
+- **No push without a local edit** - a sync that follows no local edits proposes zero changes. Checked offline in `test/mindwtr-invariant-test.el` and live by `make smoke-docker` (a change pulled from another client, then an idle sync); flagged in the sync report when a real cycle does it.
+- **Every pushed change traces to a local edit** - the pushed diff for an edit carries only the fields that edit touches. Checked per kind of edit (archive, refile, clarify outcome, status change) in `test/mindwtr-invariant-test.el`.
 - **Round-trip fidelity** - a model survives parse → render → parse unchanged. A pass/fail invariant in the test suite (`test/mindwtr-roundtrip-test.el`), backed by the signature/canonical-comparison machinery.
 - **Sync failures** - runtime-observed via API error classification and the backoff/give-up state machine. No aggregate counter yet; watched one run at a time.
 

@@ -78,7 +78,7 @@ JSON snapshot lets changes be detected without re-fetching.
   Because it self-provisions (no external `MINDWTR_URL` dependency) it *is* wired into CI; see
   `test/integration/README.md`. SKIPs cleanly without Docker/Emacs unless `MINDWTR_DOCKER_REQUIRE=1`.
 - `test/mindwtr-test-helpers.el` holds the shared fakes: `mindwtr-test-server` (an in-memory
-  Mindwtr Cloud at the HTTP seam, tags advance v1, v2, ... on PUT; inspect `-last-put` and
+  Mindwtr Cloud at the HTTP seam that merges a PUT by revision like the real server, tags advance v1, v2, ... on PUT; inspect `-last-put` and
   `-requests`) and `mindwtr-test-with-sync-env`, which binds that server plus the in-memory
   shadow store so a full `mindwtr-sync-once` runs with no temp directory and no files. Prefer
   it over an inline `pcase` fake unless the test needs fault injection or a specific ETag

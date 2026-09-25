@@ -35,9 +35,31 @@ most recent PUT (nil before any), REQUESTS the methods seen, newest first."
                                     :areas nil :people nil))))
    :etag "v1"))
 
+(defun mindwtr-test-server--merge (state incoming)
+  "Merge INCOMING AppData into STATE the way the real server resolves revisions.
+Per entity id the higher `:rev' wins and a tie keeps the server's copy, so a
+change another client already made survives a PUT built from an older shadow;
+an entity only one side has is kept.  Settings take INCOMING.  The real merge
+also compares timestamps and repairs references; this is the part a test of
+\"a remote change reaches this client\" depends on."
+  (let ((out (copy-sequence incoming)))
+    (dolist (key '(:tasks :projects :sections :areas :people))
+      (let ((by-id (make-hash-table :test 'equal)) merged)
+        (dolist (e (plist-get state key)) (puthash (plist-get e :id) e by-id))
+        (dolist (e (plist-get incoming key))
+          (let ((s (gethash (plist-get e :id) by-id)))
+            (push (if (and s (>= (or (plist-get s :rev) 0) (or (plist-get e :rev) 0)))
+                      s e)
+                  merged)
+            (remhash (plist-get e :id) by-id)))
+        (dolist (e (plist-get state key))
+          (when (gethash (plist-get e :id) by-id) (push e merged)))
+        (setq out (plist-put out key (nreverse merged)))))
+    out))
+
 (defun mindwtr-test-server-http (server)
   "Return the `mindwtr-api-http-function' adapter for SERVER.
-A PUT replaces the whole state (full-replace, like the real server) and
+A PUT merges into the state by revision (`mindwtr-test-server--merge') and
 advances the tag; HEAD and GET report the current tag."
   (lambda (req)
     (push (plist-get req :method) (mindwtr-test-server-requests server))
@@ -50,7 +72,9 @@ advances the tag; HEAD and GET report the current tag."
                    :body (mindwtr-util-json-ascii (mindwtr-test-server-state server))))
       ("PUT" (let ((body (plist-get req :body)))
                (setf (mindwtr-test-server-last-put server) body
-                     (mindwtr-test-server-state server) (mindwtr-util-json-decode body)
+                     (mindwtr-test-server-state server)
+                     (mindwtr-test-server--merge (mindwtr-test-server-state server)
+                                                 (mindwtr-util-json-decode body))
                      (mindwtr-test-server-etag server)
                      (format "v%d" (1+ (string-to-number
                                         (substring (mindwtr-test-server-etag server) 1)))))

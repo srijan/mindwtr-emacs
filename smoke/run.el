@@ -29,7 +29,10 @@
       (mindwtr-smoke-phase-schema-coverage ad)
       (mindwtr-smoke-phase-roundtrip ad)
       (when (getenv "MINDWTR_SMOKE_WRITE")
-        (mindwtr-smoke-phase-write-lifecycle)))))
+        (mindwtr-smoke-phase-write-lifecycle))
+      ;; Full-candidate PUTs of whatever the server holds: throwaway servers only.
+      (when (getenv "MINDWTR_SMOKE_THROWAWAY")
+        (mindwtr-smoke-phase-idle-after-foreign-change)))))
 
 (kill-emacs (mindwtr-smoke-summary))
 ;;; run.el ends here

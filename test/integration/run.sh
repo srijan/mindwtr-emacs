@@ -136,6 +136,8 @@ esac
 # --- client config for the Emacs smoke suite ---------------------------------
 export MINDWTR_URL="$BASE_URL"
 export MINDWTR_TOKEN="$TOKEN"
+# This server is ours alone, so phases that PUT whole snapshots may run.
+export MINDWTR_SMOKE_THROWAWAY=1
 
 run_make() {  # run a Makefile target from the repo root with smoke env present
   ( cd "$REPO_ROOT" && EMACS="$EMACS_BIN" make "$@" )

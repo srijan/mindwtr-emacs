@@ -496,5 +496,137 @@ to call: a no-op PASS if the task is already gone."
       ;; CLEANUP always runs
       (mindwtr-smoke--cleanup id baseline))))
 
+;;;; No push without a local edit (STRATEGY.md key metric), live
+
+(defconst mindwtr-smoke-other-device "mw-smoke-other"
+  "`revBy' for writes made as another client of the same server.")
+
+(defun mindwtr-smoke--foreign-put (edit)
+  "As another client: GET the server state, apply EDIT to it, PUT it back.
+EDIT takes and returns an AppData plist."
+  (mindwtr-api-put-data
+   (funcall edit (mindwtr-model-ensure-settings
+                  (plist-get (mindwtr-api-get-data) :appdata)))))
+
+(defun mindwtr-smoke--foreign-bump (e &rest changes)
+  "Entity E with CHANGES applied, rev bumped and stamped by the other device."
+  (let ((e (copy-sequence e)))
+    (cl-loop for (k v) on changes by #'cddr do (setq e (plist-put e k v)))
+    (plist-put (plist-put (plist-put e :rev (1+ (or (plist-get e :rev) 0)))
+                          :revBy mindwtr-smoke-other-device)
+               :updatedAt (mindwtr-smoke--now))))
+
+(defun mindwtr-smoke--edit-entity (ad key id &rest changes)
+  "AppData AD with entity ID under KEY changed by CHANGES (see `mindwtr-smoke--foreign-bump')."
+  (plist-put (copy-sequence ad) key
+             (mapcar (lambda (e) (if (equal (plist-get e :id) id)
+                                     (apply #'mindwtr-smoke--foreign-bump e changes)
+                                   e))
+                     (plist-get ad key))))
+
+(defun mindwtr-smoke--revs ()
+  "Hash of id -> rev for every entity the server holds."
+  (let ((h (make-hash-table :test 'equal))
+        (ad (plist-get (mindwtr-api-get-data) :appdata)))
+    (dolist (key '(:tasks :projects :sections :areas :people))
+      (dolist (e (plist-get ad key)) (puthash (plist-get e :id) (plist-get e :rev) h)))
+    h))
+
+(defun mindwtr-smoke--idle-sync (label)
+  "Run a sync that follows no local edit; PASS when it changes nothing.
+Nothing proposed by this device, and no entity's revision moved on the
+server.  (A full cycle's PUT echoes the snapshot; an echo bumps no rev.)"
+  (let* ((before (mindwtr-smoke--revs))
+         (r (mindwtr-sync-once (current-buffer) (mindwtr-smoke--now)))
+         (after (mindwtr-smoke--revs))
+         (proposed (mapcar (lambda (c) (plist-get c :id)) (plist-get r :local-changes)))
+         bumped)
+    (maphash (lambda (id rev) (unless (equal rev (gethash id before)) (push id bumped)))
+             after)
+    (if (and (plist-get r :ok) (null proposed) (null bumped))
+        (mindwtr-smoke-pass label)
+      (mindwtr-smoke-fail label (format "proposed %S; revs moved on %S" proposed bumped)))))
+
+(defun mindwtr-smoke-phase-idle-after-foreign-change ()
+  "Pull another client's change, then check the next sync pushes nothing.
+Runs a real client (tasks file + archive file, in-memory shadow) against the
+server.  Every sync PUTs a full candidate, so this phase runs only against a
+throwaway server (MINDWTR_SMOKE_THROWAWAY, set by `make smoke-docker')."
+  (let* ((root (make-temp-file "mw-smoke-idle" t))
+         (mindwtr-file (expand-file-name "tasks.org" root))
+         (mindwtr-archive-file nil)
+         (mindwtr-shadow-store (mindwtr-shadow-memory-store))
+         (run (format-time-string "%Y%m%dT%H%M%S"))
+         (area-id (mindwtr-util-uuid))
+         (task-id (mindwtr-util-uuid))
+         (now (mindwtr-smoke--now)))
+    (unwind-protect
+        (condition-case err
+            (progn
+              ;; Another client creates an area and a task in it.
+              (mindwtr-smoke--foreign-put
+               (lambda (ad)
+                 (let ((ad (copy-sequence ad)))
+                   (setq ad (plist-put ad :areas
+                                       (append (plist-get ad :areas)
+                                               (list (list :id area-id :rev 1
+                                                           :name (format "[mw-smoke] Área %s" run)
+                                                           :revBy mindwtr-smoke-other-device
+                                                           :createdAt now :updatedAt now)))))
+                   (plist-put ad :tasks
+                              (append (plist-get ad :tasks)
+                                      (list (list :id task-id :rev 1 :status "next"
+                                                  :title (format "[mw-smoke] idle café %s" run)
+                                                  :areaId area-id :contexts '("@home")
+                                                  :revBy mindwtr-smoke-other-device
+                                                  :createdAt now :updatedAt now)))))))
+              ;; This client starts from the server, then settles.
+              (let* ((got (mindwtr-api-get-data))
+                     (ad (mindwtr-model-ensure-settings (plist-get got :appdata))))
+                (with-current-buffer (find-file-noselect mindwtr-file)
+                  (mindwtr-mode)
+                  (mindwtr-reconcile-buffer ad)
+                  (mindwtr-sync--save-buffer-quietly t))
+                (mindwtr-shadow-save ad)
+                (mindwtr-shadow-set-etag (plist-get got :etag)))
+              (with-current-buffer (find-file-noselect mindwtr-file)
+                ;; First cycle backfills the archive surface (latch unset).
+                (mindwtr-sync-once (current-buffer) (mindwtr-smoke--now))
+                (mindwtr-smoke--idle-sync "idle sync after bootstrap pushes nothing")
+                ;; The other client archives the task that carries an area --
+                ;; the archived-area loss (PR #67) pushed `areaId -> (empty)' here.
+                (mindwtr-smoke--foreign-put
+                 (lambda (ad) (mindwtr-smoke--edit-entity ad :tasks task-id
+                                                          :status "archived"
+                                                          :completedAt (mindwtr-smoke--now))))
+                (mindwtr-sync-once (current-buffer) (mindwtr-smoke--now))
+                (mindwtr-smoke--idle-sync "idle sync after pulling a foreign archive pushes nothing")
+                (let ((tk (mindwtr-smoke-find-by-id
+                           (plist-get (mindwtr-api-get-data) :appdata) task-id)))
+                  (if (equal (plist-get tk :areaId) area-id)
+                      (mindwtr-smoke-pass "archived task keeps its area on the server")
+                    (mindwtr-smoke-fail "archived task keeps its area on the server"
+                                        (format "areaId %S" (plist-get tk :areaId)))))))
+          (error (mindwtr-smoke-fail "idle-after-foreign-change (error)"
+                                     (error-message-string err))))
+      ;; Cleanup as the other client: tombstone what this phase created.
+      (ignore-errors
+        (mindwtr-smoke--foreign-put
+         (lambda (ad)
+           (let ((gone (mindwtr-smoke--now)))
+             (mindwtr-smoke--edit-entity
+              (mindwtr-smoke--edit-entity ad :tasks task-id :deletedAt gone)
+              :areas area-id :deletedAt gone)))))
+      (mindwtr-smoke--kill-visiting mindwtr-file)
+      (mindwtr-smoke--kill-visiting (expand-file-name "mindwtr_archive.org" root))
+      (delete-directory root t))))
+
+(defun mindwtr-smoke--kill-visiting (f)
+  "Kill the buffer visiting F, if any, without a modified-buffer prompt."
+  (let ((b (get-file-buffer f)))
+    (when b
+      (with-current-buffer b (set-buffer-modified-p nil))
+      (kill-buffer b))))
+
 (provide 'mindwtr-smoke)
 ;;; mindwtr-smoke.el ends here
