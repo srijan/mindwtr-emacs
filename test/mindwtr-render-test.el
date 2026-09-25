@@ -359,6 +359,22 @@ archived project subtree with its done child; live + tombstoned absent."
          (text2 (mindwtr-render-archive-appdata reparsed)))
     (should (string= text1 text2))))
 
+(ert-deftest mindwtr-render-archive-area-round-trips-with-main-map ()
+  "An archived task's area survives render -> parse -> render when the parse
+gets the main file's area map (the archive file itself holds no area headings)."
+  (let* ((appdata '(:tasks ((:id "t1" :title "x" :status "archived" :areaId "a1"))
+                    :projects nil :sections nil
+                    :areas ((:id "a1" :name "Work")) :settings nil))
+         (text1 (mindwtr-render-archive-appdata appdata))
+         (names (let ((h (make-hash-table :test 'equal))) (puthash "Work" "a1" h) h))
+         (reparsed (with-temp-buffer
+                     (let ((org-inhibit-startup t)) (insert text1) (org-mode))
+                     (mindwtr-parse-buffer names)))
+         (text2 (mindwtr-render-archive-appdata
+                 (plist-put reparsed :areas (plist-get appdata :areas)))))
+    (should (equal (plist-get (car (plist-get reparsed :tasks)) :areaId) "a1"))
+    (should (string= text1 text2))))
+
 (ert-deftest mindwtr-render-archive-empty-is-just-container ()
   "Appdata with no archived entities renders only the keyword line + container."
   (let ((text (mindwtr-render-archive-appdata

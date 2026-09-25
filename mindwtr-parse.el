@@ -371,11 +371,13 @@ container's :MW_LIST: plus project/section ancestry:
     ("people" 'person)
     (_ nil)))
 
-(defun mindwtr-parse-buffer ()
-  "Parse the current org buffer into a content appdata plist."
+(defun mindwtr-parse-buffer (&optional area-names)
+  "Parse the current org buffer into a content appdata plist.
+AREA-NAMES (name->id hash) overrides the buffer scan for area headings; the
+sync passes the main file's map so the archive surface resolves `:CATEGORY:'."
   (setq mindwtr-parse--warnings nil)
   (mindwtr-parse-ensure-keywords)
-  (let ((mindwtr-parse--area-names (mindwtr-parse--build-area-names))
+  (let ((mindwtr-parse--area-names (or area-names (mindwtr-parse--build-area-names)))
         tasks projects sections areas people)
     (mindwtr-heading-map
      (lambda ()

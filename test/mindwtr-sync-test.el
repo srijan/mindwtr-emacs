@@ -2288,6 +2288,36 @@ the first (main) copy and records the dropped id in :duplicates and as a
       (kill-buffer main)
       (kill-buffer arch))))
 
+(ert-deftest mindwtr-sync--parse-surfaces-archive-resolves-main-areas ()
+  "An archived task's `:CATEGORY:' resolves against the MAIN surface's area
+headings.  Parsed alone, the archive file has no areas, `:areaId' dropped, and
+the next sync pushed `areaId -> (empty)' to the server."
+  (let ((main (get-buffer-create " *mw-area-main*"))
+        (arch (get-buffer-create " *mw-area-arch*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer main
+            (let ((org-inhibit-startup t))
+              (erase-buffer)
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Work\n:PROPERTIES:\n:MW_TYPE: area\n:MW_ID: a1\n:END:\n")
+              (org-mode)))
+          (with-current-buffer arch
+            (let ((org-inhibit-startup t))
+              (erase-buffer)
+              (insert (mindwtr-model-todo-keyword-line) "\n"
+                      "* Archive\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: archive\n:END:\n"
+                      "** ARCH Cancelled\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n"
+                      ":CATEGORY: Work\n:END:\n")
+              (org-mode)))
+          (let* ((parsed (mindwtr-sync--parse-surfaces
+                          (list (list :buffer main :kind 'main)
+                                (list :buffer arch :kind 'archive))))
+                 (task (car (plist-get (plist-get parsed :appdata) :tasks))))
+            (should (equal (plist-get task :areaId) "a1"))))
+      (kill-buffer main)
+      (kill-buffer arch))))
+
 ;;; People sync (U4) ----------------------------------------------------------
 
 (ert-deftest mindwtr-sync-key->kind-maps-people-to-person ()
