@@ -1048,6 +1048,12 @@ WHAT names the guarded window in the error message."
       (unless (= (plist-get s :tick) (buffer-chars-modified-tick))
         (error "mindwtr: buffer changed during sync (%s); aborting" what)))))
 
+(defun mindwtr-sync--report (result target-buffer &optional backup-file)
+  "Show RESULT in the sync report and keep its entry in the report log."
+  (mindwtr-shadow-log-report
+   (buffer-local-value 'mindwtr-report--last-entry
+                       (mindwtr-report-show result target-buffer backup-file))))
+
 (defun mindwtr-sync--finish-noop (cycle)
   "Complete a HEAD-match noop cycle from CYCLE; return the result plist."
   (with-current-buffer (mindwtr-sync-cycle-buffer cycle)
@@ -1056,8 +1062,8 @@ WHAT names the guarded window in the error message."
       ;; Even when nothing needs pushing, a stray keyword should not be
       ;; silently swallowed -- surface it in the report.
       (when parse-warnings
-        (mindwtr-report-show (list :stats stats :warnings parse-warnings)
-                             (current-buffer)))
+        (mindwtr-sync--report (list :stats stats :warnings parse-warnings)
+                              (current-buffer)))
       ;; The migration latches are intentionally NOT set here: a noop skips
       ;; reconcile, so the buffers still hold their old render.  Migration
       ;; protection must stay on until a full cycle actually rewrites them
@@ -1207,7 +1213,7 @@ a process sentinel on the async path)."
                             :warnings parse-warnings :incoming incoming
                             :local-changes local-changes
                             :save-failed save-failed)))
-          (mindwtr-report-show result (current-buffer) backup-file)
+          (mindwtr-sync--report result (current-buffer) backup-file)
           result)))))
 
 (defun mindwtr-sync-once-async (buffer now callback)

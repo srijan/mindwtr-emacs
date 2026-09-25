@@ -508,6 +508,33 @@ stats in its result."
             (should (= (plist-get (plist-get result :stats) :deleted) 0))))
       (delete-directory dir t))))
 
+(ert-deftest mindwtr-sync-report-entries-persist-to-the-log ()
+  "Each reported cycle appends its entry, field values included, to this
+month's report log in the shadow store; a quiet noop appends nothing."
+  (mindwtr-test-with-sync-env
+      (:initial '(:tasks ((:id "t1" :title "old" :status "next" :rev 1))
+                  :projects nil :sections nil :areas nil :settings nil)
+       :shadow '(:tasks ((:id "t1" :title "old" :status "next" :rev 1))
+                 :projects nil :sections nil :areas nil :settings nil)
+       :etag "v1")
+    (with-temp-buffer
+      (let ((org-inhibit-startup t))
+        (insert "* NEXT renamed\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+        (org-mode))
+      (let ((key (format-time-string "reports/%Y-%m.org")))
+        (mindwtr-sync-once (current-buffer) "2026-06-01T00:00:00Z")
+        (let ((log (mindwtr-shadow--get key)))
+          (should (string-match-p "title: old → renamed" log))
+          (mindwtr-sync-once (current-buffer) "2026-06-01T00:01:00Z")
+          (should (equal (mindwtr-shadow--get key) log))
+          (goto-char (point-min))
+          (search-forward "renamed")
+          (insert " again")
+          (mindwtr-sync-once (current-buffer) "2026-06-01T00:02:00Z")
+          (let ((log2 (mindwtr-shadow--get key)))
+            (should (string-prefix-p log log2))
+            (should (string-match-p "title: renamed → renamed again" log2))))))))
+
 (ert-deftest mindwtr-sync-full-cycle-commits-state-then-noops ()
   "A full cycle on the in-memory adapters: no temp dir, no files.  The first
 cycle pushes the local edit and commits shadow, etag and the migration

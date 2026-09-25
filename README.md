@@ -499,6 +499,10 @@ revision-aware last-write-wins), the lost edits are listed there with your
 value and the server's value side by side — so no local change is ever silently
 discarded.
 
+Every entry is also kept on disk, one org file per month under
+`~/.emacs.d/mindwtr/reports/` (`YYYY-MM.org`), so the before/after values of
+past syncs survive a restart and outlive the pre-sync backups.
+
 ## Status and scope
 
 **v1** syncs tasks, projects, sections, and areas read-write for their core

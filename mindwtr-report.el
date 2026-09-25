@@ -36,6 +36,10 @@
   "Buffer position where the most recently appended sync entry begins.
 Point is moved here when the report pops for an actionable event (R9).")
 
+(defvar-local mindwtr-report--last-entry nil
+  "Text of the entry the latest `mindwtr-report-show' appended, or nil.
+Sync persists it to the report log (`mindwtr-shadow-log-report').")
+
 (defun mindwtr-report--field-diff (mine theirs)
   "Return a list of (FIELD MINE-VALUE THEIRS-VALUE) for content fields that
 differ between MINE and THEIRS.  Comparison is canonical (tag order,
@@ -381,7 +385,8 @@ changes the merge pulled in, plists (:id :kind :title :change), R1) and
 The report is an append-only org log: each reportable sync adds a top-level
 heading (R5) rather than erasing prior content, and the log persists for the
 buffer's lifetime -- killing the buffer starts a fresh log on the next sync
-\(R7).  A sync with nothing to report appends no heading (R6).
+\(R7).  A sync with nothing to report appends no heading (R6).  Sync also
+keeps each entry on disk (`mindwtr-shadow-log-report').
 
 TARGET-BUFFER is the org buffer a restore action writes back into.
 BACKUP-FILE, when given, is the pre-sync buffer snapshot, surfaced so a lost
@@ -412,7 +417,8 @@ rendering hiccup in this post-PUT path cannot throw a spurious sync failure
         (let ((org-inhibit-startup t))
           (mindwtr-report-mode)))
       (setq mindwtr-report--target-buffer target-buffer
-            mindwtr-report--backup-file backup-file)
+            mindwtr-report--backup-file backup-file
+            mindwtr-report--last-entry nil)
       (condition-case err
           (when (mindwtr-report--reportable-p stats conflicts skew-warning
                                               parse-warnings incoming-changes)
@@ -430,7 +436,10 @@ rendering hiccup in this post-PUT path cannot throw a spurious sync failure
               (mindwtr-report--insert-entry stats conflicts skew-warning
                                             backup-file parse-warnings
                                             incoming-changes sync-time
-                                            local-changes)))
+                                            local-changes)
+              (setq mindwtr-report--last-entry
+                    (buffer-substring-no-properties
+                     mindwtr-report--newest-entry (point-max)))))
         (error
          (message "mindwtr: sync report render failed: %s"
                   (error-message-string err)))))

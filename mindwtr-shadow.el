@@ -266,6 +266,19 @@ the post-PUT path, so a failure is messaged and the cycle continues."
     (error (message "mindwtr: backup cleanup skipped: %s"
                     (error-message-string err)))))
 
+(defun mindwtr-shadow-log-report (entry &optional now)
+  "Append the sync report ENTRY (text, or nil for none) to the report log.
+The log is one org file per month, reports/YYYY-MM.org, kept forever: it
+holds each change's before and after values, so it outlives the pre-sync
+backups as the record to recover a lost field from.  NOW picks the month.
+Never signals (post-PUT path)."
+  (when entry
+    (condition-case err
+        (let ((key (format "reports/%s.org" (format-time-string "%Y-%m" now))))
+          (mindwtr-shadow--put key (concat (mindwtr-shadow--get key) entry)))
+      (error (message "mindwtr: report log not written: %s"
+                      (error-message-string err))))))
+
 ;;; Pure helpers
 
 (defun mindwtr-shadow-index (appdata key)
