@@ -52,14 +52,14 @@ So the original block encoded the wrong mental model -- "WAIT means a waiting ta
 
 The complete fix is two-part -- narrow the over-broad query, then re-home what you excluded.
 
-**Part 1 -- scope the Waiting For block to tasks** (commit `d48d70f`):
+**Part 1 -- scope the Waiting For block to tasks** (commit `c67f23c`):
 
 ```elisp
 (tags-todo "TODO=\"WAIT\"+MW_TYPE=\"task\""
            ((org-agenda-overriding-header "Waiting For") ...))
 ```
 
-**Part 2 -- give waiting projects a home** (commit `ea466d1`). The Projects view previously matched only `MW_TYPE="project"+TODO="ACTIVE"`, so the now-excluded waiting projects would have vanished from every view. A second Projects block was added:
+**Part 2 -- give waiting projects a home** (commit `e554c31`). The Projects view previously matched only `MW_TYPE="project"+TODO="ACTIVE"`, so the now-excluded waiting projects would have vanished from every view. A second Projects block was added:
 
 ```elisp
 (tags-todo "MW_TYPE=\"project\"+TODO=\"WAIT\""

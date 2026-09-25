@@ -23,7 +23,7 @@ tags: [clarify, gtd, project-task, next, inbox, keyword-stamping, refile, child-
 
 # Adding a task to an existing project in clarify left it stamped INBOX
 
-GitHub issue #35, an earlier PR (merged). Commits `650cb52` (parent keyword) and `9e22ef6` (child keywords).
+GitHub issue #35, an earlier PR (merged). Commits `25b2dd8` (parent keyword) and `2461679` (child keywords).
 
 ## Problem
 In the clarify workflow (`mindwtr-clarify.el`), the `[a]` "add to an existing project" outcome
@@ -59,8 +59,8 @@ Two layers that "should" have caught this each had a blind spot:
   in [stale-elc-shadows-updated-el-after-rebase](../developer-experience/stale-elc-shadows-updated-el-after-rebase.md).
 
 ## Solution
-The `[a]` clause in `mindwtr-clarify--apply-outcome` gained a keyword stamp (commit `650cb52`) and a
-child-keyword pass (commit `9e22ef6`), both *before* the refile:
+The `[a]` clause in `mindwtr-clarify--apply-outcome` gained a keyword stamp (commit `25b2dd8`) and a
+child-keyword pass (commit `2461679`), both *before* the refile:
 
 ```elisp
 ;; BEFORE

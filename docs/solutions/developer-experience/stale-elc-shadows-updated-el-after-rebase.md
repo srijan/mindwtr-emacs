@@ -32,7 +32,7 @@ tags:
 
 Emacs `load` prefers a `.elc` over its `.el` sibling by default (`load-prefer-newer` is nil), *regardless of which file is newer on disk*. So once a stale `.elc` exists, it shadows the updated `.el`: code added or moved on the branch you just switched to is invisible, and you get a void-function / undefined-symbol error for a definition you can plainly see in the source.
 
-This surfaced concretely while rebasing an earlier PR onto a `main` that had just added `mindwtr-model-ensure-settings` (`mindwtr-model.el:227`): the first compile failed reporting that function undefined, even though the defun was right there. The `.elc` had been compiled before `main` introduced it.
+This surfaced concretely while rebasing an earlier PR onto a `main` that had just added `mindwtr-model-ensure-settings` (`mindwtr-model.el`): the first compile failed reporting that function undefined, even though the defun was right there. The `.elc` had been compiled before `main` introduced it.
 
 ## Guidance
 
@@ -56,7 +56,7 @@ The failure mode is actively misleading: the error names a symbol you can see in
 
 ## Examples
 
-**The trap:** `main` adds `mindwtr-model-ensure-settings`; you rebase your branch onto it; you still have a `mindwtr-model.elc` from before the rebase. `make compile` loads the old `.elc`, never sees the new defun, and fails with the function reported undefined — despite `grep` finding it at `mindwtr-model.el:227`.
+**The trap:** `main` adds `mindwtr-model-ensure-settings`; you rebase your branch onto it; you still have a `mindwtr-model.elc` from before the rebase. `make compile` loads the old `.elc`, never sees the new defun, and fails with the function reported undefined — despite `grep` finding it in `mindwtr-model.el`.
 
 **The fix:**
 

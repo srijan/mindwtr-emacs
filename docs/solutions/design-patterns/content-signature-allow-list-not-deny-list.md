@@ -25,9 +25,9 @@ represent, the hash differs on every sync — because parsing the rendered org n
 that field — so every entity carrying it registers as an `update` every cycle, with no user
 change.
 
-The server schema (`mindwtr-model-known-fields`, `mindwtr-model.el:172`) carries many fields
-never mapped to org: `:isFocusedToday`, `:isSequential`, `:supportNotes`, `:tagIds`,
-`:areaTitle`, `:reviewAt`, … These must be preserved verbatim from the shadow on write, but must
+The server schema (`mindwtr-model-known-fields`, `mindwtr-model.el:246`) carries many fields
+never mapped to org: `:tagIds`, `:areaTitle`, `:sequentialScope`, `:recurrence`,
+`:attachments`, … These must be preserved verbatim from the shadow on write, but must
 not influence whether an entity looks "changed."
 
 ## Guidance
@@ -36,7 +36,8 @@ plist.** The allow-list *is* the interface contract between the parse/render lay
 engine: it names exactly the fields the round-trip can reproduce, and therefore exactly the
 fields whose changes are attributable to a user edit.
 
-Current signature (`mindwtr-signature.el:59`):
+Current signature (`mindwtr-signature.el:87`, abridged; the real loop also drops a value whose
+*canonical* form is empty, so `:false`/nil/absent sign identically):
 
 ```elisp
 (dolist (k mindwtr-model-content-fields)
@@ -45,32 +46,36 @@ Current signature (`mindwtr-signature.el:59`):
       (push (cons k (mindwtr-signature-canonical-value k v)) pairs))))
 ```
 
-The allow-list (`mindwtr-model.el:150-164`):
+The allow-list (`mindwtr-model.el:165`):
 
 ```elisp
 (defconst mindwtr-model-content-fields
-  '(:name :title :status :priority :contexts :tags :description :checklist
-    :startTime :dueDate :completedAt :areaId :projectId :sectionId
-    :energyLevel :timeEstimate :assignedTo :location :taskMode)
+  '(:name :title :status :priority :contexts :tags :description :supportNotes
+    :checklist :startTime :dueDate :completedAt
+    :areaId :projectId :sectionId
+    :energyLevel :timeEstimate :assignedTo :location :taskMode
+    :isFocusedToday :isSequential :isFocused :reviewAt
+    :note :referenceLink)
   "Editable fields that round-trip through org and define the content signature.
-This is an allow-list: any server field not named here (`:isFocusedToday',
-`:isSequential', `:supportNotes', `:tagIds', `:areaTitle', `:reviewAt') is excluded
-from change detection by construction -- it can neither drift a signature nor be
-lost; it is preserved in the shadow and merged back on write.")
+This is an allow-list: any server field not named here (e.g. `:tagIds',
+`:areaTitle', `:sequentialScope', `:recurrence', `:attachments') is excluded
+from change detection by construction ...")
 ```
 
-Three normalizations handle org's lossy aspects (`mindwtr-signature.el:30-44`): set-valued fields
+Four normalizations handle org's lossy aspects (`mindwtr-signature.el:19-63`): set-valued fields
 (`:tags`, `:contexts`) are **sorted** (org tags have no order); datetime fields are **coarsened
 to minute precision** (org timestamps have no sub-minute resolution); checklist items are reduced
-to `(:title :isCompleted)`, dropping the server `:id` an org checkbox can't carry. The write-merge
-(`mindwtr-sync--merge-content`, `mindwtr-sync.el:42-67`) uses the **same** allow-list and merges
-unchanged fields from the shadow verbatim, preserving server-only fields untouched.
+to `(:title :isCompleted)`, dropping the server `:id` an org checkbox can't carry; server booleans (`:isFocusedToday`,
+`:isSequential`, `:isFocused`) fold so `:false`/nil/absent sign identically. The write-merge
+(`mindwtr-sync--merge-content`, `mindwtr-sync.el:166`) uses the **same** allow-list and merges
+unchanged fields from the shadow verbatim, preserving server-only fields untouched. An adopted
+checklist has its shadow item ids re-attached by title (`mindwtr-sync--reattach-checklist-ids`).
 
 ## Why This Matters
 With a deny-list, every server field not explicitly excluded lands in the shadow hash but not the
 local hash, so every entity carrying it drifts every cycle. This was live, not hypothetical: the
-deny-list version (commit `2b6400b`) drove **30 of 32** entities to false drift; the allow-list
-brought it to **0** (commit `4a3c677`). Each false `update` bumps `:rev` and sends a PUT, which
+deny-list version (before `ff28188`) drove **30 of 32** entities to false drift; the allow-list
+brought it to **0** (commit `ff28188`). Each false `update` bumps `:rev` and sends a PUT, which
 can corrupt server history and trip conflict detection for other clients.
 
 The allow-list also makes the signature↔round-trip relationship explicit and checkable: adding a
@@ -82,7 +87,7 @@ field to `mindwtr-model-content-fields` means the round-trip suite
   `mindwtr-render.el` handle it.
 - **Allow-list-LAST.** Promote a field to the allow-list only *after* a byte-stability
   round-trip oracle proves it survives parse→render→parse unchanged — never before. When
-  `:supportNotes` was added (an earlier PR, commit `9dc380f`), the order was deliberate: the
+  `:supportNotes` was added (an earlier PR, commit `c7bd3fa`), the order was deliberate: the
   round-trip oracle (U2) had to be green first, because a field that does not yet round-trip
   byte-stably will phantom-churn its signature the moment it is signed. Promoting first and
   proving later is how the original deny-list incident drove 30/32 entities to false drift.
@@ -90,7 +95,8 @@ field to `mindwtr-model-content-fields` means the round-trip suite
   without rendering* opens a first-post-upgrade data-loss path: the old buffer parses the
   field as empty, change detection reads empty-vs-server as a clear, and last-write-wins
   PUTs over server-authored data. Guard that first sync with a one-way migration latch —
-  see [[migration-latch-for-newly-signed-fields]].
+  see [[migration-latch-for-newly-signed-fields]] (the reserved boolean drawer fields have their
+  own `fields` latch, `mindwtr-shadow-latches`).
 - Server schema gains fields: add to `mindwtr-model-known-fields` (drift detection) but **not** to
   `mindwtr-model-content-fields` unless explicitly mapped to org syntax.
 - Any change-detection over a lossy intermediate (text file, form, restricted schema): hash only
@@ -104,8 +110,8 @@ A future boolean `:pinned`, not mapped to org:
   update every sync.
 
 ## Related
-- `mindwtr-model.el:150` content-fields (allow-list), `:172` known-fields, `:141` shadow-only.
-- `mindwtr-sync.el:42` `--merge-content` (same allow-list); commit `4a3c677`.
+- `mindwtr-model.el:165` content-fields (allow-list), `:246` known-fields, `:155` shadow-only.
+- `mindwtr-sync.el:166` `--merge-content` (same allow-list); commit `ff28188`.
 - The same false-drift session also fixed [[parser-single-most-specific-container-id]]. The
   byte-stability sibling of this idea is [[org-markdown-link-conversion-roundtrip]].
 - [[migration-latch-for-newly-signed-fields]] — the deploy-seam guard for the first sync

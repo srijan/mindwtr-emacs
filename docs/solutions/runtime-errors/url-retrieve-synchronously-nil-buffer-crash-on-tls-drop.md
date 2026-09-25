@@ -74,7 +74,7 @@ mindwtr: Wrong type argument: stringp, nil [3 times]
   `mindwtr-api--default-http` and never touch `url-retrieve-synchronously`. The
   whole class of transport-layer failures was invisible to the suite.
 - **Assuming the generic `error` handler would render something sensible.** In
-  `mindwtr--sync-attempt` (`mindwtr.el:212-214`) the catch-all branch just does
+  `mindwtr--sync-handle-error` (`mindwtr.el:283-285`) the catch-all branch just does
   `(message "mindwtr: %s" (error-message-string err))`. Because the failure
   surfaced as a raw `wrong-type-argument` rather than the package's classified
   `mindwtr-api-error`, it fell through to this branch and printed the cryptic
@@ -83,7 +83,8 @@ mindwtr: Wrong type argument: stringp, nil [3 times]
 ## Solution
 
 The root cause is in the url.el fallback branch of the transport. When `plz` is
-not installed, `mindwtr-api--default-http` calls `url-retrieve-synchronously`,
+not installed, `mindwtr-api--default-http` delegates to `mindwtr-api--url-http`,
+which calls `url-retrieve-synchronously`,
 which returns `nil` on a failed connection. The next line then did
 `(with-current-buffer buf ...)` with `buf` = nil, which is effectively
 `(set-buffer nil)` and signals `(wrong-type-argument stringp nil)`.
@@ -95,7 +96,7 @@ emacs -Q --batch --eval '(with-current-buffer nil (point))'
 ;; => Wrong type argument: stringp, nil
 ```
 
-The fix (`mindwtr-api.el:54-60`, commit `911321d`, an earlier PR) guards the nil buffer
+The fix (`mindwtr-api.el:66-72`, commit `bcc94dc`, an earlier PR) guards the nil buffer
 and converts it into the transport's existing classified, retryable error:
 
 Before:
@@ -126,9 +127,10 @@ After:
         ...)))
 ```
 
-The `(:status 0 :retryable t)` payload matches the existing convention in
-`mindwtr-api--check` (`mindwtr-api.el:88-97`), which already signals
-`mindwtr-api-error` with `:retryable t` for 429/5xx responses.
+The `(:status 0 :retryable t)` payload matches the convention in
+`mindwtr-api--check` (`mindwtr-api.el:148-159`), which signals
+`mindwtr-api-error` with `:retryable t` for status 0 (no HTTP response), 429
+and 5xx.
 
 A regression test was added in `test/mindwtr-api-test.el`,
 `mindwtr-api-url-transport-nil-buffer-is-retryable`. It stubs
@@ -141,18 +143,19 @@ ship. Full suite: 481/481 pass; byte-compile clean.
 ## Why This Works
 
 Once the dropped connection is signalled as `mindwtr-api-error` with
-`:retryable t`, it flows into the dedicated handler in `mindwtr--sync-attempt`
-(`mindwtr.el:201-211`) instead of the catch-all `error` branch. That handler
+`:retryable t`, it flows into the retryable branch of `mindwtr--sync-handle-error`
+(`mindwtr.el:268-274`, called from the cycle's completion callback in
+`mindwtr--sync-attempt`) instead of the catch-all branch. That handler
 checks `(plist-get (cdr err) :retryable)`, increments `mindwtr--retry-attempts`
 (capped at `mindwtr-backoff-max-attempts`), and calls `mindwtr--schedule-retry`.
-The result is the friendly, actionable message from `mindwtr.el:156-157`:
+The result is the friendly, actionable message from `mindwtr.el:199-200`:
 
 ```
 mindwtr: server busy/unreachable; retrying in 4s (attempt 2/12)
 ```
 
 and an armed backoff timer. If the connection stays down past the ceiling,
-`mindwtr--schedule-retry` (`mindwtr.el:148-153`) gives up gracefully with a
+`mindwtr--schedule-retry` (`mindwtr.el:186-196`) gives up gracefully with a
 persistent, recoverable error state ("sync still failing after N attempts;
 giving up — M-x mindwtr-sync to retry") rather than spamming raw type errors. In
 short: the fix routes a transient network condition through the code path that
@@ -177,7 +180,9 @@ already knows how to handle transient network conditions.
   logic, but it means `mindwtr-api--default-http` (the plz/url.el code that
   actually talks to the network) is never exercised. For transport-layer
   concerns, stub the lower primitive instead — e.g. `cl-letf` over
-  `url-retrieve-synchronously` (and analogously `plz`) — so failure modes like
+  `url-retrieve-synchronously` (the plz path's equivalent is
+  `mindwtr-api--plz-error-resp`, `mindwtr-api.el:51-58`, which maps a curl-level
+  failure to status 0) — so failure modes like
   nil buffers, malformed responses, and dropped sockets are covered. The new
   `mindwtr-api-url-transport-nil-buffer-is-retryable` test is the reference
   pattern.
@@ -191,9 +196,9 @@ already knows how to handle transient network conditions.
 ## Related Issues
 
 - The other half of the nil-buffer story on the same lines
-  (`mindwtr-api.el:54-70`): [[url-el-synchronous-buffer-leak]] guards the
-  *cleanup* path against a nil buffer (so `kill-buffer` doesn't raise a second
-  error); this doc guards the *read* path (`with-current-buffer nil`) against the
+  (`mindwtr-api.el:66-88`): [[url-el-synchronous-buffer-leak]] kills the
+  response buffer in an `unwind-protect` cleanup, which the nil buffer never
+  reaches now; this doc guards the *read* path (`with-current-buffer nil`) against the
   same nil and turns it into a retryable error.
 - The backoff/retry machinery this fix hands off to is the subject of
   [[sync-reentrancy-in-flight-guard]].

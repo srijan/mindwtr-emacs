@@ -72,7 +72,7 @@ in the inbox) would have triggered the identical bug. (session history)
 ## Solution
 Track the queue by **MW_ID** (stable UUID) instead of buffer markers. IDs survive the
 subtree-replacing rewrites, relocations, and user edits that move or invalidate marker positions
-(`mindwtr-clarify.el`, commit `749b95b`).
+(`mindwtr-clarify.el`, commit `4f34190`).
 
 The queue field changed from markers to ids, and the session records its source buffer once:
 
@@ -102,7 +102,7 @@ sync anyway), then releases the markers immediately:
                       (save-excursion
                         (goto-char m)
                         (org-back-to-heading t)
-                        (or (mindwtr-parse--prop "MW_ID")
+                        (or (mindwtr-heading-id)
                             (let ((new (mindwtr-util-uuid)))
                               (org-set-property "MW_ID" new)
                               new))))
@@ -119,7 +119,7 @@ heading vanished or already left the inbox:
   (let ((id (pop mindwtr-clarify--pending)))
     (when (buffer-live-p mindwtr-clarify--source)
       (with-current-buffer mindwtr-clarify--source
-        (let ((pos (mindwtr-clarify--find-heading-by-id id)))
+        (let ((pos (mindwtr-heading-find-id id)))
           (when (and pos
                      (save-excursion
                        (goto-char pos)
@@ -165,8 +165,8 @@ clarified by other means) is simply skipped — exactly the behavior trash neede
   fix. (session history)
 
 ## Related Issues
-- Commit `749b95b` (markers → MW_IDs). The marker-based queue was carried unchanged through the
-  org-gtd WIP-buffer rebuild (`f678f38`) before the trash path exposed it.
+- Commit `4f34190` (markers → MW_IDs). The marker-based queue was carried unchanged through the
+  org-gtd WIP-buffer rebuild (`c62eb8f`) before the trash path exposed it.
 - [[reconcile-partial-update-reverts-remote-edits]] — the **sibling** of this bug. Same marker
   mechanic ("deleting/replacing a region collapses every marker inside it onto the boundary"), a
   different remedy: that fix keeps markers valid by **inserting before deleting**; this one

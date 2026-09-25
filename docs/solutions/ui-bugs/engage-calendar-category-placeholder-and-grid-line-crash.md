@@ -16,7 +16,7 @@ related_components:
   - mindwtr-agenda--engage-spec
   - mindwtr-agenda--resolve-prefix
   - mindwtr-agenda--calendar-prefix-format
-  - mindwtr-util--map-entries
+  - mindwtr-heading-map
 tags: [agenda, org-mode, prefix-format, category, calendar-block, grid-lines, gtd]
 ---
 
@@ -34,7 +34,7 @@ The Engage view's four `tags-todo` blocks lead each line with the task's owning 
 
 ## What Didn't Work
 
-**The `???` itself is a category-resolution dead end, not a missing `#+CATEGORY`.** Org's `%-12:c` prefix asks for the entry's category. The Mindwtr buffer has no `#+CATEGORY`, so org falls back to the buffer's filename -- but the agenda is built over a filename-less scan: `mindwtr-util--map-entries` binds `buffer-file-name` to nil. With no `#+CATEGORY` and no filename, the category resolves to nil and org prints its `???` placeholder. Setting a `#+CATEGORY` would paper over the symptom but still show the *same* category on every line, not the per-line owning project the other blocks show. The right move is to stop asking org for a category here at all and route the calendar block through the same project/area resolver the tags-todo blocks use.
+**The `???` itself is a category-resolution dead end, not a missing `#+CATEGORY`.** Org's `%-12:c` prefix asks for the entry's category. The Mindwtr buffer has no `#+CATEGORY`, so org falls back to the buffer's filename -- but the buffer's category cache can be primed during a filename-less scan: `mindwtr-heading-map` binds `buffer-file-name` to nil. With no `#+CATEGORY` and no filename, the category resolves to nil and org prints its `???` placeholder (otherwise the useless `mindwtr:` filename category). Setting a `#+CATEGORY` would paper over the symptom but still show the *same* category on every line, not the per-line owning project the other blocks show. The right move is to stop asking org for a category here at all and route the calendar block through the same project/area resolver the tags-todo blocks use.
 
 **The subtler trap: you cannot just point the calendar block at the existing prefix.** The `tags-todo` blocks resolve their per-line column with a `%(mindwtr-agenda--resolve-prefix)` escape. Org evaluates a `%(...)` escape with point on the entry's *source* heading, in the Org buffer -- which is why `mindwtr-agenda--resolve-prefix` can call `org-back-to-heading` and walk the outline. But an `agenda` block also emits **auxiliary lines** that are not entries: the time grid and the `now` marker. On those lines org evaluates the same `%(...)` escape with point in the *agenda* buffer, where there is no heading and `org-back-to-heading` signals an error -- aborting the whole agenda build. The tags-todo blocks never hit this because every line they emit is a real heading; the calendar block is the first caller that evaluates the escape off a heading.
 
@@ -93,7 +93,7 @@ The fix separates the two things org's default prefix conflated. The *category* 
 
 - **A `%(...)` prefix escape must survive being evaluated off a heading.** Org evaluates `org-agenda-prefix-format`'s `%(...)` on entry lines with point on the source heading, but on an `agenda` block's grid and `now`-marker lines it evaluates with point in the agenda buffer. Any helper that walks the outline (`org-back-to-heading`, `org-entry-get`, etc.) must gate on `(derived-mode-p 'org-mode)` and return a width-padded blank otherwise, or it will crash the agenda build. The `tags-todo` blocks hide this because every line they emit is a real heading -- the `agenda` block is where it bites.
 - **Pad the off-heading fallback to the prefix width.** Returning `""` unpadded would misalign the grid under the heading column. Run the blank through the same `truncate-string-to-width ... mindwtr-agenda-prefix-width` path as the real column so auxiliary lines stay aligned.
-- **Replace org's filename category rather than feeding it.** When a buffer has no `#+CATEGORY` and is scanned filename-less (`mindwtr-util--map-entries` binds `buffer-file-name` nil), org's `%-12:c` resolves to `???`. Setting a `#+CATEGORY` only swaps `???` for one constant string; if you want per-line context, override `org-agenda-prefix-format` to compute the column yourself and drop `%c` entirely.
+- **Replace org's filename category rather than feeding it.** When a buffer has no `#+CATEGORY` and is scanned filename-less (`mindwtr-heading-map` binds `buffer-file-name` nil), org's `%-12:c` resolves to `???`. Setting a `#+CATEGORY` only swaps `???` for one constant string; if you want per-line context, override `org-agenda-prefix-format` to compute the column yourself and drop `%c` entirely.
 - **Test the boundary, not just the headline.** Assert the project name *replaces* the category, and that neither `???` nor `mindwtr:` survives -- and separately, that the resolver returns an aligned blank off a heading. Isolate the calendar block's slice so a tags-todo line cannot satisfy the assertion by accident:
 
 ```elisp

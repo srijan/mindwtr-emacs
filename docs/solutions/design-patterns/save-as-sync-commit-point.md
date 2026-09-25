@@ -46,17 +46,19 @@ The gate and the auto-save are a **matched correctness pair** — neither is shi
 [[sync-reentrancy-in-flight-guard]]):
 
 ```elisp
+(defun mindwtr--file-buffer-dirty-p (path)
+  (and path (let ((buf (find-buffer-visiting path)))   ; truename/symlink-safe
+              (and buf (buffer-modified-p buf)))))
+
 (defun mindwtr--buffer-has-unsaved-edits-p ()
-  "Non-nil when the synced file is open in a buffer with unsaved edits."
-  (when mindwtr-file
-    (let ((buf (find-buffer-visiting mindwtr-file)))   ; truename/symlink-safe
-      (and buf (buffer-modified-p buf)))))
+  (or (mindwtr--file-buffer-dirty-p mindwtr-file)
+      (mindwtr--file-buffer-dirty-p (mindwtr-archive-path))))  ; archive is a rebuild target too
 
 (defun mindwtr--auto-sync ()
-  (unless (or mindwtr--sync-in-progress
+  (unless (or (mindwtr--sync-busy-p)
               (timerp mindwtr--retry-timer)
               mindwtr--error-state
-              (mindwtr--buffer-has-unsaved-edits-p))   ; <- the new gate
+              (mindwtr--buffer-has-unsaved-edits-p))   ; <- the gate
     (mindwtr--sync-attempt)))
 ```
 
@@ -64,19 +66,22 @@ Use `find-buffer-visiting`, not raw buffer-name matching — the same truename d
 `file-equal-p` guard elsewhere. If the file isn't open, there are no unsaved edits and sync runs
 freely.
 
-**The paired auto-save** (`mindwtr-sync.el`) — at the end of the *full-cycle* branch, after
-`mindwtr-reconcile-buffer`, return the buffer to clean on disk. Critically, this is **only** on
+**The paired auto-save** (`mindwtr-sync--finish`, `mindwtr-sync.el:1147-1171`) — at the end of
+the *full-cycle* branch, after reconciling every surface, return each buffer to clean on disk.
+Critically, this is **only** on
 the full-cycle branch — never on the `:noop` (HEAD already matches) branch, which never rebuilds
 and so must never save:
 
 ```elisp
-(mindwtr-reconcile-buffer merged)
+(dolist (s surfaces)
+  (with-current-buffer (plist-get s :buffer)
+    (mindwtr-reconcile-buffer merged (plist-get s :render))))
 ;; erase+insert always marks modified, so this always writes on a full cycle --
 ;; never on :noop.  Closes the loop that keeps the gate from wedging.
-(let ((save-failed (null (mindwtr-sync--save-buffer-quietly t))))
-  (mindwtr-shadow-save merged)
-  (mindwtr-shadow-set-etag (plist-get got :etag))
-  (list :ok t :conflicts conflicts :save-failed save-failed))
+(let ((save-failed (mindwtr-sync--save-surfaces surfaces)))   ; quiet-save t per surface
+  (mindwtr-shadow-commit merged (plist-get got :etag)
+                         (unless save-failed <latches>))
+  ... :save-failed save-failed)
 ```
 
 **The quiet-save helper** — saves without re-arming the sync debounce, and never throws (it runs
@@ -116,9 +121,10 @@ lower layer both files see) so it compiles clean under `error-on-warn`:
                                  #'mindwtr--auto-sync)))))
 ```
 
-The flag is `let`-bound `t` and never `setq`-reset, so it auto-unwinds on any non-local exit —
-mirroring the `mindwtr--sync-in-progress` reentrancy guard, which was the established template
-this flag was modelled on. *(session history)*
+The flag is `let`-bound `t` and never `setq`-reset, so it auto-unwinds on any non-local exit.
+It was modelled on the then-`let`-bound `mindwtr--sync-in-progress` guard *(session history)*;
+since the async rewrite (2039bfa) that guard is `setq`'d across the cycle's callback window, so
+the two no longer share the idiom.
 
 **Asymmetric `before-save-hook` handling** via `protect-content`:
 - **Engine save** (auto-save after reconcile, bootstrap overwrite) passes `t` →
@@ -129,22 +135,31 @@ this flag was modelled on. *(session history)*
   `C-x C-s` would, because a manual sync *is* an ordinary user save.
 
 **Manual sync = save-then-sync escape hatch** — bypasses the gate and always leaves the buffer
-clean, so an explicit request never refuses on a dirty buffer:
+clean, so an explicit request never refuses on a dirty buffer — the one exception is a live
+org-capture into a synced file, which both paths refuse (`mindwtr--capture-in-progress-p`,
+`mindwtr.el:339-365`; the unsaved-edits gate cannot cover it because a save clears the modified
+flag while the capture is live):
 
 ```elisp
 (defun mindwtr-sync ()
   (interactive)
+  (when-let* ((cap (mindwtr--capture-in-progress-p)))
+    (user-error "mindwtr: capture in progress (%s); finish, abort, or kill it first"
+                (buffer-name cap)))
   (mindwtr--reset-backoff)
   ;; Echo-suppressed but NOT content-protected: user's before-save-hooks run.
-  (when mindwtr-file
-    (let ((buf (find-buffer-visiting mindwtr-file)))
-      (when (and buf (buffer-modified-p buf))
-        (with-current-buffer buf
-          (mindwtr-sync--save-buffer-quietly)))))
+  (dolist (path (list mindwtr-file (mindwtr-archive-path)))
+    (when path
+      (let ((buf (find-buffer-visiting path)))
+        (when (and buf (buffer-modified-p buf))
+          (with-current-buffer buf
+            (mindwtr-sync--save-buffer-quietly))))))
+  (message "mindwtr: syncing...")
   (mindwtr--sync-attempt))
 ```
 
-**Failed save degrades to a visible, recoverable error** — not a silent stall (`mindwtr.el`):
+**Failed save degrades to a visible, recoverable error** — not a silent stall
+(`mindwtr--sync-handle-result`, `mindwtr.el:245-248`):
 
 ```elisp
 ((plist-get res :save-failed)
@@ -213,12 +228,11 @@ Before/after of the trigger contract:
 ```
 
 ## Related
-- Commits: `404f648` (echo-suppression infra + debounce early-return), `cdac7ca` (auto-save
-  after reconcile + gate), `2bffe75` (manual save-then-sync + bootstrap echo suppression).
+- Commits: `0eb01b4` (echo-suppression infra + debounce early-return), `3876947` (auto-save
+  after reconcile + gate), `8beb614` (manual save-then-sync + bootstrap echo suppression).
   an earlier PR. Plan: `docs/plans/2026-06-03-002-feat-gate-autosync-on-saved-state-plan.md`.
-- Shares the `mindwtr--auto-sync` gate and the `defvar` + `let` flag idiom with
-  [[sync-reentrancy-in-flight-guard]] — that doc's three-disjunct gate snippet predates this
-  fourth `buffer-modified-p` disjunct.
+- Shares the `mindwtr--auto-sync` gate with [[sync-reentrancy-in-flight-guard]] (the in-flight
+  disjunct is now `mindwtr--sync-busy-p`).
 - The rebuild-side counterpart that makes the rebuild less jarring when it *does* fire is
   [[preserving-buffer-view-state-across-reconcile]] (trigger-side vs. rebuild-side defenses).
 - Full signature-diffed incremental reconciliation (issue #3) would eliminate the full

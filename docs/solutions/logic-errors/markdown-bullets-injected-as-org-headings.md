@@ -26,7 +26,7 @@ tags:
 
 ## Problem
 
-Project notes (`:supportNotes`) and section/task notes (`:description`) arrive from Mindwtr Cloud as markdown and are rendered inline under an org heading. The render path (`mindwtr-render--mw->org-text`, called at `mindwtr-render.el:199`) converted markdown *links* to org links but passed everything else through verbatim.
+Project notes (`:supportNotes`) and section/task notes (`:description`) arrive from Mindwtr Cloud as markdown and are rendered inline under an org heading. The render path (`mindwtr-render--mw->org-text`, called at `mindwtr-render.el:248`) converted markdown *links* to org links but passed everything else through verbatim.
 
 Markdown and org disagree on one structural character: a line whose first non-blank content is a run of `*` followed by a space is an org **heading**. So a perfectly ordinary markdown note like:
 
@@ -62,7 +62,7 @@ So the wrong move was to expand the transform. The right move was to narrow it t
 
 Both converters gained a single leading-bullet normalization pass that runs *before* the existing link conversion. The regex anchors at line start (`^`), preserves leading indentation, and matches a star-run **or** a `+`, each followed by a space, rewriting it to org's only body-safe bullet marker, `- `.
 
-Render side, `mindwtr-render--mw->org-text` (`mindwtr-render.el:54`, regex at `:77`):
+Render side, `mindwtr-render--mw->org-text` (`mindwtr-render.el:94`, regex at `:118`):
 
 Before:
 ```elisp
@@ -76,15 +76,14 @@ Before:
 After:
 ```elisp
 (when text
-  (let ((s (replace-regexp-in-string
-            "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
-    (replace-regexp-in-string
-     "\\[\\([^]]*\\)\\](\\(\\(?:[^()]\\|([^()]*)\\)*\\))"
-     (lambda (m) ...link conversion...)
-     s t t)))
+  (mindwtr-render--mw->org-links
+   (replace-regexp-in-string
+    "^\\([ \t]*\\)\\(?:\\*+\\|\\+\\) " "\\1- " text)))
 ```
 
-Parse side, `mindwtr-parse--org->mw-text` (`mindwtr-parse.el:92`, regex at `:112`), gets the identical leading-bullet pass before the org→markdown link conversion. Because both directions normalize to `- `, a hand-typed `+ ` or `* ` bullet in the buffer converges to `- ` in a single sync cycle (the markdown re-baselines once) rather than churning the content signature forever. This is a deliberate **convert + normalize** design, not a lossless round-trip.
+Since 90914e5 (#29) the link half is split out as `mindwtr-render--mw->org-links` / `mindwtr-parse--org->mw-links`, which heading titles use alone, so a title beginning with `+ `/`* ` is never bullet-normalized.
+
+Parse side, `mindwtr-parse--org->mw-text` (`mindwtr-parse.el:95`, regex at `:116`), gets the identical leading-bullet pass before the org→markdown link conversion. Because both directions normalize to `- `, a hand-typed `+ ` or `* ` bullet in the buffer converges to `- ` in a single sync cycle (the markdown re-baselines once) rather than churning the content signature forever. This is a deliberate **convert + normalize** design, not a lossless round-trip.
 
 Inline emphasis (`**bold**`, `*italic*`, `_x_`, `` `code` ``) is left untouched in both directions.
 
@@ -107,7 +106,7 @@ Guardrail to keep: any new inline transform added to the shared converter pair m
 ## Related Issues
 
 - GitHub an earlier PR — introduced this fix as "Finding B".
-- Issue #35 — a pre-existing `mindwtr-parse--body` bug (a bare `:word:` line in note prose is read as a drawer and drops following content). The bullet-normalization work here widened its blast radius; the recorded fix direction is to restrict structural stripping (drawers + planning lines) to real org structure rather than matching anywhere in prose. Accepted as out of scope for #36. *(session history)*
+- `mindwtr-parse--body` once read a bare `:word:` line as a drawer and dropped the rest of the note. The bullet work widened that bug's blast radius. Fixed in 90914e5 (Closes #26): a `:word:` line opens a drawer only when a matching `:END:` follows, and SCHEDULED/DEADLINE/CLOSED are stripped only from the leading planning run.
 - [[org-markdown-link-conversion-roundtrip]] — the link-truncation sibling; same round-trip byte-stability theme, a different transform (links rather than bullets) in the same converter pair.
 - [[silent-deletion-untyped-org-headings]] — adjacent phantom/untyped heading handling; the downstream consequence of unintended headings reaching the parser.
 - [[content-signature-allow-list-not-deny-list]] — the broader principle: normalize only the constructs you can prove safe, rather than transforming everything.

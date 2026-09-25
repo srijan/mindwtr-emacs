@@ -52,10 +52,10 @@ branch, never `created`/`deleted`.
 **2. Derive the summary and the detail from one classifier, so they cannot drift.** When you add a
 per-item detail view next to an existing count, do not write a second, parallel classifier — it will
 eventually disagree ("count says 2 updated but the list shows 3"). Factor the classification into one
-function and have both the count and the detail consume it. The new `mindwtr-sync--local-changes`
-(the proposed-changes list) reuses the exact `mindwtr-sync--classify` that `mindwtr-sync--stats` (the
-count line) uses, including the identical three-part delete guard (tombstone / rendered-absent /
-already-seen). Count and detail are now consistent *by construction*.
+function and have both the count and the detail consume it. The count line (`mindwtr-sync--stats`)
+and the proposed-changes list (`mindwtr-sync--local-changes`) are both extractors over one pass,
+`mindwtr-sync--local-diff`, which calls `mindwtr-sync--classify` once per entity and applies the
+three-part delete guard (tombstone / rendered-absent / already-seen). Count and detail are now consistent *by construction*.
 
 **3. Reuse one diff renderer across both directions.** The report already had a field-diff renderer
 for the conflict block. Both proposed (`↑`) and incoming (`↓`) updates feed that *same* renderer.
@@ -132,8 +132,8 @@ where shadow `s` and merged `m` are already bound):
 ```
 
 Rule 2 — the proposed list reuses the count's classifier and delete guard
-(`mindwtr-sync--local-changes` mirrors `mindwtr-sync--stats` but emits records instead of
-incrementing counters), so the list and the `Proposed —` count cannot disagree.
+(`mindwtr-sync--local-diff` increments the counter and pushes the record in the same branch; the
+sync cycle computes it once and both `--stats` and `--local-changes` read facets of that result), so the list and the `Proposed —` count cannot disagree.
 
 Edge case: if signatures differ but no *content* field changed (e.g. only an `updatedAt` timestamp
 moved), the field-diff returns nil and no diff lines are emitted — the `updated` label still appears

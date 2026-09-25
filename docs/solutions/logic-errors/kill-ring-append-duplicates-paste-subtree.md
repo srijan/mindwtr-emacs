@@ -106,8 +106,12 @@ exactly the one subtree — across every Org version. The paste, which reads
   the related issue on testing across supported Emacs/Org versions.
 
 ## Prevention
-- Never call `org-paste-subtree` without an explicit `tree` when the matching
-  cut/copy might run consecutively with another kill. Pass the cut/copied text.
+- Bind `last-command` to nil around any `org-cut-subtree`/`org-copy-subtree`
+  whose result is then pasted from the kill ring. Do not "fix" it by passing the
+  cut's return value or `org-subtree-clip` as `tree` (both carry the appended
+  blob on Org 9.6). An explicit `tree` is safe only when it is text you extracted
+  yourself with `buffer-substring-no-properties`, as clarify's WIP/write-back
+  does (mindwtr-clarify.el `--open-wip`, `--write-back`).
 - When reproducing kill-ring / `org-cut-subtree` behaviour in ERT, set
   `last-command` deliberately — batch defaults hide append bugs.
 - Note: verifying this fix required `make compile` first; a stale `.elc` shadowed

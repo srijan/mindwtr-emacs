@@ -37,7 +37,7 @@ Empty labels were also mishandled in both directions, producing invalid org or a
 - Label-less links were not guaranteed byte-stable across a render→parse→render trip.
 
 ## What Didn't Work
-The first implementation (`205bdf0`) captured the markdown URL with a naive negated-char
+The first implementation (`5e5b82f`) captured the markdown URL with a naive negated-char
 class that ends at the first `)`:
 
 ```elisp
@@ -56,7 +56,7 @@ Emacs client perpetually "wins" the last-writer-wins merge. That framing elevate
 from a cosmetic nit to a must-fix blocker. *(session history)*
 
 ## Solution
-**Render (markdown→org), `mindwtr-render--mw->org-text`** — the URL group now tolerates one
+**Render (markdown→org), `mindwtr-render--mw->org-links`** (the links half that `mindwtr-render--mw->org-text` calls after bullet normalization) — the URL group now tolerates one
 level of balanced parens, and an empty/equal label collapses to the canonical `[[url]]`:
 
 ```elisp
@@ -78,7 +78,7 @@ balanced `(...)` group, so `Foo_(bar)` survives intact. The `string=`/`string-em
 branch renders the canonical label-less `[[url]]`, so `[](url)` no longer yields invalid
 `[[url][]]` and a label-less link is byte-stable.
 
-**Parse (org→markdown), `mindwtr-parse--org->mw-text`** — nil-safe, empty-label fallback,
+**Parse (org→markdown), `mindwtr-parse--org->mw-links`** (called by `mindwtr-parse--org->mw-text`) — nil-safe, empty-label fallback,
 documented `]`-in-url limitation:
 
 ```elisp
@@ -140,3 +140,4 @@ silencing the churn.
   [[preserving-buffer-view-state-across-reconcile]] and
   [[silent-deletion-untyped-org-headings]] for adjacent reconcile/sync-integrity work.
 - Checklist-item link conversion was intentionally deferred per issue scope (follow-up).
+  Heading titles gained link conversion (links-only halves) in 90914e5 (#29).

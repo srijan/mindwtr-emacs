@@ -31,7 +31,7 @@ structurally different from the server's canonical form on every cycle — a pha
 - The task's content signature never matched the server snapshot, so it re-synced forever.
 
 ## What Didn't Work
-The buggy `mindwtr-parse-buffer` task branch (commit `551a9ca`) walked all three ancestor kinds
+The buggy `mindwtr-parse-buffer` task branch (commit `be77e92`) walked all three ancestor kinds
 and set each one it found:
 
 ```elisp
@@ -50,48 +50,55 @@ consumed only the innermost, a direct contradiction. Keeping the `MW_AREA_ID` pr
 alongside the ancestor walk didn't help: both sources produced the same spurious `:areaId`.
 
 ## Solution
-Make the task containment `cond` exclusive, and move area resolution to an explicit `MW_AREA:`
-property (commits `4a3c677`, then `a2b19e0`).
+Make the task containment `cond` exclusive, and move area resolution to an explicit drawer
+property (commits `ff28188`, `4a26292`; since `8121472` that property is org's native
+`:CATEGORY:`, with `:MW_AREA:` read only as a legacy fallback).
 
-Task branch now (`mindwtr-parse.el:329-337`):
+Task branch now (`mindwtr-parse.el:403-416`):
 
 ```elisp
 ('task
- (let ((sid (mindwtr-parse--ancestor-id 'section))
-       (pid (mindwtr-parse--ancestor-id 'project)))
+ (let ((sid (or (mindwtr-heading-prop "MW_SECTION_ID")
+                (mindwtr-heading-ancestor-id 'section)))
+       (pid (or (mindwtr-heading-prop "MW_PROJECT_ID")
+                (mindwtr-heading-ancestor-id 'project))))
    (cond (sid (setq e (plist-put e :sectionId sid)))
          (pid (setq e (plist-put e :projectId pid)))))   ; exclusive; no areaId from outline
  (push (mindwtr-parse--strip-internal e) tasks))
 ```
 
+The explicit `MW_SECTION_ID`/`MW_PROJECT_ID` props are the archive surface's cross-file
+carrier and win over ancestry per axis; the section-over-project exclusivity is unchanged.
+
 `:areaId` is no longer derived from outline nesting for tasks. It comes only from an explicit
-`MW_AREA:` property, resolved post-loop for every kind through a `name->id` hash
-(`mindwtr-parse.el:248-249`):
+`:CATEGORY:` property (legacy `:MW_AREA:` fallback), resolved post-loop for every kind through
+a `name->id` hash (`mindwtr-parse.el:339-342`):
 
 ```elisp
-(let ((aid (mindwtr-parse--area-id (mindwtr-parse--prop "MW_AREA"))))
-  (when aid (setq e (plist-put e :areaId aid))))   ; nil for tasks with no MW_AREA → nothing set
+(let ((aid (mindwtr-parse--area-id
+            (or (mindwtr-heading-prop "CATEGORY")
+                (mindwtr-heading-prop "MW_AREA")))))
+  (when aid (setq e (plist-put e :areaId aid))))   ; nil for tasks with no CATEGORY → nothing set
 ```
 
-`:areaId :projectId :sectionId` are all in `mindwtr-model-content-fields` (`mindwtr-model.el:153`),
+`:areaId :projectId :sectionId` are all in `mindwtr-model-content-fields` (`mindwtr-model.el:165`),
 which is why a spurious `:areaId` always surfaced as signature drift.
 
 ## Why This Works
 The server's single-reference model and the parser's `cond` gate now agree: a task carries
-exactly one of `{sectionId, projectId}` (or neither, if standalone), never both. The `MW_AREA:`
+exactly one of `{sectionId, projectId}` (or neither, if standalone), never both. The `:CATEGORY:`
 property is written by the renderer *iff* `:areaId` is set and resolvable
-(`mindwtr-render.el:138-141`), and read back through `mindwtr-parse--area-id` — closing the
-round-trip. A task without an area has no `MW_AREA:` property and so no spurious `areaId`.
+(`mindwtr-render.el:188-191`), and read back through `mindwtr-parse--area-id` — closing the
+round-trip. A task without an area has no `:CATEGORY:` property and so no spurious `areaId`.
 
 ## Prevention
 - State the containment rule (section > project > area, mutually exclusive for tasks) **once**,
   near `mindwtr-model-content-fields`, so parser and reconcile share one source of truth instead
   of encoding it independently — the contradiction here came from two independent encodings.
-- Add a round-trip test: parse a task-under-project and assert
-  `(null (plist-get task :areaId))` and `(null (plist-get task :sectionId))` when no section
-  ancestor is present.
+- Covered by the areaId/CATEGORY parse test `mindwtr-parse-area-from-property` in
+  `test/mindwtr-parse-test.el` (~:106).
 
 ## Related Issues
-- Commit `4a3c677` fixed this alongside the signature deny-list → allow-list transition
+- Commit `ff28188` fixed this alongside the signature deny-list → allow-list transition
   ([[content-signature-allow-list-not-deny-list]]) in the same live smoke session.
-- Commit `a2b19e0` introduced `MW_AREA:` as the area-id carrier, replacing outline nesting.
+- Commit `4a26292` introduced `MW_AREA:` as the area-id carrier, replacing outline nesting; superseded as carrier by `:CATEGORY:` in `8121472`.

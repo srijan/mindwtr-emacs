@@ -39,8 +39,8 @@ current but does **not** kill it on exit — unlike `with-temp-buffer`, there is
 wrapper that auto-kills the response buffer.
 
 ## Solution
-Capture the buffer in a variable and wrap the read in `unwind-protect` (`mindwtr-api.el:54-70`,
-commit `74383fb`):
+Capture the buffer in a variable and wrap the read in `unwind-protect`
+(`mindwtr-api--url-http`, `mindwtr-api.el:66-88`, commit `9c8c398`):
 
 ```elisp
 (let ((buf (url-retrieve-synchronously (plist-get req :url) t)))
@@ -61,9 +61,10 @@ commit `74383fb`):
     (when (buffer-live-p buf) (kill-buffer buf))))
 ```
 
-The `(buffer-live-p buf)` guard is defensive: if `url-retrieve-synchronously` returned nil (e.g.
-a TLS error preventing buffer creation), the cleanup doesn't raise a second error that masks the
-first.
+The `(buffer-live-p buf)` guard is defensive against a buffer already killed elsewhere. A nil
+return (e.g. a TLS error preventing buffer creation) never reaches the `unwind-protect`: it is
+signalled as a retryable error just above it (`mindwtr-api.el:71-72`, see
+[[url-retrieve-synchronously-nil-buffer-crash-on-tls-drop]]).
 
 ## Why This Works
 `unwind-protect` runs the cleanup regardless of how control leaves the protected form — normal
@@ -76,14 +77,14 @@ before exit, so the buffer can be killed immediately; nothing holds a reference.
   must pair it with a `kill-buffer` in an `unwind-protect`. Do not use `with-current-buffer` on
   the return value as a shorthand — it never kills.
 - This path is the bare-Emacs fallback; when `plz.el` is available (`mindwtr-api--default-http`
-  tries `(require 'plz nil t)` first) it isn't taken at all.
+  tries `(require 'plz nil t)` first and only calls `mindwtr-api--url-http` without it) it isn't
+  taken at all.
 
 ## Related Issues
 - Same `url.el` transport surface as [[json-encoding-gotchas-emacs-server-boundary]] (the
   multibyte-body crash). Both are `url.el` fallback-path footguns.
 - The synchronous transport's nested-event-loop behavior is the subject of
   [[sync-reentrancy-in-flight-guard]].
-- The defensive `(buffer-live-p buf)` nil case above (a TLS error returning no
-  buffer) is the read-side crash documented in
-  [[url-retrieve-synchronously-nil-buffer-crash-on-tls-drop]]: that doc guards
+- The nil-buffer case (a TLS error returning no buffer) is handled before this
+  cleanup; see [[url-retrieve-synchronously-nil-buffer-crash-on-tls-drop]]: that doc guards
   `with-current-buffer` against the same nil and turns it into a retryable error.

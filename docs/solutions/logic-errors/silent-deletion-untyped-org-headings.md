@@ -21,8 +21,8 @@ tags: [data-loss, org-mode, sync-reconcile, type-inference, quarantine, safe-by-
 
 ## Problem
 A sync runs `mindwtr-sync-once` → parse buffer → PUT entities → GET merged →
-`mindwtr-reconcile-buffer`, which `erase-buffer`s and re-renders the whole file from server
-data. The parser only collected headings carrying a non-`container` `:MW_TYPE:`, so any
+`mindwtr-reconcile-buffer`, which replaces the whole buffer (since `353b301` via a
+`replace-buffer-contents` diff) with a re-render of the file from server data. The parser only collected headings carrying a non-`container` `:MW_TYPE:`, so any
 heading added without that property (via org-capture, a raw edit, or mobile) never entered
 the parsed appdata, was never pushed to the server, and was therefore **erased by the full
 rebuild — silently, with no warning.**
@@ -73,14 +73,15 @@ infer the entity kind from the nearest container's `:MW_LIST:` role plus project
 ancestry:
 
 ```elisp
-(defun mindwtr-parse--infer-kind ()
-  (pcase (mindwtr-parse--ancestor-list-role)
+(defun mindwtr-parse-infer-kind ()
+  (pcase (mindwtr-heading-container-role)
     ((or "inbox" "single-actions" "someday-single-actions" "reference") 'task)
     ((or "projects" "someday-projects")
-     (if (or (mindwtr-parse--ancestor-id 'section)
-             (mindwtr-parse--ancestor-id 'project))
+     (if (or (mindwtr-heading-ancestor-id 'section)
+             (mindwtr-heading-ancestor-id 'project))
          'task 'project))
     ("areas" 'area)
+    ("people" 'person)
     (_ nil)))
 ```
 
@@ -89,31 +90,35 @@ treated as absent so it routes through inference/quarantine instead of interning
 empty symbol:
 
 ```elisp
-(defun mindwtr-parse--mw-type ()
-  (let ((v (mindwtr-parse--prop "MW_TYPE")))
-    (and v (not (string-empty-p v)) v)))
+;; mindwtr-heading.el
+(defun mindwtr-heading-type ()
+  (mindwtr-heading-prop-nonblank "MW_TYPE"))   ; nil when absent OR blank
 
-(let* ((mt   (mindwtr-parse--mw-type))
-       (kind (cond ((null mt)               (mindwtr-parse--infer-kind))
+;; mindwtr-parse-buffer
+(let* ((mt   (mindwtr-heading-type))
+       (kind (cond ((null mt)               (mindwtr-parse-infer-kind))
                    ((string= mt "container") nil)
                    (t                        (intern mt)))))
   (when kind ...))
 ```
 
 **U2 — quarantine un-inferable headings instead of erasing (reconcile).** Before the
-`erase-buffer`, collect every heading that has no (non-blank) MW_TYPE and no inferable kind,
+rebuild, collect every heading that has no (non-blank) MW_TYPE and no inferable kind,
 and re-emit it verbatim under a `* Sync Failures` container after the canonical render:
 
 ```elisp
-(defun mindwtr-reconcile--orphan-heading-p ()
-  (and (null (mindwtr-parse--mw-type))
-       (null (mindwtr-parse--infer-kind))))
+(defun mindwtr-reconcile--orphan-heading-p (&optional merged-ids)
+  (cond
+   ((and (null (mindwtr-heading-type)) (null (mindwtr-parse-infer-kind)))
+    'untyped)
+   ;; blank title, id absent from MERGED-IDS (65a67ef)
+   (... 'no-title)))
 
-;; in mindwtr-reconcile-buffer — collect from the LIVE buffer BEFORE erase
-(let ((orphans (mindwtr-reconcile--collect-orphans)))
-  (erase-buffer)
-  (insert rendered)
-  (mindwtr-reconcile--emit-quarantine orphans))
+;; in mindwtr-reconcile-buffer — collect from the LIVE buffer BEFORE the rebuild
+(orphans (mindwtr-reconcile--collect-orphans (mindwtr-reconcile--merged-ids merged)))
+…
+(mindwtr-reconcile--replace-buffer-contents rendered)
+(mindwtr-reconcile--emit-quarantine orphans)
 ```
 
 `--collect-orphans` captures only an orphan's **own** heading + body (not its whole subtree)
@@ -121,7 +126,8 @@ and always descends, so a typed/inferable descendant is left to its canonical bu
 the duplicate-MW_ID fix. An existing `* Sync Failures` container is itself recognized, so the
 walk descends into it and re-collects its children individually, discarding the wrapper and
 keeping quarantine **idempotent**. Emitting nothing when `orphans` is empty means a clean sync
-produces no `* Sync Failures` heading.
+produces no `* Sync Failures` heading. Blank-title headings are a second quarantine reason
+(`65a67ef`), annotated with their own `mindwtr-reconcile--quarantine-no-title-note`.
 
 **U3 — org-capture template (convenience).** New `mindwtr-capture.el` returns a template that
 stamps `:MW_TYPE: task` and a freshly minted lowercase v4 `:MW_ID:`:
@@ -169,6 +175,5 @@ container means the safety net never accumulates cruft.
 - Adjacent to [[preserving-buffer-view-state-across-reconcile]] (render-before-erase safety,
   view-state restoration) and the signature-stability invariant in
   [[org-markdown-link-conversion-roundtrip]].
-- Related gap noted but out of scope: `MW_FOCUS_TODAY` (`isFocusedToday`) is deliberately
-  excluded from `mindwtr-model-content-fields`, so focus-status edits are silently dropped on
-  sync — filed separately as issue #2. *(session history)*
+- `isFocusedToday` (`MW_FOCUS_TODAY`) was later promoted onto `mindwtr-model-content-fields`
+  (issue #2 resolved).

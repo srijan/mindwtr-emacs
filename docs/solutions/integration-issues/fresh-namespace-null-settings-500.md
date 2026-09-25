@@ -59,7 +59,7 @@ Synthesize a minimal, non-null `settings` object on the client whenever the name
 
 It deliberately carries a single non-empty key, `:syncPreferences` → `(:initialized t)`. Two reasons: (1) `syncPreferences` is the exact field the server's merge reads first, so it is guaranteed present; and (2) a non-empty object survives the encoder (an empty object would collapse to JSON null again). It encodes to `{"syncPreferences":{"initialized":true}}`.
 
-The synthesis was originally inlined at the two write/render sites (commit `77ec2da`, "fix(sync): create initial settings so a fresh namespace accepts writes"), then consolidated into one normalizer (commit `207bb5b`, "refactor(settings): consolidate non-null-settings guard into one helper"):
+The synthesis was originally inlined at the two write/render sites (commit `c3d5f1a`, "fix(sync): create initial settings so a fresh namespace accepts writes"), then consolidated into one normalizer (commit `178d766`, "refactor(settings): consolidate non-null-settings guard into one helper"):
 
 ```elisp
 (defun mindwtr-model-ensure-settings (appdata)
@@ -86,7 +86,7 @@ Note it `copy-sequence`s rather than mutating the caller's structure, and return
    (appdata (mindwtr-model-ensure-settings (plist-get got :appdata)))
    ```
 
-3. **`mindwtr-sync-once` GET path (`mindwtr-sync.el`)** — normalize on the way *in* too, so that if the server ever returns a null/absent settings, the shadow stays consistent now instead of relying on the next cycle to re-synthesize:
+3. **GET-result path in `mindwtr-sync--finish` (`mindwtr-sync.el:1119`, the full-cycle stage of `mindwtr-sync-once-async`)** — normalize on the way *in* too, so that if the server ever returns a null/absent settings, the shadow stays consistent now instead of relying on the next cycle to re-synthesize:
 
    ```elisp
    (merged (mindwtr-model-ensure-settings (plist-get got :appdata)))
@@ -112,5 +112,5 @@ This is a robust client-side fix for a server-side gap, and it is the right laye
 ## Related Issues
 
 - GitHub an earlier PR — dockerized integration smoke + curl cross-check, which surfaced this 500.
-- Follow-up commits: `77ec2da` (initial client-side fix), `032b2fe` (test pins for the synthesis), `207bb5b` (consolidation into `mindwtr-model-ensure-settings`).
+- Follow-up commits: `c3d5f1a` (initial client-side fix), `190907b` (test pins for the synthesis), `178d766` (consolidation into `mindwtr-model-ensure-settings`).
 - [[json-encoding-gotchas-emacs-server-boundary]] — same Emacs↔server sync boundary; directly relevant here, since the "empty object collapses to JSON null through the encoder" gotcha is *why* the default must carry a non-empty key.

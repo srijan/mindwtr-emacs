@@ -20,8 +20,9 @@ tags: [emacs, org-mode, buffer-view, fold-state, reconcile, scroll-anchor, recen
 
 ## Context
 `mindwtr-reconcile-buffer` is the heart of the sync path. After the server PUT commits, it
-rebuilds the entire org buffer to the canonical GTD layout via `erase-buffer` + `insert` of
-freshly rendered text. The full-rebuild approach is deliberate (the stopgap explicitly defers
+rebuilds the entire org buffer to the canonical GTD layout by replacing it with freshly
+rendered text (originally `erase-buffer` + `insert`; since `353b301` a `replace-buffer-contents`
+diff that also keeps external markers such as org-agenda lines valid). The full-rebuild approach is deliberate (the stopgap explicitly defers
 signature-diffed in-place rewriting, tracked as issue #3) and has a real virtue:
 render-before-erase means a render error leaves the buffer intact.
 
@@ -42,15 +43,14 @@ nothing."
 **Key everything to stable IDs, never positions.** Char offsets are meaningless after
 `erase-buffer`+`insert`. Anchor every restorable thing to a heading's stable key — `MW_ID` for
 entities (UUIDs), `MW_LIST` role for containers (Inbox, Projects, …). They never collide, so
-one regex resolves either:
+one regex resolves either. `mindwtr-heading-goto-key` moves to the heading found by
+`mindwtr-heading-find-key` (`mindwtr-heading.el:151-164`):
 
 ```elisp
-(defun mindwtr-reconcile--goto-id (id)
-  (when id
-    (goto-char (point-min))
-    (let ((re (format ":MW_\\(?:ID\\|LIST\\): *%s *$" (regexp-quote id))))
-      (when (re-search-forward re nil t)
-        (org-back-to-heading t)))))
+(defun mindwtr-heading-find-key (key)
+  (and key
+       (mindwtr-heading--find-drawer-line
+        (format "^[ \t]*:MW_\\(?:ID\\|LIST\\):[ \t]*%s[ \t]*$" (regexp-quote key)))))
 ```
 
 **Snapshot must run BEFORE `mindwtr-parse-ensure-keywords`** — an implementation-time
@@ -79,10 +79,10 @@ recorded only for headings whose own line is currently visible (a heading hidden
 ancestor is collapsed is skipped — the ancestor's record covers it):
 
 ```elisp
-(org-map-entries
+(mindwtr-heading-map
  (lambda ()
-   (let ((key (or (mindwtr-parse--prop "MW_ID")
-                  (mindwtr-parse--prop "MW_LIST"))))
+   (let ((key (or (mindwtr-heading-id)
+                  (mindwtr-heading-prop "MW_LIST"))))
      (when (and key (not (org-invisible-p (line-beginning-position))))
        (puthash key
                 (cond ((not (org-invisible-p (line-end-position))) 'open)
@@ -136,7 +136,7 @@ off-screen fallback (retiring it would leave no recovery when the anchor scrolle
     (with-selected-window win (goto-char pt) (recenter anchor-line))))
  (top-id
   (save-excursion
-    (when (mindwtr-reconcile--goto-id top-id)              ; off-screen fallback
+    (when (mindwtr-heading-goto-key top-id)                ; off-screen fallback
       (set-window-start win (line-beginning-position))))))
 ```
 
@@ -197,13 +197,13 @@ Two failure modes were caught in review and locked in with regression tests:
   point to *that window's* own stored point, so `recenter` would center on a stale line. Restore
   re-asserts the heading position inside `with-selected-window` before recentering. The test
   asserts the recenter uses buffer point, not the stale window-point. *(session history)*
-- **Anchor entity deleted by the same sync.** `--goto-id` then strands point at `point-min`;
+- **Anchor entity deleted by the same sync.** `mindwtr-heading-goto-key` then leaves point at `point-min`;
   recentering there yanks the viewport to the top — the exact jump this change exists to prevent.
   So `mindwtr-reconcile-buffer` drops `:anchor-line` when the anchor no longer resolves, falling
   back to `:top-id`:
 
   ```elisp
-  (unless (mindwtr-reconcile--goto-id at-id)
+  (unless (mindwtr-heading-goto-key at-id)
     (setq view (and view (plist-put view :anchor-line nil))))
   ```
 
@@ -245,9 +245,9 @@ rather than skipping in non-interactive mode. *(session history)*
 ;; AFTER (an earlier PR): no backdrop. Buffer starts fully expanded; we ONLY hide, top-down,
 ;; keyed by (or MW_ID MW_LIST), guarded by heading-line visibility. Can never fold more
 ;; than the user actually had folded.
-(org-map-entries
+(mindwtr-heading-map
  (lambda ()
-   (let* ((key (or (mindwtr-parse--prop "MW_ID") (mindwtr-parse--prop "MW_LIST")))
+   (let* ((key (or (mindwtr-heading-id) (mindwtr-heading-prop "MW_LIST")))
           (st  (and key (gethash key folds))))
      (when (not (org-invisible-p (line-beginning-position)))
        (pcase st
@@ -267,19 +267,16 @@ cursor on a container heading resolves to a stable key instead of nil:
 ```elisp
 ;; BEFORE: MW_ID-only — cursor on `* Projects' (no MW_ID) returned nil; rebuild dropped
 ;;         point to point-min.  AFTER:
-(let ((own-list (mindwtr-parse--prop "MW_LIST"))
-      (id       (mindwtr-parse--prop "MW_ID")))
-  (while (and (not id) (org-up-heading-safe))
-    (setq id (mindwtr-parse--prop "MW_ID")))
-  (or id own-list))
+(or (car (mindwtr-heading-nearest-id-pos))   ; nearest MW_ID at or above point
+    (mindwtr-heading-prop "MW_LIST"))
 ```
 
 The scroll-anchor regex was widened the same way: `:MW_ID:` → `:MW_\(?:ID\|LIST\):`.
 
 ## Related
-- Merge commits: an earlier PR = `fba8b6b` (the stopgap); an earlier PR = `787e8eb` (fixes #20). The
-  degrade-each-sync fix is `49a9556`; the container point/scroll fix is `12c51cc`. The
-  pixel-stable scroll iteration is an earlier PR = `ebeefe7` (Closes #22); regression tests in
+- Merge commits: an earlier PR = `fa8b8a4` (the stopgap); an earlier PR = `65db7c3` (fixes #20). The
+  degrade-each-sync fix is `9119c03`; the container point/scroll fix is `4b71a63`. The
+  pixel-stable scroll iteration is an earlier PR = `92cf4cd` (Closes #22); regression tests in
   `test/mindwtr-reconcile-test.el` (windowed recenter round-trip; stale-window-point;
   off-screen `:top-id` fallback; end-to-end deleted-anchor through `reconcile-buffer`).
 - The **trigger-side** counterpart that stops the rebuild from firing mid-edit at all is

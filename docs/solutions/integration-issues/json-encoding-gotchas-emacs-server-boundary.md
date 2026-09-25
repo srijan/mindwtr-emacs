@@ -54,7 +54,7 @@ multibyte text — right for file I/O, still wrong as a raw HTTP body.
   them. The actual fix is a purpose-built `\uXXXX` escaper over the already-decoded text.
 
 ## Solution
-**(a) Decode the unibyte output of `json-serialize` immediately** (`mindwtr-util.el:105-116`):
+**(a) Decode the unibyte output of `json-serialize` immediately** (`mindwtr-util.el:118-129`):
 
 ```elisp
 (defun mindwtr-util-json-encode (obj)
@@ -70,7 +70,7 @@ multibyte text — right for file I/O, still wrong as a raw HTTP body.
 File I/O is also pinned to UTF-8 (`mindwtr-util-read-file` binds `coding-system-for-read`,
 `mindwtr-util-atomic-write` binds `coding-system-for-write`).
 
-**(b) Guard `nil` before the array branch** in `mindwtr-util--json-prep` (`mindwtr-util.el:84-103`).
+**(b) Guard `nil` before the array branch** in `mindwtr-util--json-prep` (`mindwtr-util.el:97-116`).
 The dispatch test changed from `(and (listp obj) (not (null obj)) (keywordp (car obj)))` to
 `(and (consp obj) (keywordp (car obj)))` — `consp` is false for `nil`, so a nil value never
 enters the plist branch. Inside the loop, a nil value emits `[]` *only* for keys in
@@ -85,14 +85,15 @@ enters the plist branch. Inside the loop, a nil value emits `[]` *only* for keys
 ```
 
 **(c) Re-escape non-ASCII for the HTTP body** via `mindwtr-util-json-ascii`
-(`mindwtr-util.el:118-133`), used at the PUT site (`mindwtr-api.el:128-130`). It calls
+(`mindwtr-util.el:131-146`), used at both PUT sites (`mindwtr-api.el:266` async, `:306` sync).
+It calls
 `mindwtr-util-json-encode` (now multibyte text), then maps each char: ASCII passes through, BMP
 non-ASCII emits `\uXXXX`, astral chars emit a UTF-16 surrogate pair. The result is pure ASCII
 that `url.el` sends without complaint and any JSON decoder reads identically.
 
 The two paths are deliberate inverses: `mindwtr-util-json-encode` **decodes** UTF-8 bytes to
 text (for file I/O); `mindwtr-util-json-ascii` **escapes** non-ASCII to `\uXXXX` (for HTTP).
-(Commits `d58e0a7`, `3185ed1`.)
+(Commits `fc31b99`, `4d585db`.)
 
 ## Why This Works
 - `decode-coding-string ... 'utf-8` is the exact inverse of what `json-serialize` did — a

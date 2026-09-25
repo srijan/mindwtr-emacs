@@ -16,7 +16,7 @@ resolution_type: code_fix
 severity: medium
 related_components:
   - mindwtr-commands--stamp-missing-child-keywords
-  - mindwtr-sync--build-candidate
+  - mindwtr-sync-build-candidate
   - mindwtr-parse
 tags: [sync, status-default, project-task, next, inbox, parent-presence, status-agnostic]
 ---

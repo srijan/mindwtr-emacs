@@ -21,15 +21,15 @@ tags: [sync, identity, uuid, mw-id, mw-list, org-id, container, capture]
 The sync buffer uses two **disjoint** identity namespaces, both in the PROPERTIES drawer:
 
 - **`MW_ID` — entity identity.** Every synced entity (task, project, section, area) carries
-  `:MW_ID:`, a lowercase RFC-4122 v4 UUID from `mindwtr-util-uuid` (`mindwtr-util.el:11-20`). It is
+  `:MW_ID:`, a lowercase RFC-4122 v4 UUID from `mindwtr-util-uuid` (`mindwtr-util.el:19`). It is
   the server's primary key (which PUT/DELETE targets) and the shadow index key
-  (`mindwtr-shadow-index`, `mindwtr-shadow.el:51-56`). The sync engine mints it lazily at
-  candidate-build time — `(or (plist-get le :id) (mindwtr-util-uuid))` (`mindwtr-sync.el:134`); the
-  capture template can stamp it eagerly (`mindwtr-capture.el:15-28`), noted as belt-and-suspenders.
+  (`mindwtr-shadow-index`, `mindwtr-shadow.el:271`). The sync engine mints it lazily at
+  candidate-build time — `(or (plist-get le :id) (mindwtr-util-uuid))` (`mindwtr-sync.el:391`, in `mindwtr-sync-build-candidate`); the
+  capture template can stamp it eagerly (`mindwtr-capture.el:35-43`), noted as belt-and-suspenders.
 - **`MW_LIST` — container role.** Container headings (`* Inbox`, `* Projects`, …) carry only
-  `:MW_LIST:`, a role string from `mindwtr-model-list-roles` (`mindwtr-model.el:43-49`):
+  `:MW_LIST:`, a role string from `mindwtr-model-list-roles` (`mindwtr-model.el:52`):
   `"inbox"`, `"projects"`, `"areas"`, etc. They carry **no** `MW_ID`
-  (`mindwtr-render--container`, `mindwtr-render.el:200-203`, emits only `MW_TYPE: container` +
+  (`mindwtr-render--container`, `mindwtr-render.el:269-272`, emits only `MW_TYPE: container` +
   `MW_LIST: <role>`).
 - **org `:ID:`** (from `org-id-get-create`) is **not** in `mindwtr-parse--known-props`, so it lands
   in `:mw-extra-props`, is never read by the sync engine, and is preserved verbatim. It must
@@ -48,16 +48,16 @@ The sync buffer uses two **disjoint** identity namespaces, both in the PROPERTIE
 
 The two namespaces are disjoint because entity UUIDs (36-char hyphenated hex) and container role
 strings (short lowercase words) cannot collide. This is exploited so one regex resolves either
-(`mindwtr-reconcile--goto-id`, `mindwtr-reconcile.el:150-158`):
+(`mindwtr-heading-find-key` / `mindwtr-heading-goto-key`, `mindwtr-heading.el:151-164`):
 
 ```elisp
-(let ((re (format ":MW_\\(?:ID\\|LIST\\): *%s *$" (regexp-quote id))))
-  (when (re-search-forward re nil t) ...))
+(mindwtr-heading--find-drawer-line
+ (format "^[ \t]*:MW_\\(?:ID\\|LIST\\):[ \t]*%s[ \t]*$" (regexp-quote key)))
 ```
 
-`mindwtr-reconcile--id-at-point` (`:136-148`) returns the nearest entity's `MW_ID`, falling back
+`mindwtr-reconcile--id-at-point` (`mindwtr-reconcile.el:134-144`, via `mindwtr-heading-nearest-id-pos`) returns the nearest entity's `MW_ID`, falling back
 to the current heading's `MW_LIST` role — so a cursor on `* Projects` resolves to `"projects"`.
-Fold snapshot/restore (`:197-277`) keys on `(or MW_ID MW_LIST)`, making view state stable across a
+Fold snapshot/restore (`mindwtr-reconcile--snapshot-view` / `--restore-view`, `mindwtr-reconcile.el:198-330`) keys on `(or MW_ID MW_LIST)`, making view state stable across a
 rebuild for both entity and container headings.
 
 ## Why This Matters
@@ -94,5 +94,5 @@ the server (stored in `:mw-extra-props`, re-emitted verbatim).
 - [[silent-deletion-untyped-org-headings]] — a heading with only org `:ID:` (no `MW_TYPE`, no
   `MW_ID`) is treated as an orphan and quarantined unless under a recognized container.
 - [[desk-only-vs-synced-property-boundary]] — why org `:ID:` is preserved but never synced.
-- `mindwtr-reconcile--goto-id` (`mindwtr-reconcile.el:150-158`); `mindwtr-capture-template`
-  (`mindwtr-capture.el:14-28`); `mindwtr-sync` build-candidate lazy mint (`mindwtr-sync.el:134`).
+- `mindwtr-heading-find-key`/`mindwtr-heading-goto-key` (`mindwtr-heading.el:151-164`); `mindwtr-capture-template`
+  (`mindwtr-capture.el:35-43`); `mindwtr-sync` build-candidate lazy mint (`mindwtr-sync.el:391`).

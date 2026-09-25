@@ -69,7 +69,7 @@ The first attempted fix for P0 set `archive-warned` whenever `mindwtr-parse-warn
 
 ### P0 — Post-parse strict-mode safety gate
 
-Move the `mindwtr-sync--archive-strict` binding below `mindwtr-sync--parse-surfaces` so it can inspect actual parse results. Introduce `mindwtr-sync--archive-strict-safe-p` to gate the final latch:
+Compute the strict flag after `mindwtr-sync--parse-surfaces` (today in `mindwtr-sync--prepare`) so it can inspect actual parse results. Introduce `mindwtr-sync--archive-strict-safe-p` to gate the final latch:
 
 ```elisp
 (defun mindwtr-sync--archive-strict-safe-p (local shadow archive-warned)
@@ -88,17 +88,19 @@ Two conditions each withhold strict mode, falling back to echo-for-the-cycle (id
 The binding now reads:
 
 ```elisp
-;; Step 1: eligibility (same file-level guard as before)
+;; in `mindwtr-sync--prepare' (stage A of the async cycle)
+;; Step 1: eligibility (same file-level guard as before; latch read from the baseline)
 (archive-strict-eligible
  (and archive-active
-      (mindwtr-shadow-archive-migrated-p)
+      archive-migrated   ; (memq 'archive (mindwtr-shadow-baseline-latches baseline))
       (let ((p (mindwtr-archive-path))) (and p (file-exists-p p)))))
 ;; Step 2: parse-health gate (post-parse, can see what the parse actually returned)
-(mindwtr-sync--archive-strict
- (and archive-strict-eligible
-      (mindwtr-sync--archive-strict-safe-p
-       local shadow (plist-get parsed :archive-warned))))
+(strict (and archive-strict-eligible
+             (mindwtr-sync--archive-strict-safe-p
+              local shadow (plist-get parsed :archive-warned))))
 ```
+
+`strict` is bound onto `mindwtr-sync--archive-strict` for the rest of `mindwtr-sync--prepare`, stored on the `mindwtr-sync-cycle` (`:strict`), and re-bound by `mindwtr-sync--with-cycle` around every later (callback) stage.
 
 The `archive-warned` flag is computed inside `mindwtr-sync--parse-surfaces` immediately after parsing the archive surface's buffer and returned in the plist as `:archive-warned`. When eligibility passes but the gate withholds, a loud message fires:
 
@@ -122,7 +124,7 @@ Before the fix, `mindwtr-archive-refile-at-point` cut the subtree before pasting
 
 ```elisp
 ;; After: copy first, paste second, cut only on paste success
-(org-copy-subtree)
+(let ((last-command nil)) (org-copy-subtree))   ; see kill-ring-append-duplicates-paste-subtree
 ;; If this signals, control unwinds with the source subtree intact.
 (with-current-buffer abuf
   (let ((c (mindwtr-archive--ensure-container)))
