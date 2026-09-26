@@ -265,12 +265,16 @@ buffer rewrites between items."
 
 ;;; Outcomes
 
-(defun mindwtr-clarify--finalize (keyword)
-  "Set KEYWORD on the task at point and relocate it to its status bucket.
+(defun mindwtr-clarify--set-keyword (keyword)
+  "Set KEYWORD on the task at point.
 DONE and CANCELLED get a CLOSED stamp regardless of the user's
 `org-log-done' (the app records when a task was completed or cancelled)."
   (let ((org-log-done (and (member keyword '("DONE" "CANCELLED")) 'time)))
-    (org-todo keyword))
+    (org-todo keyword)))
+
+(defun mindwtr-clarify--finalize (keyword)
+  "Set KEYWORD on the task at point and relocate it to its status bucket."
+  (mindwtr-clarify--set-keyword keyword)
   (mindwtr-commands--relocate 'task))
 
 (defun mindwtr-clarify--post-prompts (&optional contexts-only)
@@ -352,15 +356,12 @@ at point in the source buffer.  Point is on the freshly written-back item."
     ;; Best-effort (R7): on failure the keyword stays and the next sync files
     ;; it.  With the surface inactive, fall back to the legacy in-place
     ;; finalize -- the heading keeps its place until the next sync drops
-    ;; archived tasks.  Cancel always gets its CLOSED stamp (the app records
-    ;; when a task was cancelled).
+    ;; archived tasks.
     ((or ?x ?c)
      (let ((kw (if (eq ch ?c) "CANCELLED" "ARCH")))
        (if (mindwtr-archive-path)
            (progn
-             (save-excursion
-               (org-back-to-heading t)
-               (let ((org-log-done (and (eq ch ?c) 'time))) (org-todo kw)))
+             (save-excursion (org-back-to-heading t) (mindwtr-clarify--set-keyword kw))
              (mindwtr-archive-refile-best-effort))
          (mindwtr-clarify--finalize kw))))))
 

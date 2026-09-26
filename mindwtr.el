@@ -33,6 +33,7 @@
 (require 'auth-source)
 (require 'url-parse)
 (require 'mindwtr-model)
+(require 'mindwtr-parse)
 (require 'mindwtr-api)
 (require 'mindwtr-sync)
 (require 'mindwtr-shadow)
@@ -115,23 +116,11 @@ auto-sync silently standing down forever.")
   ;; *before* this derived-mode body, so a plain `setq-local' here would
   ;; never reach `org-todo-kwd-alist'.  The canonical re-apply call,
   ;; `org-mode-restart', recurses infinitely from inside a derived mode
-  ;; (it re-invokes `major-mode', i.e. `mindwtr-mode').  So we mirror the
-  ;; proven pattern from `mindwtr-parse-ensure-keywords': dynamically bind
-  ;; `org-todo-keywords' and re-run `org-mode' once, which rebuilds
-  ;; `org-todo-kwd-alist' from those keywords.  That call resets
-  ;; `major-mode' back to `org-mode', so we re-stamp the derived identity
-  ;; afterward.  Guarded so a buffer already carrying the keywords is not
-  ;; needlessly re-initialised.  We check the *whole* sequence, not just
-  ;; NEXT: a personal config defining NEXT but not SOMEDAY/REF/etc. would
-  ;; otherwise pass the guard and leave those keywords unregistered.
-  (unless (seq-every-p (lambda (k) (member k org-todo-keywords-1))
-                       mindwtr-model-todo-keyword-names)
-    ;; A file rendered before a keyword was added carries an older
-    ;; `#+TODO:' line, which would outrank the binding below.
-    (mindwtr-model-refresh-keyword-line)
-    (let ((org-todo-keywords mindwtr-model-todo-keywords)
-          (org-inhibit-startup t))
-      (org-mode)))
+  ;; (it re-invokes `major-mode', i.e. `mindwtr-mode').  So we use
+  ;; `mindwtr-parse-ensure-keywords', which binds `org-todo-keywords' and
+  ;; re-runs `org-mode' once.  That resets `major-mode' back to `org-mode',
+  ;; so we re-stamp the derived identity afterward.
+  (mindwtr-parse-ensure-keywords)
   (setq major-mode 'mindwtr-mode
         mode-name "Mindwtr")
   (setq-local org-todo-keywords mindwtr-model-todo-keywords)

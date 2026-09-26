@@ -255,13 +255,14 @@ type was inferred from context).  When omitted it is read from the
           ;; the sync report can surface it (see `mindwtr-parse-warnings').
           (push (list :id id :title title :keyword todo :kind kind)
                 mindwtr-parse--warnings))))
-      ;; CANCELLED is archived plus `:cancelledAt', carried on CLOSED (render
-      ;; writes it there).  `:mw-cancelled' marks the keyword so sync can stamp
+      ;; CLOSED is a task's completedAt, but on CANCELLED (task or project) it
+      ;; is cancelledAt.  `:mw-cancelled' marks the keyword so sync can stamp
       ;; a heading cancelled with no CLOSED line (`mindwtr-sync--stamp-cancelled').
-      (when (equal todo "CANCELLED")
-        (let ((c (mindwtr-parse--planning-iso "CLOSED: *\\(\\[[^]]+\\]\\)")))
-          (setq e (plist-put e :mw-cancelled t))
-          (when c (setq e (plist-put e :cancelledAt c))))))
+      (let ((c (mindwtr-parse--planning-iso "CLOSED: *\\(\\[[^]]+\\]\\)")))
+        (cond ((equal todo "CANCELLED")
+               (setq e (plist-put e :mw-cancelled t))
+               (when c (setq e (plist-put e :cancelledAt c))))
+              ((and c (eq kind 'task)) (setq e (plist-put e :completedAt c))))))
     (when (eq kind 'task)
       (let* ((body (mindwtr-parse--body t))
              (pr (nth 3 (org-heading-components))))
@@ -283,12 +284,9 @@ type was inferred from context).  When omitted it is read from the
         (setq e (plist-put e :description (car body)))
         (when (cdr body) (setq e (plist-put e :checklist (cdr body))))
         (let ((s (mindwtr-parse--planning-iso "SCHEDULED: *\\(<[^>]+>\\)"))
-              (d (mindwtr-parse--planning-iso "DEADLINE: *\\(<[^>]+>\\)"))
-              (c (mindwtr-parse--planning-iso "CLOSED: *\\(\\[[^]]+\\]\\)")))
+              (d (mindwtr-parse--planning-iso "DEADLINE: *\\(<[^>]+>\\)")))
           (when s (setq e (plist-put e :startTime s)))
-          (when d (setq e (plist-put e :dueDate d)))
-          (when (and c (not (equal todo "CANCELLED")))
-            (setq e (plist-put e :completedAt c))))
+          (when d (setq e (plist-put e :dueDate d))))
         (dolist (p '(("MW_ENERGY" . :energyLevel) ("MW_TIME_ESTIMATE" . :timeEstimate)
                      ("MW_ASSIGNED_TO" . :assignedTo) ("MW_LOCATION" . :location)
                      ("MW_TASK_MODE" . :taskMode)))

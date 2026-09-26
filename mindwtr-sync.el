@@ -755,7 +755,7 @@ Classification per entity, in this order:
                            (mapcar
                             (lambda (e)
                               (mindwtr-util-plist-omit
-                               e '(:mw-kind :mw-extra-props :mw-cancelled
+                               e '(:mw-kind :mw-extra-props
                                    :mw-logbook-minutes :mw-clock-synced)))
                             (plist-get appdata key)))))
     out))
