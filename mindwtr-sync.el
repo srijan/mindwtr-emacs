@@ -375,8 +375,7 @@ which leaves task status untouched when a project becomes someday."
 
 (defun mindwtr-sync-build-candidate (local shadow device-id now
                                            &optional protect-empty-notes
-                                           protect-empty-fields
-                                           protect-empty-cancel)
+                                           protect-empty-fields)
   "Build a candidate AppData from LOCAL parse and SHADOW, stamping DEVICE-ID/NOW.
 PROTECT-EMPTY-NOTES and PROTECT-EMPTY-FIELDS gate the first-post-upgrade
 empty-protection passed to `mindwtr-sync--merge-content'.  PROTECT-EMPTY-NOTES
@@ -385,9 +384,7 @@ so an old renderer's note-less buffer does not clear a server-authored note
 (see `mindwtr-shadow-latched-p' (notes)).  PROTECT-EMPTY-FIELDS guards a kind's
 newly-signed booleans (task `:isFocusedToday'; project `:isSequential'
 /`:isFocused') against the same false-empty seam (see
-`mindwtr-shadow-latched-p' (fields)).  PROTECT-EMPTY-CANCEL guards task and
-project `:cancelledAt', which older renders showed as a plain ARCH (see
-`mindwtr-shadow-latched-p' (cancel)).  The latches are independent; the
+`mindwtr-shadow-latched-p' (fields)).  The two latches are independent; the
 union of their per-kind fields is passed to `merge-content'."
   ;; Guarantee non-null settings up front: a fresh namespace has none in its
   ;; shadow yet, and the server's settings merge 500s on a null blob.
@@ -411,10 +408,7 @@ union of their per-kind fields is passed to `merge-content'."
                     (let ((nf (mindwtr-model-notes-field kind)))
                       (and nf (list nf))))
                (and protect-empty-fields
-                    (mindwtr-model-protected-boolean-fields kind))
-               (and protect-empty-cancel
-                    (memq kind '(task project))
-                    '(:cancelledAt))))
+                    (mindwtr-model-protected-boolean-fields kind))))
              (seen (make-hash-table :test 'equal))
              out)
         (dolist (le (plist-get local key))
@@ -968,12 +962,16 @@ quarantines its heading under * Sync Failures instead of erasing it (see
         (setq out (plist-put out key (nreverse kept)))))
     (cons out (nreverse warnings))))
 
-(defun mindwtr-sync--stamp-cancelled (appdata shadow)
-  "Return APPDATA with every CANCELLED heading's `:cancelledAt' filled in.
-A heading set to CANCELLED without a CLOSED line (org-log-done off) parses
-with no timestamp: keep the shadow's cancellation time when it was already
-cancelled, else stamp now, as the app does.  Drops the parser's
-`:mw-cancelled' marker either way."
+(defun mindwtr-sync--stamp-cancelled (appdata shadow protect)
+  "Return APPDATA with each task and project's `:cancelledAt' settled.
+A CANCELLED heading (the parser's `:mw-cancelled' marker, dropped here) takes
+its CLOSED time, except when that time is the shadow's completion time on an
+item the shadow does not hold cancelled: org keeps CLOSED on a DONE -> CANCELLED
+switch, so that is a fresh cancel and is stamped now, as the app does.  With
+no CLOSED line it keeps the shadow's cancellation time, else is stamped now.
+PROTECT (the cancel latch is unset): an archived heading an older render
+showed as plain ARCH carries the shadow's cancellation, so it reads as
+unchanged rather than as a clear."
   (let ((now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
         (out (copy-sequence appdata)))
     (dolist (key '(:tasks :projects))
@@ -981,15 +979,28 @@ cancelled, else stamp now, as the app does.  Drops the parser's
         (setq out
               (plist-put
                out key
-               (mapcar (lambda (e)
-                         (if (not (plist-get e :mw-cancelled)) e
-                           (let ((e (mindwtr-util-plist-omit e '(:mw-cancelled))))
-                             (if (plist-get e :cancelledAt) e
-                               (plist-put e :cancelledAt
-                                          (or (plist-get (gethash (plist-get e :id) idx)
-                                                         :cancelledAt)
-                                              now))))))
-                       (plist-get appdata key))))))
+               (mapcar
+                (lambda (e)
+                  (let* ((se (gethash (plist-get e :id) idx))
+                         (shadow-at (plist-get se :cancelledAt))
+                         (c (plist-get e :cancelledAt)))
+                    (cond
+                     ((plist-get e :mw-cancelled)
+                      (plist-put (mindwtr-util-plist-omit e '(:mw-cancelled))
+                                 :cancelledAt
+                                 (cond ((and c (not shadow-at)
+                                             (plist-get se :completedAt)
+                                             (equal (mindwtr-util-iso-coarsen-minute c)
+                                                    (mindwtr-util-iso-coarsen-minute
+                                                     (plist-get se :completedAt))))
+                                        now)
+                                       (c)
+                                       (t (or shadow-at now)))))
+                     ((and protect (not c) shadow-at
+                           (equal (plist-get e :status) "archived"))
+                      (plist-put (copy-sequence e) :cancelledAt shadow-at))
+                     (t e))))
+                (plist-get appdata key))))))
     out))
 
 (defun mindwtr-sync--prepare (buffer)
@@ -1000,6 +1011,7 @@ Pure CPU plus local state reads -- no network.  Returns the
     (let* ((baseline (mindwtr-shadow-baseline))
            (shadow (mindwtr-shadow-baseline-appdata baseline))
            (archive-migrated (memq 'archive (mindwtr-shadow-baseline-latches baseline)))
+           (cancel-migrated (memq 'cancel (mindwtr-shadow-baseline-latches baseline)))
            (surfaces0 (mindwtr-sync--surfaces buffer))
            (archive-active (seq-find (lambda (s) (eq (plist-get s :kind) 'archive))
                                      surfaces0))
@@ -1007,12 +1019,16 @@ Pure CPU plus local state reads -- no network.  Returns the
            ;; force a full cycle even on an otherwise-clean HEAD-match, so the
            ;; first sync backfills the historical archived set into the archive
            ;; file (R1) rather than deferring it to the next unrelated change.
-           (force-backfill (and archive-active (not archive-migrated)))
+           ;; The same holds until the cancel latch is set: cancelled items an
+           ;; older render showed as ARCH must be re-rendered as CANCELLED.
+           (force-backfill (and archive-active
+                                (not (and archive-migrated cancel-migrated))))
            (parsed (mindwtr-sync--parse-surfaces surfaces0))
            (surfaces (plist-get parsed :surfaces))
            (titled (mindwtr-sync--drop-blank-titles
                     (plist-get parsed :appdata) shadow))
-           (local (mindwtr-sync--stamp-cancelled (car titled) shadow))
+           (local (mindwtr-sync--stamp-cancelled (car titled) shadow
+                                                 (not cancel-migrated)))
            (parse-warnings (append (plist-get parsed :warnings) (cdr titled)))
            ;; Strict absence semantics (KTD5/KTD6) are eligible only when the
            ;; archive surface is active, its latch is set, AND the archive file
@@ -1125,11 +1141,9 @@ aborts with the server already updated."
               ;; `mindwtr-shadow-latches').
               (protect-empty-notes (not (mindwtr-sync-cycle-latched-p cycle 'notes)))
               (protect-empty-fields (not (mindwtr-sync-cycle-latched-p cycle 'fields)))
-              (protect-empty-cancel (not (mindwtr-sync-cycle-latched-p cycle 'cancel)))
               (candidate (mindwtr-sync-build-candidate local shadow device now
                                                        protect-empty-notes
-                                                       protect-empty-fields
-                                                       protect-empty-cancel))
+                                                       protect-empty-fields))
               ;; Write reconciled `timeSpentMinutes' onto tasks parsed this
               ;; cycle, before stripping and PUT (R2/R4/R9/KTD2).
               (candidate (mindwtr-sync--apply-clock-reconcile
@@ -1239,8 +1253,11 @@ a process sentinel on the async path)."
         (mindwtr-shadow-commit
          merged (or (plist-get got :etag) (plist-get put-resp :etag))
          (unless save-failed
-           (append '(notes fields cancel)
-                   (and (mindwtr-sync-cycle-archive-active cycle) '(archive)))))
+           (append '(notes fields)
+                   ;; Cancelled items render only on the archive surface, so
+                   ;; the cancel latch waits for a cycle that rendered it.
+                   (and (mindwtr-sync-cycle-archive-active cycle)
+                        '(archive cancel)))))
         (let ((result (list :ok t :conflicts conflicts :stats stats :skew skew
                             :warnings parse-warnings :incoming incoming
                             :local-changes local-changes

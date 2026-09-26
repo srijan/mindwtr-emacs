@@ -567,7 +567,7 @@ with HEAD only."
       (should (string= (plist-get (car (plist-get (mindwtr-shadow-load) :tasks)) :title)
                        "renamed"))
       (should (string= (mindwtr-shadow-get-etag) "v2"))
-      (should (equal (mindwtr-shadow-latched-names) '(notes fields cancel)))
+      (should (equal (mindwtr-shadow-latched-names) '(notes fields)))
       (should (equal (reverse (mindwtr-test-server-requests srv)) '("PUT" "GET")))
       (setf (mindwtr-test-server-requests srv) nil)
       (let ((r2 (mindwtr-sync-once (current-buffer) "2026-06-01T00:01:00Z")))

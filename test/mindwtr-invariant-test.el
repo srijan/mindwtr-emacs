@@ -319,21 +319,45 @@ cancellation time it already had and renders the line back."
 
 (ert-deftest mindwtr-invariant-cancel-latch-protects-old-renders ()
   "Before the cancel latch is set, a cancelled item an older render showed as
-plain ARCH (no cancellation) must not clear the server's cancellation; the
-first full cycle renders CANCELLED and sets the latch."
+plain ARCH (no cancellation) is not an edit: the first cycle proposes nothing
+and bumps no revision, yet runs in full to render CANCELLED and set the latch."
   (mindwtr-invariant-test--with-synced (srv mindwtr-invariant-test--cancelled)
     (mindwtr-shadow--delete "cancel-migrated")
     (with-temp-file (mindwtr-archive-path)
       (insert (mindwtr-render-archive-appdata
                (mindwtr-invariant-test--remote-edit
                 (mindwtr-test-server-state srv) :tasks "t4" :cancelledAt nil))))
-    (should (plist-get (car (mindwtr-invariant-test--sync srv)) :ok))
+    (let ((r (car (mindwtr-invariant-test--sync srv))))
+      (should (plist-get r :ok))
+      (should-not (plist-get r :noop))
+      (should-not (mindwtr-invariant-test--proposed r)))
     (should (equal (plist-get (mindwtr-invariant-test--server-task srv "t4") :cancelledAt)
                    "2026-02-01T08:00:00Z"))
+    (should (equal (plist-get (mindwtr-invariant-test--server-task srv "t4") :rev)
+                   (plist-get (seq-find (lambda (e) (equal (plist-get e :id) "t4"))
+                                        (plist-get mindwtr-invariant-test--cancelled :tasks))
+                              :rev)))
     (should (memq 'cancel (mindwtr-shadow-latched-names)))
     (with-current-buffer (mindwtr-archive-buffer)
       (goto-char (point-min))
       (should (re-search-forward "^\\*+ CANCELLED Old errand$" nil t)))))
+
+(ert-deftest mindwtr-invariant-done-to-cancelled-stamps-a-fresh-time ()
+  "Org keeps CLOSED on a done -> done switch, so ARCH -> CANCELLED would carry
+the completion date over as the cancel date.  Sync stamps a fresh one."
+  (mindwtr-invariant-test--with-synced (srv)
+    (should (plist-get (car (mindwtr-invariant-test--sync srv)) :noop))
+    (with-current-buffer (mindwtr-archive-buffer)
+      (goto-char (point-min))
+      (re-search-forward "^\\*+ ARCH Old errand$")
+      (org-todo "CANCELLED")
+      (save-buffer))
+    (let ((r (car (mindwtr-invariant-test--sync srv))))
+      (should (equal (mindwtr-invariant-test--proposed r)
+                     '(("t4" :cancelledAt :completedAt)))))
+    (let ((at (plist-get (mindwtr-invariant-test--server-task srv "t4") :cancelledAt)))
+      (should (stringp at))
+      (should-not (string-prefix-p "2026-02-01" at)))))
 
 (provide 'mindwtr-invariant-test)
 ;;; mindwtr-invariant-test.el ends here

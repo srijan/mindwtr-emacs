@@ -509,4 +509,19 @@ through render -> parse, and ARCH vs CANCELLED sign differently."
                                (mindwtr-signature
                                 (mindwtr-util-plist-omit e '(:cancelledAt))))))))))
 
+(ert-deftest mindwtr-roundtrip-stale-keyword-line-is-refreshed ()
+  "A file rendered before CANCELLED existed carries an older `#+TODO:' line,
+which outranks `org-todo-keywords'.  Parsing refreshes the line, so a
+CANCELLED heading parses as a status, never as part of the title."
+  (with-temp-buffer
+    (insert "#+TODO: INBOX(i) NEXT(n) WAIT(w) SOMEDAY(s) REF(r) ACTIVE(a) | DONE(d) ARCH(x)\n"
+            "* Single\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: single-actions\n:END:\n"
+            "** CANCELLED Dropped\n:PROPERTIES:\n:MW_TYPE: task\n:MW_ID: t1\n:END:\n")
+    (let ((org-inhibit-startup t)) (org-mode))
+    (let ((tk (car (plist-get (mindwtr-parse-buffer) :tasks))))
+      (should (equal (plist-get tk :title) "Dropped"))
+      (should (equal (plist-get tk :status) "archived")))
+    (goto-char (point-min))
+    (should (looking-at (regexp-quote (mindwtr-model-todo-keyword-line))))))
+
 ;;; mindwtr-roundtrip-test.el ends here

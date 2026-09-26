@@ -40,6 +40,20 @@ the file alone, overriding whatever the user's global `org-todo-keywords'
 defines."
   (concat "#+TODO: " (mapconcat #'identity (cdar mindwtr-model-todo-keywords) " ")))
 
+(defun mindwtr-model-refresh-keyword-line ()
+  "Rewrite a stale Mindwtr `#+TODO:' line in the current buffer to the current one.
+An in-buffer `#+TODO:' line outranks `org-todo-keywords', so a file rendered
+before a keyword was added keeps org from recognizing it until the line is
+current.  Only a line with the Mindwtr prefix is touched."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (when (re-search-forward "^#\\+TODO: INBOX(i) NEXT(n) .*$" nil t)
+        (let ((line (mindwtr-model-todo-keyword-line)))
+          (unless (string= (match-string 0) line)
+            (replace-match line t t)))))))
+
 (defconst mindwtr-model--task-status-keywords
   '(("inbox" . "INBOX") ("next" . "NEXT") ("waiting" . "WAIT")
     ("someday" . "SOMEDAY") ("reference" . "REF")

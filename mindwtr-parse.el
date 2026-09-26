@@ -54,6 +54,7 @@ trusting NEXT alone left those unrecognized -- their headings then parsed
 to a nil status, leaking the keyword into the title and aborting the sync."
   (unless (seq-every-p (lambda (k) (member k org-todo-keywords-1))
                        mindwtr-model-todo-keyword-names)
+    (mindwtr-model-refresh-keyword-line)
     (let ((org-todo-keywords mindwtr-model-todo-keywords)
           (org-inhibit-startup t))
       (org-mode))))

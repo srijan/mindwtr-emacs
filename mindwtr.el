@@ -126,6 +126,9 @@ auto-sync silently standing down forever.")
   ;; otherwise pass the guard and leave those keywords unregistered.
   (unless (seq-every-p (lambda (k) (member k org-todo-keywords-1))
                        mindwtr-model-todo-keyword-names)
+    ;; A file rendered before a keyword was added carries an older
+    ;; `#+TODO:' line, which would outrank the binding below.
+    (mindwtr-model-refresh-keyword-line)
     (let ((org-todo-keywords mindwtr-model-todo-keywords)
           (org-inhibit-startup t))
       (org-mode)))
