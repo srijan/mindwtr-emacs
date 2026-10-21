@@ -171,10 +171,13 @@ heading into the archive file immediately instead (see "The archive file"); a
 task inside a project and a section heading are left in place (they have no
 independent bucket to relocate to).
 
-**Re-parenting.** Moving a task into or out of a project is done with standard
-`C-c C-w` (`org-refile`). Containment is encoded by outline nesting, so nesting a
-task under a project heading makes it a project task; lifting it out makes it
-standalone.
+**Re-parenting.** Moving a task into or out of a project is done with `C-c C-w`,
+which `mindwtr-mode` remaps to `mindwtr-refile`: native `org-refile` with targets
+limited to valid parents in this file. A task can go under a project, a section,
+or a container (to lift it out); a project only under a container; a section only
+under a project. Your global `org-refile-targets` is left alone. Containment is
+encoded by outline nesting, so nesting a task under a project heading makes it a
+project task; lifting it out makes it standalone.
 
 **Graceful degradation.** Content that reaches the file through a raw text edit,
 org-capture, or editing outside `mindwtr-mode` is never silently lost:
@@ -591,14 +594,7 @@ edited).
   snapshotted before reconcile. If the report points users to a backup that is
   never created, the promised safety net is missing. Verify; write the buffer
   backup before each reconcile if absent. (Sync & conflict reconciliation track.)
-- **Show incoming remote changes, not just overrides** — the sync report lists
-  conflicts (edits the server overrode) but not the benign remote edits the merge
-  brings *in*. Add a "remote changes since last sync" summary so the user sees
-  what mobile changed without diffing manually. (Sync & conflict reconciliation
-  track.)
-- **Refile-target wiring** — re-parenting leans on `org-refile`, but nothing
-  sets `org-refile-targets` to mindwtr projects globally, so a bare `C-c C-w`
-  won't offer the right destinations out of the box. The clarify flow already
+- **Show incoming remote changes, not just on't offer the right destinations out of the box. The clarify flow already
   binds project-only targets around its add-to-project outcome
   (`mindwtr-clarify--refile`); what remains is wiring the same targets into
   `mindwtr-mode` for direct `C-c C-w` use. (Emacs-native editing track.)

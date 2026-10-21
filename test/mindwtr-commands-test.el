@@ -613,4 +613,50 @@ in heavy clarify sessions)."
     (should (= (mindwtr-commands-test--id-count "t2") 1))
     (should (= (mindwtr-commands-test--id-count "t3") 1))))
 
+;;; Refile
+
+(defun mindwtr-commands-test--refile-targets-from (heading-re)
+  "Titles `mindwtr-refile' would offer from the heading matching HEADING-RE."
+  (goto-char (point-min))
+  (re-search-forward heading-re)
+  (let (verify)
+    (cl-letf (((symbol-function 'org-refile)
+               (lambda (&rest _) (setq verify org-refile-target-verify-function))))
+      (mindwtr-refile))
+    (let ((org-refile-targets '((nil :maxlevel . 9)))
+          (org-refile-target-verify-function verify)
+          (org-refile-use-cache nil))
+      (mapcar #'car (org-refile-get-targets)))))
+
+(ert-deftest mindwtr-commands-refile-targets-by-kind ()
+  "A task may go into a project, section or container; a project only into a
+container; a section only into a project."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil
+        :projects ((:id "p1" :title "Proj" :status "active")
+                   (:id "p2" :title "Other" :status "active"))
+        :sections ((:id "s1" :title "Phase" :projectId "p1"))
+        :tasks ((:id "t1" :title "Loose" :status "next"))
+        :settings nil)
+    (let ((task (mindwtr-commands-test--refile-targets-from "Loose"))
+          (proj (mindwtr-commands-test--refile-targets-from "ACTIVE Proj"))
+          (sect (mindwtr-commands-test--refile-targets-from "Phase")))
+      (should (cl-some (lambda (s) (string-match-p "Proj$" s)) task))
+      (should (cl-some (lambda (s) (string-match-p "Phase$" s)) task))
+      (should (cl-some (lambda (s) (string-match-p "^Projects$" s)) task))
+      (should-not (cl-some (lambda (s) (string-match-p "Proj$\\|Phase$" s)) proj))
+      (should (cl-some (lambda (s) (string-match-p "^Projects$" s)) proj))
+      (should (cl-every (lambda (s) (string-match-p "Proj$\\|Other$" s)) sect)))))
+
+(ert-deftest mindwtr-commands-refile-passes-prefix-arg ()
+  "\\[universal-argument] reaches `org-refile', so the goto variant still works."
+  (mindwtr-commands-test--with-appdata
+      '(:areas nil :projects nil :sections nil
+        :tasks ((:id "t1" :title "Loose" :status "next")) :settings nil)
+    (re-search-forward "Loose")
+    (let (seen)
+      (cl-letf (((symbol-function 'org-refile) (lambda (&optional a &rest _) (setq seen a))))
+        (mindwtr-refile '(4)))
+      (should (equal seen '(4))))))
+
 ;;; mindwtr-commands-test.el ends here

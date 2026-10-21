@@ -13,11 +13,13 @@
 ;; for `org-todo' that offers only the valid keywords for the entity at point,
 ;; type-aware status cycling, and eager relocation of a standalone task or a
 ;; project to the container matching its new status.  Re-parenting into/out of
-;; a project stays on native `org-refile'.
+;; a project goes through `mindwtr-refile': native `org-refile' with targets
+;; scoped to valid mindwtr parents.
 ;;; Code:
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-refile)
 (require 'mindwtr-util)
 (require 'mindwtr-model)
 (require 'mindwtr-parse)
@@ -440,6 +442,40 @@ to a project or section (lift it out with `org-refile' first)."
   "Cycle the entity at point to its previous type-valid status, then relocate."
   (interactive)
   (mindwtr-commands--cycle -1))
+
+;;; Refile
+
+(defun mindwtr-commands--refile (verify &optional arg)
+  "Run `org-refile' with ARG over this buffer's headings that pass VERIFY.
+VERIFY is the `org-refile-target-verify-function'; the user's global refile
+config is left alone."
+  (let ((org-refile-targets '((nil :maxlevel . 9)))
+        (org-refile-target-verify-function verify)
+        (org-refile-use-cache nil))
+    (org-refile arg)))
+
+(defun mindwtr-commands--refile-parent-kinds (kind)
+  "MW_TYPE kinds a KIND heading may be refiled under.
+A project lives only in a status container and a section only in a project;
+anything else may go into a project, a section, or a container (lifting a
+task out of a project)."
+  (pcase kind
+    ('project '(container))
+    ('section '(project))
+    (_ '(project section container))))
+
+;;;###autoload
+(defun mindwtr-refile (&optional arg)
+  "Refile the heading at point, offering only valid mindwtr destinations.
+`org-refile' with targets scoped to this buffer's headings of a kind the
+entity at point may nest under (see `mindwtr-commands--refile-parent-kinds').
+ARG is passed through, so \\[universal-argument] still jumps instead."
+  (interactive "P")
+  (let ((kinds (mindwtr-commands--refile-parent-kinds
+                (mindwtr-commands--kind-at-point))))
+    (mindwtr-commands--refile
+     (lambda () (memq (mindwtr-commands--kind-at-point) kinds))
+     arg)))
 
 (provide 'mindwtr-commands)
 ;;; mindwtr-commands.el ends here

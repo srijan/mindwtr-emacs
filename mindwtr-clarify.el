@@ -125,13 +125,9 @@ The `org-refile-target-verify-function' that scopes refiling to projects."
 
 (defun mindwtr-clarify--refile ()
   "Refile the item at point under a project, via native `org-refile'.
-Binds `org-refile-targets' to the current buffer with project headings as
-the only valid destinations -- the minimal refile-target wiring the clarify
-flow needs, without touching the user's global refile config."
-  (let ((org-refile-targets '((nil :maxlevel . 9)))
-        (org-refile-target-verify-function #'mindwtr-clarify--project-target-p)
-        (org-refile-use-cache nil))
-    (org-refile)))
+Project headings are the only valid destinations: the add-to-project outcome
+never lifts an item into a container."
+  (mindwtr-commands--refile #'mindwtr-clarify--project-target-p))
 
 ;;; WIP buffer
 

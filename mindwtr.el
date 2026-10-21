@@ -118,11 +118,12 @@ auto-sync silently standing down forever.")
   ;; `org-mode-restart', recurses infinitely from inside a derived mode
   ;; (it re-invokes `major-mode', i.e. `mindwtr-mode').  So we use
   ;; `mindwtr-parse-ensure-keywords', which binds `org-todo-keywords' and
-  ;; re-runs `org-mode' once.  That resets `major-mode' back to `org-mode',
-  ;; so we re-stamp the derived identity afterward.
+  ;; re-runs `org-mode' once.  That resets `major-mode' back to `org-mode'
+  ;; and the local map to `org-mode-map', so we re-stamp both afterward.
   (mindwtr-parse-ensure-keywords)
   (setq major-mode 'mindwtr-mode
         mode-name "Mindwtr")
+  (use-local-map mindwtr-mode-map)
   (setq-local org-todo-keywords mindwtr-model-todo-keywords)
   (setq-local org-priority-highest ?A)
   (setq-local org-priority-lowest ?D)
@@ -138,6 +139,9 @@ auto-sync silently standing down forever.")
 (define-key mindwtr-mode-map (kbd "C-c C-y") #'mindwtr-set-assignee)
 (define-key mindwtr-mode-map (kbd "S-<right>") #'mindwtr-cycle-status-forward)
 (define-key mindwtr-mode-map (kbd "S-<left>") #'mindwtr-cycle-status-backward)
+;; A remap, so C-c C-w and any personal `org-refile' binding both get the
+;; mindwtr-scoped targets.
+(define-key mindwtr-mode-map [remap org-refile] #'mindwtr-refile)
 
 (defun mindwtr--resolve-token ()
   "Return the bearer token from `mindwtr-auth-token' or auth-source."

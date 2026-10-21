@@ -137,7 +137,11 @@ the max and gives up (no further timer)."
     (mindwtr-mode)
     (should (eq (lookup-key mindwtr-mode-map (kbd "C-c C-t")) #'mindwtr-set-status))
     (should (eq (lookup-key mindwtr-mode-map (kbd "S-<right>")) #'mindwtr-cycle-status-forward))
-    (should (eq (lookup-key mindwtr-mode-map (kbd "S-<left>")) #'mindwtr-cycle-status-backward))))
+    (should (eq (lookup-key mindwtr-mode-map (kbd "S-<left>")) #'mindwtr-cycle-status-backward))
+    ;; Active bindings, not just map contents: a keyword re-init of org must
+    ;; not leave `org-mode-map' as the local map.
+    (should (eq (key-binding (kbd "C-c C-t")) #'mindwtr-set-status))
+    (should (eq (key-binding (kbd "C-c C-w")) #'mindwtr-refile))))
 
 (ert-deftest mindwtr-success-clears-backoff-state ()
   "A successful (no-op) sync resets the attempt counter and clears the
