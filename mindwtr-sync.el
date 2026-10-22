@@ -1198,6 +1198,26 @@ not a failure."
           (setq failed t))))
     failed))
 
+(defun mindwtr-sync--retention-purged (merged shadow)
+  "Return a hash id -> purgedAt of the items archive retention purged.
+Retention tombstones an old archived item with `:purgedAt' and compacts it
+(title `(deleted)', content gone), so this cycle's org heading is the last
+full copy.  A user deletion is told apart by the shadow: it passes through
+Trash, so the shadow already carries `:deletedAt' by the time it is purged.
+The statuses are those retention purges: archived items and the done or
+reference children of an archived project."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (key '(:tasks :projects))
+      (let ((idx (mindwtr-shadow-index shadow key)))
+        (dolist (me (plist-get merged key))
+          (let* ((id (plist-get me :id))
+                 (se (gethash id idx)))
+            (when (and (plist-get me :purgedAt) se
+                       (not (plist-get se :deletedAt))
+                       (member (plist-get se :status) '("archived" "done" "reference")))
+              (puthash id (plist-get me :purgedAt) h))))))
+    h))
+
 (defun mindwtr-sync--finish (cycle put-resp got)
   "Complete a full cycle (stage E) for CYCLE from PUT-RESP and GET result GOT.
 Reconciles and saves every surface, commits the shadow/etag/latches, shows
@@ -1248,9 +1268,10 @@ a process sentinel on the async path)."
       ;; return each buffer to clean on disk (the rebuild marks it modified
       ;; whenever the render changed its text; an unchanged buffer is a
       ;; `save-buffer' no-op).
-      (dolist (s surfaces)
-        (with-current-buffer (plist-get s :buffer)
-          (mindwtr-reconcile-buffer merged (plist-get s :render))))
+      (let ((purged (mindwtr-sync--retention-purged merged shadow)))
+        (dolist (s surfaces)
+          (with-current-buffer (plist-get s :buffer)
+            (mindwtr-reconcile-buffer merged (plist-get s :render) purged))))
       (mindwtr-sync--mark-synced surfaces)
       (let ((save-failed (mindwtr-sync--save-surfaces surfaces)))
         ;; Commit shadow + etag, and flip the migration latches ONLY once

@@ -358,6 +358,7 @@ heading MERGED-IDS does carry renders from the merged data (its previous
 title was kept) and is not an orphan.  A typed entity, a container, and an
 inferable heading return nil."
   (cond
+   ((mindwtr-heading-purged-p) nil)
    ((and (null (mindwtr-heading-type)) (null (mindwtr-parse-infer-kind)))
     'untyped)
    ((and (mindwtr-model-blank-title-p (org-get-heading t t t t))
@@ -366,7 +367,18 @@ inferable heading return nil."
            (not (and id merged-ids (gethash id merged-ids)))))
     'no-title)))
 
-(defun mindwtr-reconcile--collect-orphans (&optional merged-ids)
+(defun mindwtr-reconcile--under-purged-p (purged)
+  "Non-nil when the heading at point or an ancestor has an MW_ID in PURGED."
+  (and purged
+       (save-excursion
+         (org-back-to-heading t)
+         (let (hit)
+           (while (and (not (setq hit (let ((id (mindwtr-heading-id)))
+                                        (and id (gethash id purged)))))
+                       (org-up-heading-safe)))
+           hit))))
+
+(defun mindwtr-reconcile--collect-orphans (&optional merged-ids purged)
   "Return raw strings for headings reconcile would otherwise erase.
 Each string is the heading + body prefixed with its reason note (see
 `--orphan-heading-p', which takes MERGED-IDS).
@@ -385,7 +397,8 @@ quarantine idempotent (regenerated fresh on re-emit, never nested)."
     (let (orphans)
       (when (or (org-at-heading-p) (outline-next-heading))
         (while (not (eobp))
-          (let ((why (mindwtr-reconcile--orphan-heading-p merged-ids)))
+          (let ((why (and (not (mindwtr-reconcile--under-purged-p purged))
+                          (mindwtr-reconcile--orphan-heading-p merged-ids))))
             (when why
               (let ((beg (point))
                     (end (mindwtr-heading-entry-end)))
@@ -423,6 +436,60 @@ A no-op when ORPHANS is empty, so a clean sync produces no quarantine heading
                     "Sync Failures" mindwtr-reconcile--quarantine-role))
     (dolist (o orphans)
       (let ((s (mindwtr-reconcile--reroot-subtree o 2)))
+        (insert s)
+        (unless (string-suffix-p "\n" s) (insert "\n"))))))
+
+(defun mindwtr-reconcile--detach-purged (text purged-at)
+  "Return subtree TEXT detached from sync, its top heading stamped PURGED-AT.
+`:MW_ID:' becomes `:MW_PURGED_ID:' and `:MW_TYPE:' lines go, so a copy moved
+back out of the purged container reads as a new item instead of a tombstoned
+id.  Keywords, CLOSED and LOGBOOK stay, so org reports still count it."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (re-search-forward "^:MW_ID:" nil t)
+      (replace-match ":MW_PURGED_ID:" t t))
+    (goto-char (point-min))
+    (while (re-search-forward "^:MW_TYPE:.*\n" nil t)
+      (replace-match "" t t))
+    (goto-char (point-min))
+    (when (re-search-forward "^:PROPERTIES:\n" nil t)
+      (insert (format ":MW_PURGED: %s\n" (mindwtr-util-iso->org purged-at))))
+    (buffer-string)))
+
+(defun mindwtr-reconcile--collect-purged (purged)
+  "Return subtree strings for the purged container, in buffer order.
+The existing container's children come back verbatim; a heading whose MW_ID
+is a key of PURGED (id -> purgedAt, or nil) is captured with its whole
+subtree and detached (`--detach-purged').  The rebuild drops both: the first
+is not an entity, the second is a server tombstone."
+  (save-excursion
+    (goto-char (point-min))
+    (let (out)
+      (when (or (org-at-heading-p) (outline-next-heading))
+        (while (not (eobp))
+          (let* ((at (and purged (mindwtr-heading-id)
+                          (gethash (mindwtr-heading-id) purged)))
+                 (keep (or at (mindwtr-heading-purged-p))))
+            (if (not keep)
+                (outline-next-heading)
+              (let* ((beg (point))
+                     (end (save-excursion (org-end-of-subtree t t) (point)))
+                     (s (buffer-substring-no-properties beg end)))
+                (push (if at (mindwtr-reconcile--detach-purged s at) s) out)
+                (goto-char end))))))
+      (nreverse out))))
+
+(defun mindwtr-reconcile--emit-purged (subtrees)
+  "Append a `* Purged from Mindwtr' container holding SUBTREES at point-max.
+A no-op when SUBTREES is empty.  Each is re-rooted to level 2."
+  (when subtrees
+    (goto-char (point-max))
+    (unless (bolp) (insert "\n"))
+    (insert (format "* %s\n:PROPERTIES:\n:MW_TYPE: container\n:MW_LIST: %s\n:END:\n"
+                    "Purged from Mindwtr" mindwtr-heading-purged-role))
+    (dolist (s subtrees)
+      (let ((s (mindwtr-reconcile--reroot-subtree s 2)))
         (insert s)
         (unless (string-suffix-p "\n" s) (insert "\n"))))))
 
@@ -492,11 +559,14 @@ staged in a temporary one."
         (when (plist-get e :id) (puthash (plist-get e :id) t h))))
     h))
 
-(defun mindwtr-reconcile-buffer (merged &optional render-fn)
+(defun mindwtr-reconcile-buffer (merged &optional render-fn purged)
   "Rebuild the current buffer to the canonical layout of MERGED via RENDER-FN.
 RENDER-FN is the (APPDATA &optional ORG-ONLY) -> string renderer, defaulting to
 `mindwtr-render-appdata' (the main GTD-list surface); the archive surface
-passes `mindwtr-render-archive-appdata'.  Everything else here -- org-only
+passes `mindwtr-render-archive-appdata'.  PURGED (id -> purgedAt hash) names
+items archive retention just purged on the server: their headings move, as
+local-only org, into the `* Purged from Mindwtr' container, which every
+rebuild carries over verbatim.  Everything else here -- org-only
 preservation, quarantine, point/view restore -- is buffer-generic and works for
 any surface.
 Org-only content (LOGBOOK/CLOCK, unknown PROPERTIES) is preserved per id,
@@ -525,7 +595,8 @@ silently erased."
            (at-id (mindwtr-reconcile--id-at-point))
            ;; Collect orphans from the LIVE buffer, before the rebuild below (R7).
            (orphans (mindwtr-reconcile--collect-orphans
-                     (mindwtr-reconcile--merged-ids merged)))
+                     (mindwtr-reconcile--merged-ids merged) purged))
+           (purged-subtrees (mindwtr-reconcile--collect-purged purged))
            ;; Render BEFORE replacing: if rendering signals (e.g. an unexpected
            ;; status from the server), the buffer is left intact rather than
            ;; wiped mid-rebuild.
@@ -538,6 +609,7 @@ silently erased."
         (mindwtr-reconcile--replace-buffer-contents rendered))
       ;; Re-emit orphans before view restore, so fold/scroll restore runs over a
       ;; buffer that already includes the quarantined headings.
+      (mindwtr-reconcile--emit-purged purged-subtrees)
       (mindwtr-reconcile--emit-quarantine orphans)
       (goto-char (point-min))
       ;; Position point on the anchor entity for the scroll restore.  If it no

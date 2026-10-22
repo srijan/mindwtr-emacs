@@ -203,6 +203,16 @@ consulted.  Point may sit anywhere within an entry."
           (setq role (or (mindwtr-heading-prop "MW_LIST") ""))))
       (and role (not (string-empty-p role)) role))))
 
+(defconst mindwtr-heading-purged-role "purged"
+  "The `:MW_LIST:' role of the `* Purged from Mindwtr' container.
+It holds org copies of archived items the server's archive retention purged.
+Like the quarantine role it is absent from `mindwtr-model-list-roles': its
+subtrees are local-only, never parsed into entities and never synced.")
+
+(defun mindwtr-heading-purged-p ()
+  "Non-nil when the heading at point sits under the purged container."
+  (equal (mindwtr-heading-container-role) mindwtr-heading-purged-role))
+
 (defun mindwtr-heading-nearest-id-pos ()
   "Return (ID . POS) for the heading at or above point that carries an `:MW_ID:'.
 The heading at point counts first.  Nil when neither it nor any ancestor has

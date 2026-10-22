@@ -233,6 +233,13 @@ cycle, exactly like the main file. That makes it a full citizen of the sync:
   as "not yet rendered", never as "everything was deleted".) The per-cycle
   backups under `backups/` (now covering both files) and the sync report's
   deleted count are the safety net.
+- **Archive retention never deletes from org.** When the app's optional Archive
+  retention purges old archived items on the server, their headings move to a
+  `* Purged from Mindwtr` section with their keyword, `CLOSED` line and LOGBOOK
+  intact, so completed-task and clock reports still count them. They are
+  local-only from then on: `MW_ID` becomes `MW_PURGED_ID`, a `MW_PURGED`
+  timestamp records when, and sync never sends them. Delete them by hand if
+  you no longer want them; move one back out and it syncs as a new item.
 - **It edits like the tasks file.** Saving it arms the debounced auto-sync, its
   unsaved edits stand down background rebuilds, a manual `M-x mindwtr-sync`
   saves it first alongside the tasks file, and its buffer opens in

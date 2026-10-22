@@ -1311,3 +1311,47 @@ previous title) renders from MERGED and is not quarantined."
        :projects nil :sections nil :areas nil :settings nil))
     (should (= 0 (mindwtr-reconcile-test--count "Sync Failures")))
     (should (= 1 (mindwtr-reconcile-test--count "Kept title")))))
+
+;;; Archive-retention purges
+
+(ert-deftest mindwtr-reconcile-keeps-retention-purged-heading ()
+  "An archived task retention purged moves, LOGBOOK and all, into the purged
+container: still a done entry with its clock time, no longer synced, and
+carried over verbatim by the next rebuild."
+  (let* ((live '(:id "t1" :title "Old thing" :status "archived"
+                 :completedAt "2026-01-02T10:00:00Z" :rev 3
+                 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-01-02T10:00:00Z"))
+         (tomb '(:id "t1" :title "(deleted)" :status "archived" :rev 4
+                 :deletedAt "2026-09-01T00:00:00Z" :purgedAt "2026-09-01T00:00:00Z"
+                 :createdAt "2026-01-01T00:00:00Z" :updatedAt "2026-09-01T00:00:00Z"))
+         (appdata (list :tasks (list live) :projects nil :sections nil :areas nil))
+         (merged (list :tasks (list tomb) :projects nil :sections nil :areas nil))
+         (purged (make-hash-table :test 'equal)))
+    (puthash "t1" "2026-09-01T00:00:00Z" purged)
+    (with-temp-buffer
+      (let ((org-todo-keywords mindwtr-model-todo-keywords)
+            (org-inhibit-startup t))
+        (insert (mindwtr-render-archive-appdata appdata))
+        (org-mode))
+      (goto-char (point-min))
+      (re-search-forward "Old thing")
+      (re-search-forward "^:END:\n")
+      (insert ":LOGBOOK:\nCLOCK: [2026-01-02 Fri 09:00]--[2026-01-02 Fri 09:45] =>  0:45\n:END:\n")
+      (mindwtr-reconcile-buffer merged #'mindwtr-render-archive-appdata purged)
+      (let ((text (buffer-string)))
+        (should (string-match-p "^\\* Purged from Mindwtr$" text))
+        (should (string-match-p "^\\*\\* ARCH Old thing" text))
+        (should (string-match-p "^:MW_PURGED_ID: t1$" text))
+        (should (string-match-p "^:MW_PURGED: \\[2026-0[89]-" text))
+        (should-not (string-match-p "^:MW_ID: t1$" text))
+        ;; reports: a done entry with its clocked minutes
+        (goto-char (point-min))
+        (re-search-forward "ARCH Old thing")
+        (should (org-entry-is-done-p))
+        (should (= (org-clock-sum) 45))
+        ;; not an entity, not quarantined
+        (should-not (plist-get (mindwtr-parse-buffer) :tasks))
+        (should-not (string-match-p "Sync Failures" text))
+        ;; the next rebuild (no new purges) is byte-identical
+        (mindwtr-reconcile-buffer merged #'mindwtr-render-archive-appdata)
+        (should (equal (buffer-string) text))))))

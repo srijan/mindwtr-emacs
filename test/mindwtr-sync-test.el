@@ -3030,3 +3030,19 @@ re-pushed, and the report notes the kept title."
       ;; is lost and no Sync Failures container appears.
       (goto-char (point-min))
       (should-not (search-forward "Sync Failures" nil t)))))
+
+(ert-deftest mindwtr-sync-retention-purged-only-from-live-archive ()
+  "A purge of a live archived item is retention; one that went through Trash
+\(shadow already deleted) or of a live next action is not."
+  (let* ((shadow '(:tasks ((:id "a" :status "archived")
+                           (:id "b" :status "archived" :deletedAt "2026-08-01T00:00:00Z")
+                           (:id "c" :status "next"))
+                   :projects ((:id "p" :status "archived"))))
+         (merged '(:tasks ((:id "a" :purgedAt "T") (:id "b" :purgedAt "T")
+                           (:id "c" :purgedAt "T"))
+                   :projects ((:id "p" :purgedAt "T"))))
+         (h (mindwtr-sync--retention-purged merged shadow)))
+    (should (equal (gethash "a" h) "T"))
+    (should (equal (gethash "p" h) "T"))
+    (should-not (gethash "b" h))
+    (should-not (gethash "c" h))))
