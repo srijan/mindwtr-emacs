@@ -373,6 +373,20 @@ which leaves task status untouched when a project becomes someday."
                          "next")
                         (t "inbox")))))
 
+(defun mindwtr-sync--settle-archived-at (merged se now)
+  "Return MERGED with its `:archivedAt' archive-entry clock settled against SE.
+Mirrors the app's lifecycle writer: entering `archived' stamps NOW, leaving it
+clears the clock, and staying archived keeps the shadow's value.  The clock
+drives the opt-in archive retention, so a stale one on a re-archived item
+would let retention purge it early."
+  (let ((archived (equal (plist-get merged :status) "archived")))
+    (cond
+     ((and archived (not (equal (plist-get se :status) "archived")))
+      (plist-put merged :archivedAt now))
+     ((and (not archived) (plist-member merged :archivedAt))
+      (mindwtr-sync--plist-remove merged :archivedAt))
+     (t merged))))
+
 (defun mindwtr-sync-build-candidate (local shadow device-id now
                                            &optional protect-empty-notes
                                            protect-empty-fields)
@@ -425,12 +439,14 @@ union of their per-kind fields is passed to `merge-content'."
                     ('create
                      (let ((m (mindwtr-sync--ensure-status
                                (mindwtr-sync--merge-content le se protected-set) kind)))
+                       (setq m (mindwtr-sync--settle-archived-at m se now))
                        (setq m (plist-put m :rev 1))
                        (setq m (plist-put m :createdAt now))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id)))
                     ('update
-                     (let ((m (mindwtr-sync--merge-content le se protected-set)))
+                     (let ((m (mindwtr-sync--settle-archived-at
+                               (mindwtr-sync--merge-content le se protected-set) se now)))
                        (setq m (plist-put m :rev (1+ (or (plist-get se :rev) 0))))
                        (setq m (plist-put m :updatedAt now))
                        (plist-put m :revBy device-id))))))
