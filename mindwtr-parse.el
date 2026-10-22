@@ -394,7 +394,8 @@ sync passes the main file's map so the archive surface resolves `:CATEGORY:'."
        ;; context so the heading still round-trips instead of being silently
        ;; dropped (and then erased by reconcile).
        (let* ((mt (mindwtr-heading-type))
-              (kind (cond ((null mt) (mindwtr-parse-infer-kind))
+              (kind (cond ((mindwtr-heading-purged-p) nil)
+                          ((null mt) (mindwtr-parse-infer-kind))
                           ((string= mt "container") nil)
                           (t (intern mt)))))
          (when kind

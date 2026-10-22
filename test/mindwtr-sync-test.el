@@ -24,6 +24,43 @@
     (should (string= (plist-get task :createdAt) "2026-06-01T00:00:00Z"))
     (should (string= (plist-get task :revBy) "dev-1"))))
 
+(defun mindwtr-sync-test--archived-at (key shadow-entity local-status)
+  "`:archivedAt' of the KEY candidate when SHADOW-ENTITY moves to LOCAL-STATUS."
+  (let* ((local (list key (list (list :id "x" :title "X" :status local-status))))
+         (shadow (list key (list shadow-entity) :settings nil))
+         (cand (mindwtr-sync-build-candidate local shadow "dev-1"
+                                             "2026-06-01T00:00:00Z"))
+         (e (car (plist-get cand key))))
+    (list (plist-member e :archivedAt) (plist-get e :archivedAt))))
+
+(ert-deftest mindwtr-sync-build-candidate-settles-archived-at ()
+  "Entering archived stamps `:archivedAt', leaving it clears it, staying keeps
+the shadow's clock -- for tasks and projects alike, as the app's lifecycle
+writer does."
+  (let ((now "2026-06-01T00:00:00Z") (old "2026-01-01T00:00:00Z"))
+    (dolist (key '(:tasks :projects))
+      (let ((live (if (eq key :tasks) "next" "active")))
+        ;; enter: a stale clock from an earlier archive is replaced
+        (should (equal (cadr (mindwtr-sync-test--archived-at
+                              key (list :id "x" :title "X" :status live :rev 1
+                                        :archivedAt old)
+                              "archived"))
+                       now))
+        ;; leave
+        (should-not (car (mindwtr-sync-test--archived-at
+                          key (list :id "x" :title "X" :status "archived" :rev 1
+                                    :archivedAt old)
+                          live)))
+        ;; stay archived (title edit): shadow clock kept, legacy nil kept nil
+        (let ((r (mindwtr-sync-test--archived-at
+                  key (list :id "x" :title "Old" :status "archived" :rev 1
+                            :archivedAt old)
+                  "archived")))
+          (should (equal (cadr r) old)))
+        (should-not (car (mindwtr-sync-test--archived-at
+                          key (list :id "x" :title "Old" :status "archived" :rev 1)
+                          "archived")))))))
+
 (ert-deftest mindwtr-sync-ensure-status-defaults-inbox-for-standalone-task ()
   "A keyword-less new task with no container parent defaults to inbox."
   (let ((m (mindwtr-sync--ensure-status '(:id "t" :title "x") 'task)))
@@ -2993,3 +3030,19 @@ re-pushed, and the report notes the kept title."
       ;; is lost and no Sync Failures container appears.
       (goto-char (point-min))
       (should-not (search-forward "Sync Failures" nil t)))))
+
+(ert-deftest mindwtr-sync-retention-purged-only-from-live-archive ()
+  "A purge of a live archived item is retention; one that went through Trash
+\(shadow already deleted) or of a live next action is not."
+  (let* ((shadow '(:tasks ((:id "a" :status "archived")
+                           (:id "b" :status "archived" :deletedAt "2026-08-01T00:00:00Z")
+                           (:id "c" :status "next"))
+                   :projects ((:id "p" :status "archived"))))
+         (merged '(:tasks ((:id "a" :purgedAt "T") (:id "b" :purgedAt "T")
+                           (:id "c" :purgedAt "T"))
+                   :projects ((:id "p" :purgedAt "T"))))
+         (h (mindwtr-sync--retention-purged merged shadow)))
+    (should (equal (gethash "a" h) "T"))
+    (should (equal (gethash "p" h) "T"))
+    (should-not (gethash "b" h))
+    (should-not (gethash "c" h))))
